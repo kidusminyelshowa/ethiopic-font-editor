@@ -1,6 +1,6 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
-use fidel_core::{Badge, FidelState, Order, Project, ShapeGroup, StateKind};
+use fidel_core::{Badge, FidelState, ModelError, Order, Project, ShapeGroup, StateKind};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -74,6 +74,76 @@ impl FidelGrid {
     }
 }
 
+/// What the inspector shows for one selected fidel.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FidelDetail {
+    family: String,
+    family_name: String,
+    base_glyph: Option<char>,
+    group: Option<ShapeGroup>,
+    order: Order,
+    order_number: u8,
+    order_name: &'static str,
+    codepoint: Option<char>,
+    state: StateKind,
+    badge: Badge,
+    note: Option<String>,
+    /// Alterations that build this fidel, with their display names.
+    recipe: Vec<RecipeStep>,
+    nudge_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeStep {
+    id: String,
+    name: String,
+    drawn: bool,
+}
+
+impl FidelDetail {
+    pub fn from_project(project: &Project, family: &str, order: Order) -> Result<Self, ModelError> {
+        let fidel = project.fidel(family, order)?;
+        let fam = &project.families[family];
+        let state = fidel.state.kind();
+        let note = match &fidel.state {
+            FidelState::Irregular { note, .. } => note.clone(),
+            _ => None,
+        };
+        let recipe = match state {
+            StateKind::Detached => Vec::new(),
+            _ => project
+                .effective_alterations(family, order)?
+                .into_iter()
+                .map(|id| {
+                    let alt = project.alterations.get(&id);
+                    RecipeStep {
+                        name: alt.map(|a| a.name.clone()).unwrap_or_else(|| id.clone()),
+                        drawn: alt.is_some_and(|a| !a.contours.is_empty()),
+                        id,
+                    }
+                })
+                .collect(),
+        };
+        Ok(FidelDetail {
+            family: fam.id.clone(),
+            family_name: fam.name.clone(),
+            base_glyph: fam.fidels.get(&Order::Giiz).and_then(|f| f.codepoint),
+            group: fam.group,
+            order,
+            order_number: order.number(),
+            order_name: order.name(),
+            codepoint: fidel.codepoint,
+            state,
+            badge: state.badge(),
+            note,
+            recipe,
+            nudge_count: fidel.state.nudges().len(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +169,18 @@ mod tests {
         assert_eq!(json["rows"][0]["cells"][4]["codepoint"], "ሄ");
         assert_eq!(json["rows"][0]["cells"][4]["state"], "linked");
         assert_eq!(json["orders"][0]["name"], "Gi'iz");
+    }
+
+    #[test]
+    fn detail_lists_the_recipe() {
+        let p = geez_project(Metrics::default());
+        let d = FidelDetail::from_project(&p, "la", Order::Hamis).unwrap();
+        assert_eq!(d.codepoint, Some('ሌ'));
+        assert_eq!(d.base_glyph, Some('ለ'));
+        assert_eq!(d.order_name, "Hamis");
+        assert_eq!(d.recipe.len(), 1);
+        assert_eq!(d.recipe[0].id, "loop.bottom-right");
+        assert!(!d.recipe[0].drawn);
+        assert!(FidelDetail::from_project(&p, "nope", Order::Hamis).is_err());
     }
 }
