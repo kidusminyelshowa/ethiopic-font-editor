@@ -170,3 +170,156 @@ impl Rect {
 pub fn bounds_of<'a>(contours: impl IntoIterator<Item = &'a Contour>) -> Option<Rect> {
     contours.into_iter().filter_map(Contour::bounds).reduce(Rect::union)
 }
+
+/// Why a contour is not a valid closed cubic contour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContourProblem {
+    NoOnCurvePoint,
+    TooFewPoints,
+    DuplicatePointId(PointId),
+    /// More than two handles in a row.
+    TooManyHandles,
+    /// Handles followed by a `line` point instead of a `curve` point.
+    HandlesBeforeLine,
+    /// A `curve` point without the two handles in front of it.
+    CurveWithoutHandles,
+}
+
+impl Contour {
+    /// Check that the points form a closed cubic contour in UFO order: each
+    /// `curve` point is preceded by exactly two handles, each `line` point by none.
+    pub fn validate(&self) -> Result<(), ContourProblem> {
+        let n = self.points.len();
+        if n < 2 {
+            return Err(ContourProblem::TooFewPoints);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for p in &self.points {
+            if !seen.insert(p.id) {
+                return Err(ContourProblem::DuplicatePointId(p.id));
+            }
+        }
+        let start = self.points.iter().position(Point::is_on_curve).ok_or(ContourProblem::NoOnCurvePoint)?;
+        let mut handles = 0;
+        for i in 1..=n {
+            let p = &self.points[(start + i) % n];
+            match p.kind {
+                PointKind::OffCurve => {
+                    handles += 1;
+                    if handles > 2 {
+                        return Err(ContourProblem::TooManyHandles);
+                    }
+                }
+                PointKind::Line if handles > 0 => return Err(ContourProblem::HandlesBeforeLine),
+                PointKind::Curve if handles != 2 => return Err(ContourProblem::CurveWithoutHandles),
+                _ => handles = 0,
+            }
+        }
+        Ok(())
+    }
+
+    /// SVG path data in font units (y up). Assumes a valid contour.
+    pub fn to_svg_path(&self) -> String {
+        let n = self.points.len();
+        let Some(start) = self.points.iter().position(Point::is_on_curve) else {
+            return String::new();
+        };
+        let f = |v: f64| {
+            let r = (v * 100.0).round() / 100.0;
+            if r == r.trunc() {
+                format!("{}", r as i64)
+            } else {
+                format!("{r}")
+            }
+        };
+        let first = &self.points[start];
+        let mut d = format!("M{} {}", f(first.pos.x), f(first.pos.y));
+        let mut pending: Vec<Vec2> = Vec::new();
+        for i in 1..=n {
+            let p = &self.points[(start + i) % n];
+            match p.kind {
+                PointKind::OffCurve => pending.push(p.pos),
+                PointKind::Curve if pending.len() == 2 => {
+                    d += &format!(
+                        "C{} {} {} {} {} {}",
+                        f(pending[0].x),
+                        f(pending[0].y),
+                        f(pending[1].x),
+                        f(pending[1].y),
+                        f(p.pos.x),
+                        f(p.pos.y)
+                    );
+                    pending.clear();
+                }
+                _ => {
+                    if i < n {
+                        d += &format!("L{} {}", f(p.pos.x), f(p.pos.y));
+                    }
+                    pending.clear();
+                }
+            }
+        }
+        d.push('Z');
+        d
+    }
+}
+
+/// SVG path data for several contours.
+pub fn svg_path<'a>(contours: impl IntoIterator<Item = &'a Contour>) -> String {
+    contours.into_iter().map(Contour::to_svg_path).collect::<Vec<_>>().join("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn circle_ish() -> Contour {
+        Contour::new(
+            0,
+            None,
+            vec![
+                Point::curve(0, 100.0, 0.0),
+                Point::off(1, 155.0, 0.0),
+                Point::off(2, 200.0, 45.0),
+                Point::curve(3, 200.0, 100.0),
+                Point::off(4, 200.0, 155.0),
+                Point::off(5, 155.0, 200.0),
+                Point::curve(6, 100.0, 200.0),
+                Point::line(7, 0.0, 100.0),
+                Point::off(8, 0.0, 45.0),
+                Point::off(9, 45.0, 0.0),
+            ],
+        )
+    }
+
+    #[test]
+    fn validates_ufo_point_order() {
+        assert_eq!(circle_ish().validate(), Ok(()));
+        assert_eq!(Contour::rect(0, None, Vec2::ZERO, Vec2::new(1.0, 1.0)).validate(), Ok(()));
+
+        let mut c = circle_ish();
+        c.points[1].id = 0;
+        assert_eq!(c.validate(), Err(ContourProblem::DuplicatePointId(0)));
+
+        let mut c = circle_ish();
+        c.points[3].kind = PointKind::Line;
+        assert_eq!(c.validate(), Err(ContourProblem::HandlesBeforeLine));
+
+        let mut c = circle_ish();
+        c.points.remove(1);
+        assert_eq!(c.validate(), Err(ContourProblem::CurveWithoutHandles));
+
+        let c = Contour::new(0, None, vec![Point::off(0, 0.0, 0.0), Point::off(1, 1.0, 1.0)]);
+        assert_eq!(c.validate(), Err(ContourProblem::NoOnCurvePoint));
+    }
+
+    #[test]
+    fn svg_path_wraps_the_closing_curve() {
+        assert_eq!(
+            circle_ish().to_svg_path(),
+            "M100 0C155 0 200 45 200 100C200 155 155 200 100 200L0 100C0 45 45 0 100 0Z"
+        );
+        let r = Contour::rect(0, None, Vec2::ZERO, Vec2::new(10.5, 20.0));
+        assert_eq!(r.to_svg_path(), "M0 0L10.5 0L10.5 20L0 20Z");
+    }
+}
