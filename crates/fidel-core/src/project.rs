@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::alteration::{Alteration, AlterationId};
 use crate::base::{Base, BaseId};
 use crate::fidel::{merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, StateKind};
-use crate::geometry::{Contour, Vec2};
+use crate::geometry::{Contour, ContourProblem, Vec2};
 use crate::order::{Order, OrderRule};
 use crate::resolve::{self, ResolvedFidel};
 
@@ -44,6 +44,22 @@ pub enum ModelError {
     UnknownFidel(FamilyId, Order),
     #[error("a {0:?} fidel has no generated outline to nudge; edit its contours directly")]
     NotGenerated(StateKind),
+    #[error("no base `{0}`")]
+    UnknownBase(BaseId),
+    #[error("no alteration `{0}`")]
+    UnknownAlteration(AlterationId),
+    #[error("contour {contour}: {problem:?}")]
+    InvalidContour { contour: u32, problem: ContourProblem },
+    #[error("two contours share the id {0}")]
+    DuplicateContourId(u32),
+}
+
+/// A drawing the glyph editor can open: a base or an alteration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", tag = "kind", content = "id")]
+pub enum DrawingTarget {
+    Base(BaseId),
+    Alteration(AlterationId),
 }
 
 /// Something upstream that is about to change.
@@ -76,6 +92,48 @@ pub struct Impact {
 }
 
 impl Project {
+    /// The contours of a base or an alteration.
+    pub fn drawing(&self, target: &DrawingTarget) -> Result<&[Contour], ModelError> {
+        match target {
+            DrawingTarget::Base(id) => self
+                .bases
+                .get(id)
+                .map(|b| b.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownBase(id.clone())),
+            DrawingTarget::Alteration(id) => self
+                .alterations
+                .get(id)
+                .map(|a| a.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownAlteration(id.clone())),
+        }
+    }
+
+    /// Replace the contours of a base or an alteration. Every fidel that uses
+    /// it picks up the change on its next resolve. Rejects malformed contours.
+    pub fn set_drawing(&mut self, target: &DrawingTarget, contours: Vec<Contour>) -> Result<(), ModelError> {
+        let mut ids = std::collections::HashSet::new();
+        for c in &contours {
+            if !ids.insert(c.id) {
+                return Err(ModelError::DuplicateContourId(c.id));
+            }
+            c.validate().map_err(|problem| ModelError::InvalidContour { contour: c.id, problem })?;
+        }
+        let slot = match target {
+            DrawingTarget::Base(id) => {
+                &mut self.bases.get_mut(id).ok_or_else(|| ModelError::UnknownBase(id.clone()))?.contours
+            }
+            DrawingTarget::Alteration(id) => {
+                &mut self
+                    .alterations
+                    .get_mut(id)
+                    .ok_or_else(|| ModelError::UnknownAlteration(id.clone()))?
+                    .contours
+            }
+        };
+        *slot = contours;
+        Ok(())
+    }
+
     pub fn fidel(&self, family: &str, order: Order) -> Result<&Fidel, ModelError> {
         self.families
             .get(family)

@@ -1,6 +1,6 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
-use fidel_core::{Badge, FidelState, ModelError, Order, Project, ShapeGroup, StateKind};
+use fidel_core::{svg_path, Badge, FidelState, Metrics, ModelError, Order, Project, ShapeGroup, StateKind};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -20,6 +20,27 @@ pub struct GridCell {
     badge: Badge,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// The resolved outline, once there is something to draw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<Outline>,
+}
+
+/// A resolved fidel as SVG path data in font units (y up).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Outline {
+    pub d: String,
+    pub advance_width: f64,
+}
+
+impl Outline {
+    pub fn of(project: &Project, family: &str, order: Order) -> Option<Outline> {
+        let r = project.resolve(family, order).ok()?;
+        if r.contours.is_empty() {
+            return None;
+        }
+        Some(Outline { d: svg_path(r.contours.iter().map(|c| &c.contour)), advance_width: r.advance_width })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -34,6 +55,7 @@ pub struct GridRow {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FidelGrid {
+    metrics: Metrics,
     orders: Vec<OrderHeader>,
     rows: Vec<GridRow>,
 }
@@ -64,13 +86,20 @@ impl FidelGrid {
                             FidelState::Irregular { note, .. } => note.clone(),
                             _ => None,
                         };
-                        GridCell { order, codepoint: fidel.codepoint, state, badge: state.badge(), note }
+                        GridCell {
+                            order,
+                            codepoint: fidel.codepoint,
+                            state,
+                            badge: state.badge(),
+                            note,
+                            outline: Outline::of(project, &f.id, order),
+                        }
                     })
                     .collect(),
             })
             .collect();
 
-        FidelGrid { orders, rows }
+        FidelGrid { metrics: project.metrics.clone(), orders, rows }
     }
 }
 

@@ -35,8 +35,8 @@ pub use ethiopic::{GeezFamily, ShapeGroup, GEEZ_FAMILIES};
 pub use fidel::{
     Badge, Family, FamilyId, Fidel, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind,
 };
-pub use geometry::{Contour, ContourId, Point, PointId, PointKind, Rect, Vec2};
+pub use geometry::{svg_path, Contour, ContourId, ContourProblem, Point, PointId, PointKind, Rect, Vec2};
 pub use order::{Order, OrderRule};
 pub use parts::Part;
-pub use project::{Change, Effect, Impact, Metrics, ModelError, Project};
+pub use project::{Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project};
 pub use resolve::{Diagnostic, ResolvedContour, ResolvedFidel};

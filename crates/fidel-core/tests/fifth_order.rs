@@ -204,3 +204,20 @@ fn project_round_trips_through_json() {
     // Readable keys, for clean diffs later.
     assert!(json.contains("\"hamis\"") && json.contains("\"state\":\"adjusted\""));
 }
+
+#[test]
+fn set_drawing_updates_dependents_and_rejects_bad_contours() {
+    let mut p = project();
+    let target = DrawingTarget::Alteration(LOOP_BOTTOM_RIGHT.into());
+    p.set_drawing(&target, loop_contours(50.0)).unwrap();
+    let b = loop_box(&p.resolve("ba", Order::Hamis).unwrap());
+    assert_eq!(b.max.x - b.min.x, 50.0);
+
+    let bad = vec![Contour::new(0, None, vec![Point::off(0, 0.0, 0.0), Point::curve(1, 1.0, 1.0)])];
+    assert!(matches!(p.set_drawing(&target, bad), Err(ModelError::InvalidContour { contour: 0, .. })));
+    let dup = [loop_contours(10.0), loop_contours(20.0)].concat();
+    assert_eq!(p.set_drawing(&target, dup), Err(ModelError::DuplicateContourId(0)));
+    assert!(p.set_drawing(&DrawingTarget::Base("nope".into()), vec![]).is_err());
+    // Rejected writes leave the drawing as it was.
+    assert_eq!(p.drawing(&target).unwrap(), loop_contours(50.0).as_slice());
+}
