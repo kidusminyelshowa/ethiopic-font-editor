@@ -10,7 +10,7 @@ Stack: Tauri shell, Rust core, web UI. Windows first, macOS later.
 
 | Path | What it is |
 | --- | --- |
-| `crates/fidel-core` | The fidel data model: bases, alterations, order rules, families, glyph states, resolution to outlines |
+| `crates/fidel-core` | The fidel data model: bases, alterations, order rules, families, glyph states, resolution to outlines (ETH-1) |
 
 ## Development
 
