@@ -15,6 +15,9 @@
 //! Vocabulary and default rules follow Hornus, *The Ethiopic Writing System: A
 //! Typographic Approach* (2006), sections 2.2 to 3.3.
 
+/// Version of this crate, shown in the app's About line.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod alteration;
 pub mod base;
 pub mod defaults;

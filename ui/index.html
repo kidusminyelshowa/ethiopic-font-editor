@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ethiopic Font Editor</title>
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true">
+      <span class="blob blob-pink"></span>
+      <span class="blob blob-green"></span>
+      <span class="blob blob-orange"></span>
+    </div>
+
+    <header class="toolbar glass">
+      <div class="brand">
+        <span class="app-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="20" height="20">
+            <path d="M7 7h15M7 7v18M19 7v13" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" fill="none" />
+            <circle cx="22.5" cy="22.5" r="3.6" stroke="currentColor" stroke-width="2.6" fill="none" />
+          </svg>
+        </span>
+        <div class="brand-text">
+          <span class="project-name">Untitled Ge'ez</span>
+          <span class="project-meta">Regular · 1000 UPM</span>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Views">
+        <button class="tab active" aria-current="page">Grid</button>
+        <button class="tab" disabled title="Family view is coming in M1">Family</button>
+        <button class="tab" disabled title="Alteration view is coming in M1">Alteration</button>
+        <button class="tab" disabled title="Proof view is coming later">Proof</button>
+      </nav>
+
+      <div class="toolbar-end">
+        <span id="core-status" class="chip status"><span class="dot"></span><span class="label">Connecting…</span></span>
+        <button class="pill pill-accent" disabled title="OTF export arrives with ETH-8">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <path d="M10 3v10m0 0-4-4m4 4 4-4M4 16h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          </svg>
+          Export OTF
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="card grid-card">
+        <div class="card-head">
+          <div>
+            <h1 class="display">Fidel Grid</h1>
+            <p id="grid-summary" class="subtle">Loading the system…</p>
+          </div>
+          <div id="filters" class="filters" role="group" aria-label="Filter by state"></div>
+        </div>
+        <div id="grid" class="grid-scroll"></div>
+
+        <div class="proof glass">
+          <span class="proof-label">Proof</span>
+          <input
+            id="proof-input"
+            class="proof-input"
+            lang="am"
+            spellcheck="false"
+            aria-label="Proof text"
+            value="ሰላም ለዓለም። ዛሬ ቤቴ ሄጄ ሻይ ጠጣሁ።"
+          />
+          <span class="proof-note">System preview until export</span>
+        </div>
+      </section>
+
+      <aside id="inspector" class="inspector glass" aria-live="polite"></aside>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
