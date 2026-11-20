@@ -24,6 +24,7 @@ pub mod defaults;
 pub mod ethiopic;
 pub mod fidel;
 pub mod geometry;
+pub mod kid;
 pub mod order;
 pub mod parts;
 pub mod project;

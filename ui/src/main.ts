@@ -11,8 +11,11 @@ import {
   type FidelDetail,
   type FidelGrid,
   type FidelPreview,
+  type ProjectInfo,
   type StateKind,
 } from "./api";
+import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
 import { isOn } from "./geometry";
@@ -50,6 +53,8 @@ const ui = {
   editorView: document.getElementById("editor-view")!,
   drawingSelect: document.getElementById("drawing-select") as HTMLSelectElement,
   toasts: document.getElementById("toasts")!,
+  projectName: document.getElementById("project-name")!,
+  projectMeta: document.getElementById("project-meta")!,
 };
 
 type ViewName = "grid" | "editor";
@@ -329,7 +334,10 @@ function renderEmptyInspector() {
 // ---------- Editor ----------
 
 const editor = new GlyphEditor(ui.editorView, {
-  changed: () => scheduleSideRefresh(),
+  changed: () => {
+    scheduleSideRefresh();
+    void refreshProjectInfo();
+  },
   toast,
   renderSide: (ed) => renderEditorSide(ed),
 });
@@ -551,6 +559,114 @@ function rangeField(label: string, value: number, min: number, max: number, onIn
   return el("label", { class: "field range" }, el("span", {}, label), input);
 }
 
+// ---------- Files ----------
+
+const KID_FILTER = [{ name: "Ethiopic font project", extensions: ["kid"] }];
+let projectInfo: ProjectInfo = { name: "Untitled Ge'ez", path: null, dirty: false };
+
+function showProjectInfo(info: ProjectInfo) {
+  projectInfo = info;
+  ui.projectName.textContent = info.name;
+  ui.projectMeta.textContent = info.dirty ? "Unsaved changes" : info.path ? "Saved" : "Regular · 1000 UPM";
+  ui.projectMeta.classList.toggle("unsaved", info.dirty);
+  ui.projectName.title = info.path ?? "Not saved yet";
+  document.title = `${info.dirty ? "• " : ""}${info.name} · Ethiopic Font Editor`;
+}
+
+async function refreshProjectInfo() {
+  showProjectInfo(await api.projectInfo());
+}
+
+/** True when it is fine to throw away the open project. */
+async function confirmDiscard(action: string): Promise<boolean> {
+  await refreshProjectInfo();
+  if (!projectInfo.dirty) return true;
+  return ask(`${projectInfo.name} has unsaved changes. ${action} anyway and lose them?`, {
+    title: "Unsaved changes",
+    kind: "warning",
+    okLabel: action,
+    cancelLabel: "Keep editing",
+  });
+}
+
+async function afterProjectChanged(info: ProjectInfo) {
+  showProjectInfo(info);
+  editor.reset();
+  state.selected = null;
+  state.contextFamily = undefined;
+  state.alterations = await api.listAlterations();
+  await refreshGrid();
+  fillDrawingSelect();
+  showView("grid");
+}
+
+async function newProject() {
+  if (!(await confirmDiscard("Start a new project"))) return;
+  await afterProjectChanged(await api.newProject());
+}
+
+async function openProject() {
+  if (!(await confirmDiscard("Open another file"))) return;
+  const path = await openDialog({ multiple: false, directory: false, filters: KID_FILTER });
+  if (typeof path !== "string") return;
+  try {
+    await afterProjectChanged(await api.openProject(path));
+    toast(`Opened ${projectInfo.name}.`);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
+
+async function saveProject(saveAs = false): Promise<boolean> {
+  let path: string | undefined;
+  if (saveAs || !projectInfo.path) {
+    const chosen = await saveDialog({ defaultPath: `${projectInfo.name}.kid`, filters: KID_FILTER });
+    if (!chosen) return false;
+    path = chosen;
+  }
+  try {
+    showProjectInfo(await api.saveProject(path));
+    toast(`Saved ${projectInfo.name}.`);
+    return true;
+  } catch (err) {
+    toast(`Could not save: ${err}`, "error");
+    return false;
+  }
+}
+
+document.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((b) =>
+  b.addEventListener("click", (e) => {
+    const action = b.dataset.file;
+    if (action === "new") void newProject();
+    else if (action === "open") void openProject();
+    else void saveProject(e.shiftKey);
+  }),
+);
+
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === "s") {
+    e.preventDefault();
+    void saveProject(e.shiftKey);
+  } else if (k === "o") {
+    e.preventDefault();
+    void openProject();
+  } else if (k === "n") {
+    e.preventDefault();
+    void newProject();
+  }
+});
+
+// Ask before closing the window with unsaved work.
+void getCurrentWindow()
+  .onCloseRequested(async (event) => {
+    if (!(await confirmDiscard("Close"))) event.preventDefault();
+  })
+  .catch(() => {
+    /* not running inside Tauri */
+  });
+
 // ---------- Start ----------
 
 async function main() {
@@ -558,6 +674,7 @@ async function main() {
   const label = ui.status.querySelector(".label")!;
   try {
     const info = await api.appInfo();
+    await refreshProjectInfo();
     label.textContent = `Core ${info.coreVersion}`;
     ui.status.classList.add("ok");
     ui.status.title = `${info.familyCount} families · ${info.alterationCount} alterations`;

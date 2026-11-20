@@ -109,7 +109,17 @@ export interface FidelPreview {
   issues: string[];
 }
 
+export interface ProjectInfo {
+  name: string;
+  path: string | null;
+  dirty: boolean;
+}
+
 export const api = {
+  projectInfo: () => invoke<ProjectInfo>("project_info"),
+  newProject: () => invoke<ProjectInfo>("new_project"),
+  openProject: (path: string) => invoke<ProjectInfo>("open_project", { path }),
+  saveProject: (path?: string) => invoke<ProjectInfo>("save_project", { path: path ?? null }),
   appInfo: () => invoke<AppInfo>("app_info"),
   fidelGrid: () => invoke<FidelGrid>("fidel_grid"),
   fidelDetail: (family: string, order: string) => invoke<FidelDetail>("fidel_detail", { family, order }),
