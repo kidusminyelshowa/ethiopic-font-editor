@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ethiopic Font Editor</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Ethiopic Font Editor</h1>
+      <span id="core-status" class="status">Connecting to core…</span>
+    </header>
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Fidel Grid</h2>
+          <ul class="legend" aria-label="Glyph states">
+            <li><span class="badge badge-none"></span>Linked</li>
+            <li><span class="badge badge-dot"></span>Adjusted</li>
+            <li><span class="badge badge-outlined"></span>Irregular</li>
+            <li><span class="badge badge-solid"></span>Detached</li>
+          </ul>
+        </div>
+        <p class="hint">
+          Placeholder cells use your system's Ethiopic font. They switch to the project's own outlines once the
+          glyph editor lands.
+        </p>
+        <div id="grid" class="grid-wrap"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

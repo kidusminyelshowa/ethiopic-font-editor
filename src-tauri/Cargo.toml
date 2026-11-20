@@ -1,0 +1,21 @@
+[package]
+name = "ethiopic-font-editor"
+description = "Desktop editor for Ethiopic fonts built on the fidel family system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "ethiopic_font_editor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+fidel-core = { path = "../crates/fidel-core" }
+serde.workspace = true
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+serde_json.workspace = true
