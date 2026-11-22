@@ -168,14 +168,59 @@ fn save_project(state: State<'_, AppState>, path: Option<String>) -> CmdResult<P
 }
 
 fn with_kid_extension(path: PathBuf) -> PathBuf {
-    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(kid::EXTENSION)) {
+    with_extension(path, kid::EXTENSION)
+}
+
+fn with_extension(path: PathBuf, ext: &str) -> PathBuf {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
         path
     } else {
         let mut s = path.into_os_string();
         s.push(".");
-        s.push(kid::EXTENSION);
+        s.push(ext);
         PathBuf::from(s)
     }
+}
+
+/// What an export wrote, for the toast.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSummary {
+    path: String,
+    family_name: String,
+    exported: usize,
+    skipped: usize,
+}
+
+/// Export the drawn fidel as an installable TrueType-flavoured OpenType font.
+/// The family name is the project's name.
+#[tauri::command]
+fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSummary> {
+    let family_name = state.info().name;
+    let mut options = fidel_export::ExportOptions::new(family_name.clone());
+    // A fresh timestamp each time helps Windows notice a reinstalled font.
+    options.timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let font = fidel_export::export(&state.project(), &options).map_err(err)?;
+    let path = with_extension(PathBuf::from(path), "ttf");
+    std::fs::write(&path, &font.bytes).map_err(err)?;
+    Ok(ExportSummary {
+        path: path.to_string_lossy().into_owned(),
+        family_name,
+        exported: font.exported.len(),
+        skipped: font.skipped.len(),
+    })
+}
+
+/// The current drawings as font bytes, for the live proof line. Empty when
+/// nothing is drawn yet.
+#[tauri::command]
+fn proof_font(state: State<'_, AppState>) -> tauri::ipc::Response {
+    let options = fidel_export::ExportOptions::new("Fidel Proof");
+    let bytes = fidel_export::export(&state.project(), &options).map(|f| f.bytes).unwrap_or_default();
+    tauri::ipc::Response::new(bytes)
 }
 
 #[tauri::command]
@@ -202,7 +247,9 @@ pub fn run() {
             project_info,
             new_project,
             open_project,
-            save_project
+            save_project,
+            export_font,
+            proof_font
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
