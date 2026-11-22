@@ -1455,3 +1455,38 @@ button.mini {
     background: rgba(255, 255, 255, 0.05);
   }
 }
+
+/* ---------- File actions ---------- */
+
+.file-actions {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: var(--r-pill);
+  background: rgba(43, 43, 43, 0.05);
+}
+
+.file-btn {
+  border: 0;
+  background: transparent;
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.file-btn:hover {
+  background: var(--card);
+  color: var(--ink);
+}
+
+.project-meta.unsaved {
+  color: var(--orange);
+}
+
+@media (prefers-color-scheme: dark) {
+  .file-actions {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}

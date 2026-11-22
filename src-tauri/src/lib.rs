@@ -4,24 +4,64 @@
 mod editor;
 mod grid;
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
-use fidel_core::{defaults::geez_project, Contour, DrawingTarget, Metrics, Order, Project};
+use fidel_core::{defaults::geez_project, kid, Contour, DrawingTarget, Metrics, Order, Project};
 use serde::Serialize;
 use tauri::State;
 
 use editor::{AlterationSummary, DrawingView, FidelPreview};
 use grid::{FidelDetail, FidelGrid};
 
-/// The open project. One per window for now; .kid loading comes with ETH-2.
+/// The open project, where it lives on disk, and whether it has unsaved changes.
 pub struct AppState {
     project: Mutex<Project>,
+    file: Mutex<OpenFile>,
+}
+
+#[derive(Default)]
+struct OpenFile {
+    path: Option<PathBuf>,
+    dirty: bool,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        AppState { project: Mutex::new(geez_project(Metrics::default())) }
+        AppState { project: Mutex::new(geez_project(Metrics::default())), file: Mutex::default() }
     }
+}
+
+impl AppState {
+    fn project(&self) -> MutexGuard<'_, Project> {
+        self.project.lock().expect("project lock")
+    }
+
+    fn mark_dirty(&self) {
+        self.file.lock().expect("file lock").dirty = true;
+    }
+
+    fn info(&self) -> ProjectInfo {
+        let file = self.file.lock().expect("file lock");
+        ProjectInfo {
+            name: file
+                .path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Untitled Ge'ez".into()),
+            path: file.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            dirty: file.dirty,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    name: String,
+    path: Option<String>,
+    dirty: bool,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -77,15 +117,65 @@ fn get_drawing(
 
 #[tauri::command]
 fn set_drawing(state: State<'_, AppState>, target: DrawingTarget, contours: Vec<Contour>) -> CmdResult<()> {
-    state.project.lock().expect("project lock").set_drawing(&target, contours).map_err(err)
+    state.project().set_drawing(&target, contours).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
 }
 
 #[tauri::command]
 fn set_advance(state: State<'_, AppState>, base: String, advance_width: f64) -> CmdResult<()> {
-    let mut project = state.project.lock().expect("project lock");
-    let b = project.bases.get_mut(&base).ok_or_else(|| format!("no base `{base}`"))?;
-    b.advance_width = advance_width.max(0.0);
+    {
+        let mut project = state.project();
+        let b = project.bases.get_mut(&base).ok_or_else(|| format!("no base `{base}`"))?;
+        b.advance_width = advance_width.max(0.0);
+    }
+    state.mark_dirty();
     Ok(())
+}
+
+#[tauri::command]
+fn project_info(state: State<'_, AppState>) -> ProjectInfo {
+    state.info()
+}
+
+/// Start over with an empty Ge'ez project.
+#[tauri::command]
+fn new_project(state: State<'_, AppState>) -> ProjectInfo {
+    *state.project() = geez_project(Metrics::default());
+    *state.file.lock().expect("file lock") = OpenFile::default();
+    state.info()
+}
+
+#[tauri::command]
+fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<ProjectInfo> {
+    let path = PathBuf::from(path);
+    let project = kid::open(&path).map_err(err)?;
+    *state.project() = project;
+    *state.file.lock().expect("file lock") = OpenFile { path: Some(path), dirty: false };
+    Ok(state.info())
+}
+
+/// Save to `path`, or to the current file when `path` is not given.
+#[tauri::command]
+fn save_project(state: State<'_, AppState>, path: Option<String>) -> CmdResult<ProjectInfo> {
+    let target = match path {
+        Some(p) => with_kid_extension(PathBuf::from(p)),
+        None => state.file.lock().expect("file lock").path.clone().ok_or("choose where to save first")?,
+    };
+    kid::save(&state.project(), &target).map_err(err)?;
+    *state.file.lock().expect("file lock") = OpenFile { path: Some(target), dirty: false };
+    Ok(state.info())
+}
+
+fn with_kid_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(kid::EXTENSION)) {
+        path
+    } else {
+        let mut s = path.into_os_string();
+        s.push(".");
+        s.push(kid::EXTENSION);
+        PathBuf::from(s)
+    }
 }
 
 #[tauri::command]
@@ -96,6 +186,7 @@ fn family_preview(state: State<'_, AppState>, family: String) -> CmdResult<Vec<F
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -105,8 +196,24 @@ pub fn run() {
             get_drawing,
             set_drawing,
             set_advance,
-            family_preview
+            family_preview,
+            project_info,
+            new_project,
+            open_project,
+            save_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_the_kid_extension_once() {
+        assert_eq!(with_kid_extension("a/Font".into()), PathBuf::from("a/Font.kid"));
+        assert_eq!(with_kid_extension("a/Font.KID".into()), PathBuf::from("a/Font.KID"));
+        assert_eq!(with_kid_extension("a/Font.v2".into()), PathBuf::from("a/Font.v2.kid"));
+    }
 }

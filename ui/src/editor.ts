@@ -140,6 +140,19 @@ export class GlyphEditor {
     this.host.renderSide(this);
   }
 
+  /** Forget the open drawing, e.g. after another project is opened. */
+  reset(): void {
+    this.drawing = null;
+    this.contours = [];
+    this.selection.clear();
+    this.pen = null;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.committed = "[]";
+    this.sketches.clear();
+    this.svg.innerHTML = "";
+  }
+
   // ---------- Coordinates ----------
 
   private toScreen(p: Vec2): Vec2 {
