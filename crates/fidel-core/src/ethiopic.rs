@@ -87,6 +87,33 @@ pub fn default_irregular_note(c: char) -> Option<&'static str> {
     DEFAULT_IRREGULARS.iter().find(|(ch, _)| *ch == c).map(|(_, note)| *note)
 }
 
+/// Built-in "built on" links: fidel drawn from another order of their family
+/// rather than from the bare base. From the derivation map of Noto Sans,
+/// Noto Serif and Abyssinica SIL: in the families whose 4th order changes the
+/// body (ሃ ማ ሣ ዋ ዓ ፃ), the 3rd and 5th orders add their mark to the 4th, and
+/// ዱ ዲ add theirs to ዳ.
+pub const DEFAULT_BUILT_ON: &[(char, char)] = &[
+    ('ሂ', 'ሃ'),
+    ('ሄ', 'ሃ'),
+    ('ሚ', 'ማ'),
+    ('ሜ', 'ማ'),
+    ('ሢ', 'ሣ'),
+    ('ሤ', 'ሣ'),
+    ('ዊ', 'ዋ'),
+    ('ዌ', 'ዋ'),
+    ('ዒ', 'ዓ'),
+    ('ዔ', 'ዓ'),
+    ('ዱ', 'ዳ'),
+    ('ዲ', 'ዳ'),
+    ('ፂ', 'ፃ'),
+    ('ፄ', 'ፃ'),
+];
+
+/// The fidel `c` is built on by default, if any.
+pub fn default_built_on(c: char) -> Option<char> {
+    DEFAULT_BUILT_ON.iter().find(|(ch, _)| *ch == c).map(|(_, parent)| *parent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +137,16 @@ mod tests {
         assert_eq!(row, "ሀሁሂሃሄህሆ");
         let fifth: String = GEEZ_FAMILIES.iter().map(|f| f.codepoint(Order::Hamis)).collect();
         assert_eq!(fifth, "ሄሌሔሜሤሬሴቄቤቴኄኔኤኬዌዔዜዬዴጌጤጴጼፄፌፔ");
+    }
+
+    #[test]
+    fn default_built_on_stays_inside_one_family() {
+        for (c, parent) in DEFAULT_BUILT_ON {
+            let fam = GEEZ_FAMILIES.iter().find(|f| Order::ALL.iter().any(|o| f.codepoint(*o) == *c));
+            let fam = fam.unwrap_or_else(|| panic!("{c} not in the grid"));
+            assert!(Order::ALL.iter().any(|o| fam.codepoint(*o) == *parent), "{c} on {parent}");
+            assert!(default_built_on(*parent).is_none(), "{parent} is itself built on something");
+        }
     }
 
     #[test]

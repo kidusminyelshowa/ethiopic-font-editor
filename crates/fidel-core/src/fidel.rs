@@ -37,6 +37,11 @@ pub struct Fidel {
     /// rule alteration id -> its own copy. Set by scoped edits.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub alteration_overrides: BTreeMap<AlterationId, AlterationId>,
+    /// Another order of the same family whose outline this fidel starts from,
+    /// in place of the bare base. ሚ and ሜ are built on ማ: change ማ and they
+    /// follow. The order rule's alterations are added on top as usual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_on: Option<Order>,
 }
 
 /// Where a contour in a resolved fidel came from. Nudges use it to find their

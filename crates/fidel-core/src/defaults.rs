@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::alteration::{Alteration, Placement, Region, Verb};
 use crate::base::Base;
-use crate::ethiopic::{default_irregular_note, GEEZ_FAMILIES};
+use crate::ethiopic::{default_built_on, default_irregular_note, GEEZ_FAMILIES};
 use crate::fidel::{Family, Fidel, FidelState, IrregularForm};
 use crate::geometry::Vec2;
 use crate::order::{Order, OrderRule};
@@ -96,7 +96,8 @@ pub fn hornus_order_rules() -> Vec<OrderRule> {
 }
 
 /// A new project with the 26 Ge'ez families, empty bases, Hornus's rules and
-/// the built-in irregular flags. Every fidel starts Linked unless pre-flagged.
+/// the built-in irregular flags and "built on" links. Every fidel starts
+/// Linked unless pre-flagged.
 pub fn geez_project(metrics: Metrics) -> Project {
     let mut p = Project { metrics, ..Default::default() };
     for alt in hornus_alterations() {
@@ -123,6 +124,9 @@ pub fn geez_project(metrics: Metrics) -> Project {
                     codepoint: Some(c),
                     state: FidelState::Linked,
                     alteration_overrides: BTreeMap::new(),
+                    built_on: default_built_on(c).map(|parent| {
+                        Order::ALL.into_iter().find(|o| f.codepoint(*o) == parent).expect("same family")
+                    }),
                 },
             );
         }

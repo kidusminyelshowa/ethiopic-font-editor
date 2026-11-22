@@ -245,7 +245,18 @@ function cellOutline(family: string, order: string) {
 function renderInspector(d: FidelDetail) {
   const metrics = state.grid?.metrics;
   const recipe = el("ul", { class: "recipe" });
-  if (d.baseGlyph) {
+  if (d.builtOn) {
+    const on = d.builtOn;
+    const b = el(
+      "button",
+      { class: "chip recipe-step clickable", title: "Select the fidel this one is built on" },
+      el("span", { class: "step-glyph", lang: "gez" }, on.codepoint ?? ""),
+      el("span", {}, `Built on ${on.orderName}`),
+      el("span", { class: "step-edit" }, "Go"),
+    );
+    b.addEventListener("click", () => void select(d.family, on.order));
+    recipe.append(el("li", {}, b));
+  } else if (d.baseGlyph && d.state !== "detached") {
     const b = el(
       "button",
       { class: "chip recipe-step clickable", title: "Edit this base" },
@@ -310,14 +321,66 @@ function renderInspector(d: FidelDetail) {
       el("p", { class: "state-help" }, d.note ?? STATE_HELP[d.state]),
       el("h3", { class: "section-label" }, "Recipe"),
       recipe,
-      el(
-        "div",
-        { class: "actions" },
-        open,
-        el("button", { class: "pill", disabled: "", title: "Arrives with ETH-6" }, "Detach"),
-      ),
+      ...(d.builtOnChoices.length && d.order !== "giiz" ? [builtOnPicker(d)] : []),
+      ...(d.builtOnBy.length
+        ? [
+            el(
+              "p",
+              { class: "built-on-by" },
+              el("span", { lang: "gez" }, d.builtOnBy.map((r) => r.codepoint ?? r.orderName).join(" ")),
+              ` ${d.builtOnBy.length === 1 ? "is" : "are"} built on this fidel and follow its changes.`,
+            ),
+          ]
+        : []),
+      el("div", { class: "actions" }, open, ...stateActions(d)),
     ),
   );
+}
+
+/** "Start from": the bare base, or another order of the family. */
+function builtOnPicker(d: FidelDetail) {
+  const pick = el("select", { class: "built-on-select", "aria-label": "Start from" });
+  pick.append(el("option", { value: "" }, `Base ${d.baseGlyph ?? ""}`));
+  for (const c of d.builtOnChoices) {
+    const opt = el("option", { value: c.order }, `${c.codepoint ?? ""} · ${c.orderName}`);
+    if (d.builtOn?.order === c.order) opt.selected = true;
+    pick.append(opt);
+  }
+  pick.addEventListener("change", () => {
+    void changeFidel(() => api.setBuiltOn(d.family, d.order, pick.value || null), d);
+  });
+  return el("label", { class: "built-on" }, el("span", { class: "section-label" }, "Start from"), pick);
+}
+
+function stateActions(d: FidelDetail) {
+  const out: HTMLElement[] = [];
+  if (d.state === "adjusted" || d.state === "detached") {
+    const relink = el("button", { class: "pill", title: "Drop local edits and follow the order rule again" }, "Relink");
+    relink.addEventListener("click", () => void changeFidel(() => api.relinkFidel(d.family, d.order), d));
+    out.push(relink);
+  }
+  if (d.state !== "detached") {
+    const detach = el(
+      "button",
+      { class: "pill", title: "Keep the current outline as a hand drawing that no longer updates" },
+      "Detach",
+    );
+    detach.addEventListener("click", () => void changeFidel(() => api.detachFidel(d.family, d.order), d));
+    out.push(detach);
+  }
+  return out;
+}
+
+/** Run a change to one fidel, then refresh the inspector, grid and title. */
+async function changeFidel(run: () => Promise<FidelDetail>, d: FidelDetail) {
+  try {
+    renderInspector(await run());
+    await refreshGrid();
+    void refreshProjectInfo();
+  } catch (err) {
+    ui.inspector.append(el("p", { class: "subtle error-note" }, String(err)));
+    void select(d.family, d.order);
+  }
 }
 
 function renderEmptyInspector() {

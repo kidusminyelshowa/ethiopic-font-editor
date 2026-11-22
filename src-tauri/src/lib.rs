@@ -245,6 +245,44 @@ fn rejoin_alteration(state: State<'_, AppState>, id: String) -> CmdResult<String
     Ok(shared)
 }
 
+/// Build a fidel on another order of its family, or on the bare base again.
+#[tauri::command]
+fn set_built_on(
+    state: State<'_, AppState>,
+    family: String,
+    order: Order,
+    on: Option<Order>,
+) -> CmdResult<FidelDetail> {
+    let mut project = state.project();
+    project.set_built_on(&family, order, on).map_err(err)?;
+    let detail = FidelDetail::from_project(&project, &family, order).map_err(err)?;
+    drop(project);
+    state.mark_dirty();
+    Ok(detail)
+}
+
+/// Bake a fidel's current outline into a hand-drawn copy.
+#[tauri::command]
+fn detach_fidel(state: State<'_, AppState>, family: String, order: Order) -> CmdResult<FidelDetail> {
+    let mut project = state.project();
+    project.detach(&family, order).map_err(err)?;
+    let detail = FidelDetail::from_project(&project, &family, order).map_err(err)?;
+    drop(project);
+    state.mark_dirty();
+    Ok(detail)
+}
+
+/// Drop a fidel's local edits and go back to its order rule.
+#[tauri::command]
+fn relink_fidel(state: State<'_, AppState>, family: String, order: Order) -> CmdResult<FidelDetail> {
+    let mut project = state.project();
+    project.relink(&family, order).map_err(err)?;
+    let detail = FidelDetail::from_project(&project, &family, order).map_err(err)?;
+    drop(project);
+    state.mark_dirty();
+    Ok(detail)
+}
+
 #[tauri::command]
 fn family_preview(state: State<'_, AppState>, family: String) -> CmdResult<Vec<FidelPreview>> {
     editor::family_preview(&state.project.lock().expect("project lock"), &family).map_err(err)
@@ -274,7 +312,10 @@ pub fn run() {
             proof_font,
             alteration_impacts,
             fork_alteration,
-            rejoin_alteration
+            rejoin_alteration,
+            set_built_on,
+            detach_fidel,
+            relink_fidel
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
