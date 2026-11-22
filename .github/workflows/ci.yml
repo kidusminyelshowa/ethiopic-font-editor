@@ -43,7 +43,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cargo test -p ethiopic-font-editor
-      - run: npx tauri build --bundles ${{ matrix.bundles }}
+      # Signed updater files are only made by the release workflow.
+      - run: npx tauri build --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: ethiopic-font-editor-${{ matrix.name }}

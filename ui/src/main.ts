@@ -18,6 +18,7 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
+import { checkForUpdate } from "./updater";
 import { isOn } from "./geometry";
 
 const STATES: StateKind[] = ["linked", "adjusted", "irregular", "detached"];
@@ -683,6 +684,7 @@ async function main() {
     fillDrawingSelect();
     const row = state.grid?.rows[1];
     if (row) await select(row.family, row.cells[4].order);
+    void checkForUpdate(ui.toasts, { confirmDiscard, toast });
   } catch (err) {
     label.textContent = "Core offline";
     ui.status.classList.add("error");

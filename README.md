@@ -33,3 +33,9 @@ GitHub Actions. Download them from the run's Artifacts section.
 
 Vocabulary and default order rules follow Hornus, *The Ethiopic Writing System:
 A Typographic Approach* (University of Reading, 2006).
+
+## Releases and updates
+
+Every merge to `main` runs `.github/workflows/release.yml`, which builds the Windows installer and the macOS app, signs the update files, and publishes a GitHub Release named `v0.1.<run number>`. The installed app checks the newest release when it starts and offers "Update and restart".
+
+Signing needs two repository secrets: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The matching public key is in `src-tauri/tauri.conf.json`. If the private key is lost, installed copies cannot update and must be reinstalled by hand once with a new key.
