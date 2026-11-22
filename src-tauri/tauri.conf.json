@@ -33,6 +33,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDNTg2MDM5QjEzMjNERjAKUldUd1BUS3hPV0JZekJSbTh2RkZzSGMrcEJFMDZZS2drLzRuMTZ3VDlwZ3J5Tnc4T1pKOXJPTDQK",
+      "endpoints": [
+        "https://github.com/kidusminyelshowa/ethiopic-font-editor/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

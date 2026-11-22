@@ -1,0 +1,63 @@
+name: Release
+
+# Every merge to main publishes a signed release. Installed apps read
+# latest.json from the newest release and offer to update.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm test
+      # Each release gets a higher version, so the updater sees it as new.
+      - name: Set version
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            const [major, minor] = c.version.split(".");
+            c.version = `${major}.${minor}.${process.env.GITHUB_RUN_NUMBER}`;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+            console.log("Version", c.version);
+          '
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Ethiopic Font Editor v__VERSION__
+          releaseBody: Built from ${{ github.sha }}. Installed copies update themselves on next launch.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.os == 'windows-latest' && '--bundles nsis' || '--bundles app' }}
