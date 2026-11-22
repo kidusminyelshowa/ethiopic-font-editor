@@ -25,6 +25,7 @@ npm install
 npm run tauri dev     # open the app with live reload
 npm run tauri build   # build an installer for this OS
 cargo test            # run the Rust tests
+npm test              # run the UI tests
 ```
 
 Every push to a pull request builds a Windows installer and a macOS app in
