@@ -1,0 +1,16 @@
+[package]
+name = "fidel-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Builds installable fonts from a fidel project"
+
+[dependencies]
+fidel-core = { path = "../fidel-core" }
+kurbo = "0.13"
+thiserror.workspace = true
+write-fonts = "0.56"
+
+[dev-dependencies]
+read-fonts = "0.47"
+skrifa = "0.50"

@@ -115,7 +115,17 @@ export interface ProjectInfo {
   dirty: boolean;
 }
 
+export interface ExportSummary {
+  path: string;
+  familyName: string;
+  exported: number;
+  skipped: number;
+}
+
 export const api = {
+  exportFont: (path: string) => invoke<ExportSummary>("export_font", { path }),
+  /** Font bytes of everything drawn so far; empty when nothing is drawn. */
+  proofFont: () => invoke<ArrayBuffer>("proof_font"),
   projectInfo: () => invoke<ProjectInfo>("project_info"),
   newProject: () => invoke<ProjectInfo>("new_project"),
   openProject: (path: string) => invoke<ProjectInfo>("open_project", { path }),

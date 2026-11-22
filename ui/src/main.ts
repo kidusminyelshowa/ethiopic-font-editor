@@ -112,6 +112,7 @@ document.querySelectorAll<HTMLElement>(".tab[data-view]").forEach((t) =>
 // ---------- Grid ----------
 
 async function refreshGrid() {
+  void refreshProof();
   state.grid = await api.fidelGrid();
   ui.summary.textContent = `${state.grid.rows.length} families · ${state.grid.orders.length} orders · Ge'ez`;
   renderFilters(state.grid);
@@ -667,6 +668,58 @@ void getCurrentWindow()
   .catch(() => {
     /* not running inside Tauri */
   });
+
+// ---------- Font export and live proof ----------
+
+const FONT_FILTER = [{ name: "Font", extensions: ["ttf"] }];
+
+async function exportFont() {
+  const path = await saveDialog({ defaultPath: `${projectInfo.name}.ttf`, filters: FONT_FILTER });
+  if (!path) return;
+  try {
+    const r = await api.exportFont(path);
+    const left = r.skipped ? ` ${r.skipped} not drawn yet use the system font.` : "";
+    toast(`Exported ${r.exported} fidel as “${r.familyName}”.${left}`);
+  } catch (err) {
+    toast(`Could not export: ${err}`, "error");
+  }
+}
+
+document.getElementById("export-font")!.addEventListener("click", () => void exportFont());
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    void exportFont();
+  }
+});
+
+// The proof line is set in a font built from the current drawings, falling
+// back to the system Ethiopic font for fidel that are not drawn yet.
+let proofFace: FontFace | null = null;
+let proofSerial = 0;
+
+async function refreshProof() {
+  const input = document.getElementById("proof-input") as HTMLInputElement;
+  const note = document.getElementById("proof-note")!;
+  try {
+    const bytes = await api.proofFont();
+    if (proofFace) document.fonts.delete(proofFace);
+    proofFace = null;
+    if (!bytes.byteLength) {
+      input.style.fontFamily = "";
+      note.textContent = "System font until you draw";
+      return;
+    }
+    const face = new FontFace(`Fidel Proof ${++proofSerial}`, bytes);
+    await face.load();
+    document.fonts.add(face);
+    proofFace = face;
+    input.style.fontFamily = `"${face.family}", var(--ethiopic)`;
+    note.textContent = "Your drawings · the rest in the system font";
+  } catch (err) {
+    console.warn("Proof font failed", err);
+  }
+}
 
 // ---------- Start ----------
 

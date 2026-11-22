@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fidel-core", "src-tauri"]
+members = ["crates/fidel-core", "crates/fidel-export", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
