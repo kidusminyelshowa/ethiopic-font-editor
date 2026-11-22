@@ -99,7 +99,26 @@ export interface AlterationSummary {
   drawable: boolean;
   drawn: boolean;
   orders: string[];
+  users: number;
+  forkedFrom?: string;
 }
+
+export type Effect = "regenerates" | "regenerates-keeping-nudges" | "untouched";
+
+export interface ImpactView {
+  family: string;
+  familyName: string;
+  order: string;
+  codepoint: string | null;
+  state: StateKind;
+  effect: Effect;
+}
+
+export type Scope =
+  | { kind: "everywhere" }
+  | { kind: "order"; order: string }
+  | { kind: "family"; family: string }
+  | { kind: "fidel"; family: string; order: string };
 
 export interface FidelPreview {
   order: string;
@@ -123,6 +142,9 @@ export interface ExportSummary {
 }
 
 export const api = {
+  alterationImpacts: (id: string) => invoke<ImpactView[]>("alteration_impacts", { id }),
+  forkAlteration: (id: string, scope: Scope) => invoke<string>("fork_alteration", { id, scope }),
+  rejoinAlteration: (id: string) => invoke<string>("rejoin_alteration", { id }),
   exportFont: (path: string) => invoke<ExportSummary>("export_font", { path }),
   /** Font bytes of everything drawn so far; empty when nothing is drawn. */
   proofFont: () => invoke<ArrayBuffer>("proof_font"),

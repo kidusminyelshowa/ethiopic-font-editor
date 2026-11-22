@@ -81,6 +81,10 @@ pub struct Alteration {
     pub placement: Placement,
     #[serde(default)]
     pub contours: Vec<Contour>,
+    /// Set on a copy made for part of the system (one fidel, one family or
+    /// one order), so it can be joined back to the shared alteration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<AlterationId>,
 }
 
 /// Points this close (in font units) count as being on the same edge.

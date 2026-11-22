@@ -28,6 +28,7 @@ fn alteration(id: &str, name: &str, verb: Verb, region: Region, parts: &[Part]) 
         verb,
         placement: Placement { anchor: None, region, parts: parts.to_vec(), offset: Vec2::ZERO },
         contours: Vec::new(),
+        forked_from: None,
     }
 }
 
@@ -116,7 +117,14 @@ pub fn geez_project(metrics: Metrics) -> Project {
         };
         for order in Order::ALL {
             let c = f.codepoint(order);
-            family.fidels.insert(order, Fidel { codepoint: Some(c), state: FidelState::Linked });
+            family.fidels.insert(
+                order,
+                Fidel {
+                    codepoint: Some(c),
+                    state: FidelState::Linked,
+                    alteration_overrides: BTreeMap::new(),
+                },
+            );
         }
         p.families.insert(f.id.into(), family);
         for order in Order::ALL {

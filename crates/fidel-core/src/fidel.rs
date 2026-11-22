@@ -33,6 +33,10 @@ pub struct Fidel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codepoint: Option<char>,
     pub state: FidelState,
+    /// Alterations this fidel uses in place of the ones its order rule names:
+    /// rule alteration id -> its own copy. Set by scoped edits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub alteration_overrides: BTreeMap<AlterationId, AlterationId>,
 }
 
 /// Where a contour in a resolved fidel came from. Nudges use it to find their

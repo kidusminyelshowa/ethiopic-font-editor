@@ -221,3 +221,86 @@ fn set_drawing_updates_dependents_and_rejects_bad_contours() {
     // Rejected writes leave the drawing as it was.
     assert_eq!(p.drawing(&target).unwrap(), loop_contours(50.0).as_slice());
 }
+
+#[test]
+fn scoped_edit_changes_only_the_fidel_in_scope() {
+    let mut p = project();
+    // Nudge ሌ first: the nudge must follow it onto its own copy.
+    let target =
+        NudgeTarget::Point { source: Source::Alteration(LOOP_BOTTOM_RIGHT.into()), contour: 0, point: 2 };
+    p.nudge("la", Order::Hamis, target, Vec2::new(10.0, 0.0)).unwrap();
+    let le_before = p.resolve("la", Order::Hamis).unwrap();
+
+    let copy = p
+        .fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Fidel { family: "la".into(), order: Order::Hamis })
+        .unwrap();
+    assert_eq!(copy, "loop.bottom-right~la-hamis");
+    assert_eq!(p.alterations[&copy].forked_from.as_deref(), Some(LOOP_BOTTOM_RIGHT));
+    assert_eq!(p.users_of(&copy), vec![("la".to_string(), Order::Hamis)]);
+    assert_eq!(p.users_of(LOOP_BOTTOM_RIGHT).len(), 25);
+
+    // Same outline right after the split, nudge included, and no orphans.
+    let le = p.resolve("la", Order::Hamis).unwrap();
+    let outline = |r: &ResolvedFidel| r.contours.iter().map(|c| c.contour.clone()).collect::<Vec<_>>();
+    assert_eq!(outline(&le), outline(&le_before));
+    assert!(le.diagnostics.is_empty(), "{:?}", le.diagnostics);
+
+    // Editing the copy changes ሌ only; editing the shared loop changes the rest only.
+    p.set_drawing(&DrawingTarget::Alteration(copy.clone()), loop_contours(150.0)).unwrap();
+    p.set_drawing(&DrawingTarget::Alteration(LOOP_BOTTOM_RIGHT.into()), loop_contours(100.0)).unwrap();
+    let width = |r: &ResolvedFidel, src: &str| {
+        let b = r.from_source(&Source::Alteration(src.into())).next().and_then(Contour::bounds).unwrap();
+        b.max.x - b.min.x
+    };
+    // 150 wide, plus the 10-unit nudge on its corner.
+    assert_eq!(width(&p.resolve("la", Order::Hamis).unwrap(), &copy), 160.0);
+    assert_eq!(width(&p.resolve("ba", Order::Hamis).unwrap(), LOOP_BOTTOM_RIGHT), 100.0);
+
+    // Rejoin: back on the shared loop, nudge kept, copy gone.
+    assert_eq!(p.rejoin_alteration(&copy).unwrap(), LOOP_BOTTOM_RIGHT);
+    assert!(!p.alterations.contains_key(&copy));
+    assert_eq!(p.users_of(LOOP_BOTTOM_RIGHT).len(), 26);
+    let le = p.resolve("la", Order::Hamis).unwrap();
+    assert!(le.diagnostics.is_empty());
+    assert_eq!(le.state, StateKind::Adjusted);
+    assert!(p.fidel("la", Order::Hamis).unwrap().alteration_overrides.is_empty());
+}
+
+#[test]
+fn family_and_order_scopes() {
+    let mut p = project();
+    let fam = p.fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Family { family: "ma".into() }).unwrap();
+    assert_eq!(p.users_of(&fam), vec![("ma".to_string(), Order::Hamis)]);
+    assert!(p.alterations[&fam].name.contains("May family only"), "{}", p.alterations[&fam].name);
+
+    // A copy of a copy rejoins the original shared alteration.
+    let one = p.fork_alteration(&fam, &Scope::Fidel { family: "ma".into(), order: Order::Hamis }).unwrap();
+    assert_eq!(p.alterations[&one].forked_from.as_deref(), Some(LOOP_BOTTOM_RIGHT));
+
+    // Order scope covers every remaining user in that order.
+    let ord = p.fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Order { order: Order::Hamis }).unwrap();
+    assert_eq!(p.users_of(&ord).len(), 25);
+    assert!(p.users_of(LOOP_BOTTOM_RIGHT).is_empty());
+
+    // Nothing in scope is an error, and Everywhere is a no-op.
+    assert!(matches!(
+        p.fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Order { order: Order::Kaib }),
+        Err(ModelError::NotUsedInScope(_))
+    ));
+    assert_eq!(p.fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Everywhere).unwrap(), LOOP_BOTTOM_RIGHT);
+    assert!(matches!(p.rejoin_alteration(LOOP_BOTTOM_RIGHT), Err(ModelError::NotAFork(_))));
+}
+
+#[test]
+fn forks_survive_save_and_open() {
+    let mut p = project();
+    let copy = p
+        .fork_alteration(LOOP_BOTTOM_RIGHT, &Scope::Fidel { family: "la".into(), order: Order::Hamis })
+        .unwrap();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    kid::write(&p, &mut buf).unwrap();
+    buf.set_position(0);
+    let back = kid::read(buf).unwrap();
+    assert_eq!(back.users_of(&copy), vec![("la".to_string(), Order::Hamis)]);
+    assert_eq!(back, p);
+}
