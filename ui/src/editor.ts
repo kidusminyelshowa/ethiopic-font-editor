@@ -8,7 +8,9 @@ import {
   clone,
   constrain45,
   contourPath,
+  boundsOf,
   contoursBounds,
+  convertNodes,
   ellipseContour,
   fromNodes,
   isOn,
@@ -16,13 +18,16 @@ import {
   nextContourId,
   rebuilt,
   rectContour,
+  reversed,
   roundContours,
+  startDirection,
   toNodes,
   translated,
   validate,
   type Box,
   type Contour,
   type Node,
+  type NodeType,
   type Vec2,
 } from "./geometry";
 import { importSvg, SvgImportError } from "./svgImport";
@@ -54,6 +59,7 @@ type Gesture =
   | { kind: "attach"; start: Vec2; origin: Vec2; base: Contour[]; moved: boolean }
   | { kind: "shape"; shape: "rect" | "ellipse"; start: Vec2; now: Vec2 }
   | { kind: "marquee"; start: Vec2; now: Vec2; additive: boolean }
+  | { kind: "zoom"; start: Vec2; now: Vec2; out: boolean }
   | { kind: "pan"; startScreen: Vec2; view: View }
   | { kind: "pen-drag"; node: Node }
   | { kind: "sketch"; start: Vec2; origin: Vec2 };
@@ -104,6 +110,8 @@ export class GlyphEditor {
   private pen: Node[] | null = null;
   private cursor: Vec2 | null = null;
   private spaceHeld = false;
+  /** Z held down: click zooms in, Alt-click out, drag zooms to an area. */
+  private zoomHeld = false;
   private committed = "[]";
   private undoStack: string[] = [];
   private redoStack: string[] = [];
@@ -231,6 +239,42 @@ export class GlyphEditor {
     this.render();
   }
 
+  /** Frame a box of font units, with some room around it. */
+  zoomTo(b: Box): void {
+    const r = this.svg.getBoundingClientRect();
+    const w = r.width || 800;
+    const h = r.height || 600;
+    const bw = Math.max(b.maxX - b.minX, 1);
+    const bh = Math.max(b.maxY - b.minY, 1);
+    const scale = Math.min(8, Math.max(0.05, Math.min((w - 120) / bw, (h - 160) / bh)));
+    this.view = {
+      scale,
+      tx: w / 2 - ((b.minX + b.maxX) / 2) * scale,
+      ty: (h - 40) / 2 + ((b.minY + b.maxY) / 2) * scale,
+    };
+    this.render();
+  }
+
+  /** Zoom to the selected points, or to the whole drawing when nothing is selected. */
+  zoomToSelection(): void {
+    const pts = this.selection.size
+      ? [...this.selection].map((k) => {
+          const [ci, pi] = k.split(":").map(Number);
+          return this.contours[ci].points[pi].pos;
+        })
+      : this.contours.flatMap((c) => c.points.map((p) => p.pos));
+    const b = boundsOf(pts);
+    if (!b) return this.fit();
+    // A single point gets a sensible neighbourhood instead of the maximum zoom.
+    const pad = Math.max(0, 60 - Math.min(b.maxX - b.minX, b.maxY - b.minY));
+    this.zoomTo({ minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad });
+  }
+
+  /** 100%: one font unit to one screen pixel, centred where the view is. */
+  actualSize(): void {
+    this.zoom(1 / this.view.scale);
+  }
+
   // ---------- Hit testing ----------
 
   private hitPoint(screen: Vec2): [number, number] | null {
@@ -273,12 +317,19 @@ export class GlyphEditor {
       "wheel",
       (e) => {
         e.preventDefault();
-        if (e.ctrlKey || e.metaKey || e.altKey) {
-          this.zoom(Math.exp(-e.deltaY * 0.0025), this.screenOf(e));
-        } else {
-          this.view = { ...this.view, tx: this.view.tx - e.deltaX, ty: this.view.ty - e.deltaY };
-          this.render();
+        // Like Figma: two-finger scroll pans, pinch (sent as Ctrl+wheel) and
+        // Ctrl+scroll zoom around the pointer, Shift+scroll pans sideways.
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+        let dx = e.deltaX * unit;
+        let dy = e.deltaY * unit;
+        if (e.ctrlKey || e.metaKey) {
+          const step = Math.max(-60, Math.min(60, dy));
+          this.zoom(Math.exp(-step * 0.01), this.screenOf(e));
+          return;
         }
+        if (e.shiftKey && dx === 0) [dx, dy] = [dy, 0];
+        this.view = { ...this.view, tx: this.view.tx - dx, ty: this.view.ty - dy };
+        this.render();
       },
       { passive: false },
     );
@@ -292,6 +343,11 @@ export class GlyphEditor {
 
     if (this.tool === "hand" || this.spaceHeld || e.button === 1) {
       this.gesture = { kind: "pan", startScreen: screen, view: { ...this.view } };
+      return;
+    }
+
+    if (this.zoomHeld) {
+      this.gesture = { kind: "zoom", start: font, now: font, out: e.altKey };
       return;
     }
 
@@ -430,6 +486,7 @@ export class GlyphEditor {
         break;
       }
       case "marquee":
+      case "zoom":
         g.now = font;
         break;
       case "pen-drag": {
@@ -478,6 +535,16 @@ export class GlyphEditor {
         this.commit();
         this.host.renderSide(this);
       }
+    } else if (g.kind === "zoom") {
+      const dragged = Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 4;
+      if (dragged && !g.out) {
+        this.zoomTo({
+          minX: Math.min(g.start.x, g.now.x),
+          minY: Math.min(g.start.y, g.now.y),
+          maxX: Math.max(g.start.x, g.now.x),
+          maxY: Math.max(g.start.y, g.now.y),
+        });
+      } else this.zoom(g.out ? 0.5 : 2, this.toScreen(g.now));
     } else if (g.kind === "marquee") {
       const x0 = Math.min(g.start.x, g.now.x);
       const x1 = Math.max(g.start.x, g.now.x);
@@ -516,7 +583,7 @@ export class GlyphEditor {
     if (!hit) return;
     const p = this.contours[hit[0]].points[hit[1]];
     if (!isOn(p)) return;
-    this.setSmooth(!p.smooth);
+    this.setNodeType(p.smooth ? "corner" : "smooth");
   }
 
   private changedSelection(): void {
@@ -800,15 +867,52 @@ export class GlyphEditor {
     this.host.renderSide(this);
   }
 
-  setSmooth(smooth: boolean): void {
+  /**
+   * Rebuild the contours that hold selected points, then select the same
+   * points again by id, since rebuilding can renumber them.
+   */
+  private editSelectedContours(fn: (c: Contour, ids: Set<number>) => Contour, all = false): void {
+    const picked = new Map<number, Set<number>>();
     for (const k of this.selection) {
       const [ci, pi] = k.split(":").map(Number);
       const p = this.contours[ci]?.points[pi];
-      if (p && isOn(p)) p.smooth = smooth;
+      if (!p) continue;
+      if (!picked.has(ci)) picked.set(ci, new Set());
+      picked.get(ci)!.add(p.id);
+    }
+    if (all && !picked.size) this.contours.forEach((_, ci) => picked.set(ci, new Set()));
+    if (!picked.size) return;
+    for (const [ci, ids] of picked) this.contours[ci] = fn(this.contours[ci], ids);
+    this.selection = new Set();
+    for (const [ci, ids] of picked) {
+      this.contours[ci].points.forEach((p, pi) => ids.has(p.id) && this.selection.add(key(ci, pi)));
     }
     this.commit();
     this.render();
     this.host.renderSide(this);
+  }
+
+  /** Corner, smooth, or retract the handles of the selected on-curve points. */
+  setNodeType(to: NodeType): void {
+    this.editSelectedContours((c, ids) => convertNodes(c, ids, to));
+  }
+
+  /** Reverse the direction of the selected contours, or of every contour when nothing is selected. */
+  reverseDirection(): void {
+    this.editSelectedContours((c) => reversed(c), true);
+  }
+
+  /** The selected on-curve points. */
+  selectedNodes(): { smooth: boolean; handles: boolean }[] {
+    return [...this.selection].flatMap((k) => {
+      const [ci, pi] = k.split(":").map(Number);
+      const c = this.contours[ci];
+      const p = c?.points[pi];
+      if (!p || !isOn(p)) return [];
+      const n = c.points.length;
+      const handles = !isOn(c.points[(pi - 1 + n) % n]) || !isOn(c.points[(pi + 1) % n]);
+      return [{ smooth: !!p.smooth, handles }];
+    });
   }
 
   /** Contours with at least one selected point. */
@@ -988,6 +1092,7 @@ export class GlyphEditor {
     on("zoom-in", () => this.zoom(1.25));
     on("zoom-out", () => this.zoom(0.8));
     on("fit", () => this.fit());
+    this.bindZoomMenu();
     on("import-svg", () => this.root.querySelector<HTMLInputElement>(".svg-file")!.click());
     on("import-image", () => this.root.querySelector<HTMLInputElement>(".image-file")!.click());
     this.root.querySelector<HTMLInputElement>(".image-file")!.addEventListener("change", (e) => {
@@ -1025,14 +1130,35 @@ export class GlyphEditor {
       } else if (mod && k === "a") {
         e.preventDefault();
         this.selectAll();
+      } else if (mod && e.shiftKey && k === "r") {
+        e.preventDefault();
+        this.reverseDirection();
+      } else if (mod && (k === "=" || k === "+")) {
+        e.preventDefault();
+        this.zoom(1.25);
+      } else if (mod && (k === "-" || k === "_")) {
+        e.preventDefault();
+        this.zoom(0.8);
+      } else if (mod && e.code === "Digit0") {
+        e.preventDefault();
+        this.fit();
       } else if (mod) {
         return;
-      } else if (k === "v") this.setTool("select");
+      } else if (e.shiftKey && e.code === "Digit0") this.actualSize();
+      else if (e.shiftKey && e.code === "Digit1") this.fit();
+      else if (e.shiftKey && e.code === "Digit2") this.zoomToSelection();
+      else if (k === "v") this.setTool("select");
       else if (k === "a") this.setTool("direct");
       else if (k === "p") this.setTool("pen");
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
       else if (k === "h") this.setTool("hand");
+      else if (k === "z") {
+        if (!e.repeat) {
+          this.zoomHeld = true;
+          this.svg.dataset.zoom = e.altKey ? "out" : "in";
+        }
+      }
       else if (k === "0" || k === "f") this.fit();
       else if (k === "=" || k === "+") this.zoom(1.25);
       else if (k === "-") this.zoom(0.8);
@@ -1040,6 +1166,11 @@ export class GlyphEditor {
         e.preventDefault();
         this.spaceHeld = true;
         this.svg.dataset.panning = "true";
+      } else if (k === "alt") {
+        if (this.zoomHeld) {
+          e.preventDefault();
+          this.svg.dataset.zoom = "out";
+        }
       } else if (k === "escape") {
         if (this.pen) this.cancelPen();
         else {
@@ -1058,11 +1189,65 @@ export class GlyphEditor {
         if (d) this.nudge(d[0], d[1]);
       }
     });
+    window.addEventListener("blur", () => {
+      this.zoomHeld = false;
+      delete this.svg.dataset.zoom;
+    });
     window.addEventListener("keyup", (e) => {
+      if (e.key === "Alt" && this.zoomHeld) this.svg.dataset.zoom = "in";
+      if (e.key.toLowerCase() === "z") {
+        this.zoomHeld = false;
+        delete this.svg.dataset.zoom;
+      }
       if (e.key === " ") {
         this.spaceHeld = false;
         delete this.svg.dataset.panning;
       }
+    });
+  }
+
+  /** The zoom percentage opens a menu of zoom commands, like Figma's. */
+  private bindZoomMenu(): void {
+    const btn = this.root.querySelector<HTMLButtonElement>(".zoom-label")!;
+    const menu = this.root.querySelector<HTMLElement>(".zoom-menu")!;
+    const items: [string, string, () => void][] = [
+      ["Zoom in", "Ctrl +", () => this.zoom(1.25)],
+      ["Zoom out", "Ctrl −", () => this.zoom(0.8)],
+      ["Zoom to fit", "Shift 1", () => this.fit()],
+      ["Zoom to selection", "Shift 2", () => this.zoomToSelection()],
+      ["Zoom to 50%", "", () => this.zoom(0.5 / this.view.scale)],
+      ["Zoom to 100%", "Shift 0", () => this.actualSize()],
+      ["Zoom to 200%", "", () => this.zoom(2 / this.view.scale)],
+    ];
+    menu.replaceChildren(
+      ...items.map(([label, keys, fn]) => {
+        const b = document.createElement("button");
+        b.className = "menu-item";
+        b.setAttribute("role", "menuitem");
+        b.append(label);
+        if (keys) {
+          const kbd = document.createElement("kbd");
+          kbd.textContent = keys;
+          b.append(kbd);
+        }
+        b.addEventListener("click", () => {
+          close();
+          fn();
+        });
+        return b;
+      }),
+    );
+    const close = () => {
+      menu.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    };
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      btn.setAttribute("aria-expanded", String(!menu.hidden));
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!menu.hidden && !menu.contains(e.target as globalThis.Node) && e.target !== btn) close();
     });
   }
 
@@ -1201,6 +1386,19 @@ export class GlyphEditor {
       });
     }
 
+    // Path direction: an arrow just past each start point, pointing the way
+    // the contour runs. All contours with Direct and Pen, selected ones with Move.
+    const arrowsFor = showPoints ? this.contours.map((_, ci) => ci) : this.selectedContours();
+    for (const ci of arrowsFor) {
+      const sd = startDirection(this.contours[ci]);
+      if (!sd) continue;
+      const at = this.toScreen(sd.at);
+      const d = { x: sd.dir.x, y: -sd.dir.y };
+      const q = { x: -d.y, y: d.x };
+      const pt = (a: number, b: number) => `${at.x + d.x * a + q.x * b},${at.y + d.y * a + q.y * b}`;
+      parts.push(`<polygon class="dir-arrow" points="${pt(22, 0)} ${pt(10, 5.5)} ${pt(10, -5.5)}"/>`);
+    }
+
     // The attach point of an alteration, draggable.
     if (this.drawing.context) {
       const o = this.toScreen(this.origin);
@@ -1224,7 +1422,7 @@ export class GlyphEditor {
           : `<ellipse class="shape-preview" cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}"/>`,
       );
     }
-    if (g?.kind === "marquee") {
+    if (g?.kind === "marquee" || g?.kind === "zoom") {
       const a = { x: sx(g.start.x), y: sy(g.start.y) };
       const b = { x: sx(g.now.x), y: sy(g.now.y) };
       parts.push(

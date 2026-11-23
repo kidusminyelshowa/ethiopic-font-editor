@@ -347,7 +347,7 @@ mod tests {
     fn grid_follows_the_traditional_chart() {
         let grid = FidelGrid::from_project(&geez_project(Metrics::default()));
         assert_eq!(grid.orders.len(), 7);
-        assert_eq!(grid.orders[4].name, "Hamis");
+        assert_eq!(grid.orders[4].name, "ሐምስ");
         assert_eq!(grid.rows.len(), 26);
         let first: String = grid.rows.iter().map(|r| r.cells[0].codepoint.unwrap()).collect();
         assert!(first.starts_with("ሀለሐመሠረሰቀበ"), "{first}");
@@ -364,7 +364,7 @@ mod tests {
         let json = serde_json::to_value(&grid).unwrap();
         assert_eq!(json["rows"][0]["cells"][4]["codepoint"], "ሄ");
         assert_eq!(json["rows"][0]["cells"][4]["state"], "linked");
-        assert_eq!(json["orders"][0]["name"], "Gi'iz");
+        assert_eq!(json["orders"][0]["name"], "ግዕዝ");
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         let d = FidelDetail::from_project(&p, "la", Order::Hamis).unwrap();
         assert_eq!(d.codepoint, Some('ሌ'));
         assert_eq!(d.base_glyph, Some('ለ'));
-        assert_eq!(d.order_name, "Hamis");
+        assert_eq!(d.order_name, "ሐምስ");
         assert_eq!(d.recipe.len(), 1);
         assert_eq!(d.recipe[0].id, "loop.bottom-right");
         assert!(!d.recipe[0].drawn);

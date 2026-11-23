@@ -164,10 +164,11 @@
             </div>
 
             <div class="zoom-box">
-              <button class="tool" data-action="zoom-out" title="Zoom out (−)">−</button>
-              <span class="zoom-label">100%</span>
-              <button class="tool" data-action="zoom-in" title="Zoom in (+)">+</button>
-              <button class="tool text" data-action="fit" title="Fit (0)">Fit</button>
+              <button class="tool" data-action="zoom-out" title="Zoom out (Ctrl −)">−</button>
+              <button class="zoom-label" aria-haspopup="menu" aria-expanded="false" title="Zoom options">100%</button>
+              <button class="tool" data-action="zoom-in" title="Zoom in (Ctrl +)">+</button>
+              <button class="tool text" data-action="fit" title="Zoom to fit (Shift+1)">Fit</button>
+              <div class="menu zoom-menu" role="menu" aria-label="Zoom" hidden></div>
             </div>
 
             <span class="coords" aria-live="off"></span>
