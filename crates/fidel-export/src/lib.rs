@@ -100,13 +100,22 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     let mut exported = Vec::new();
     let mut skipped = Vec::new();
 
-    // Families in the order the project lists them, then orders 1 to 7.
-    let mut fidel: Vec<_> = Order::ALL.iter().flat_map(|&o| project.resolve_order(o)).collect();
-    fidel.sort_by_key(|f| f.codepoint);
-    for f in fidel {
-        let Some(ch) = f.codepoint else { continue };
-        let contours: Vec<&Contour> =
-            f.contours.iter().map(|c| &c.contour).filter(|c| c.points.len() >= 2).collect();
+    // Every fidel and symbol in the project's character sets, by codepoint.
+    let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
+        .iter()
+        .chain(Order::EXTRA.iter())
+        .flat_map(|&o| project.resolve_order(o))
+        .filter_map(|f| {
+            let ch = f.codepoint?;
+            Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
+        })
+        .chain(project.symbols.values().map(|s| (s.codepoint, s.contours.clone(), s.advance_width)))
+        .filter(|(ch, ..)| project.in_charset(*ch))
+        .collect();
+    items.sort_by_key(|(ch, ..)| *ch);
+    items.dedup_by_key(|(ch, ..)| *ch);
+    for (ch, outline, advance) in items {
+        let contours: Vec<&Contour> = outline.iter().filter(|c| c.points.len() >= 2).collect();
         if contours.is_empty() {
             skipped.push(ch);
             continue;
@@ -114,7 +123,7 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
         let name = glyph_name(ch);
         let glyph = simple_glyph(&contours)
             .map_err(|reason| ExportError::BadOutline { glyph: format!("{ch} ({name})"), reason })?;
-        glyphs.push(GlyphOut { name, codepoint: Some(ch), advance: to_u16(f.advance_width), glyph });
+        glyphs.push(GlyphOut { name, codepoint: Some(ch), advance: to_u16(advance), glyph });
         exported.push(ch);
     }
     if exported.is_empty() {

@@ -26,6 +26,9 @@
             <button class="menu-item" role="menuitem" data-file="saveas">Save as…<kbd>Ctrl Shift S</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="export">Export font…<kbd>Ctrl E</kbd></button>
             <div class="menu-sep" role="separator"></div>
+            <div class="menu-label">Project</div>
+            <button class="menu-item" role="menuitem" data-menu="charsets">Character sets…</button>
+            <div class="menu-sep" role="separator"></div>
             <div class="menu-label">View</div>
             <button class="menu-item" role="menuitem" data-menu="view-grid">Fidel grid<kbd>1</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="view-editor">Glyph editor<kbd>2</kbd></button>
@@ -76,7 +79,7 @@
         </div>
         <label class="search">
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" fill="none" /><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
-          <input id="side-search" type="search" placeholder="Find a fidel, family or U+ code" aria-label="Find" spellcheck="false" />
+          <input id="side-search" type="search" placeholder="Search" aria-label="Find" spellcheck="false" />
         </label>
         <div id="side-list" class="side-list" role="tree"></div>
       </aside>
@@ -88,7 +91,16 @@
               <h1 class="stage-heading">Fidel grid</h1>
               <span id="grid-summary" class="subtle">Loading the system…</span>
             </div>
-            <div id="filters" class="filters" role="group" aria-label="Filter by state"></div>
+            <div class="stage-tools">
+              <div id="filters" class="filters" role="group" aria-label="Filter by state"></div>
+              <div class="menu-wrap charset-wrap">
+                <button id="charset-btn" class="stage-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Character sets">
+                  <span id="charset-label">Ge'ez</span>
+                  <svg class="caret" viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </button>
+                <div id="charset-menu" class="menu charset-menu" role="menu" aria-label="Character sets" hidden></div>
+              </div>
+            </div>
           </div>
           <div id="grid" class="grid-scroll"></div>
 
@@ -102,7 +114,7 @@
               aria-label="Proof text"
               value="ሰላም ለዓለም። ዛሬ ቤቴ ሄጄ ሻይ ጠጣሁ።"
             />
-            <span id="proof-note" class="proof-note">System font until you draw</span>
+            <span id="proof-note" class="proof-note" title="System font until you draw"></span>
           </div>
         </div>
 

@@ -34,6 +34,8 @@ export interface OrderHeader {
   order: string;
   number: number;
   name: string;
+  /** A labialized or -oa column. */
+  extra: boolean;
 }
 
 export interface GridCell {
@@ -48,14 +50,44 @@ export interface GridCell {
 export interface GridRow {
   family: string;
   name: string;
+  /** The base the row is drawn from; Sebatbeit and Gurage rows share one. */
+  base: string;
   group: string | null;
+  section: CharSetId;
   cells: GridCell[];
+}
+
+export type CharSetId =
+  | "geez"
+  | "ethiopic-letters"
+  | "ethiopic-labialized"
+  | "ethiopic-marks"
+  | "supplement"
+  | "extended"
+  | "extended-a"
+  | "extended-b";
+
+export interface CharSetInfo {
+  id: CharSetId;
+  name: string;
+  range: string;
+  count: number;
+  enabled: boolean;
+}
+
+export interface SymbolCell {
+  id: string;
+  codepoint: string;
+  name: string;
+  outline?: Outline;
 }
 
 export interface FidelGrid {
   metrics: Metrics;
   orders: OrderHeader[];
   rows: GridRow[];
+  symbols: SymbolCell[];
+  charsets: CharSetInfo[];
 }
 
 export interface RecipeStep {
@@ -89,7 +121,8 @@ export interface OrderRef {
   codepoint: string | null;
 }
 
-export type DrawingTarget = { kind: "base"; id: string } | { kind: "alteration"; id: string };
+export type DrawingKind = "base" | "alteration" | "symbol";
+export type DrawingTarget = { kind: DrawingKind; id: string };
 
 export interface DrawingView {
   target: DrawingTarget;
@@ -172,7 +205,8 @@ export const api = {
   getDrawing: (target: DrawingTarget, contextFamily?: string) =>
     invoke<DrawingView>("get_drawing", { target, contextFamily: contextFamily ?? null }),
   setDrawing: (target: DrawingTarget, contours: Contour[]) => invoke<void>("set_drawing", { target, contours }),
-  setAdvance: (base: string, advanceWidth: number) => invoke<void>("set_advance", { base, advanceWidth }),
+  setAdvance: (target: DrawingTarget, advanceWidth: number) => invoke<void>("set_advance", { target, advanceWidth }),
+  setCharsets: (sets: CharSetId[]) => invoke<FidelGrid>("set_charsets", { sets }),
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
 };
 

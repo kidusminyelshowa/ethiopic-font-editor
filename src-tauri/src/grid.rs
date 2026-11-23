@@ -1,7 +1,8 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
 use fidel_core::{
-    svg_path, Badge, FidelState, IrregularForm, Metrics, ModelError, Order, Project, ShapeGroup, StateKind,
+    charset, svg_path, Badge, CharSet, FidelState, IrregularForm, Metrics, ModelError, Order, Project,
+    ShapeGroup, StateKind,
 };
 use serde::Serialize;
 
@@ -11,6 +12,8 @@ pub struct OrderHeader {
     order: Order,
     number: u8,
     name: &'static str,
+    /// A labialized or -oa column, shown only when a set needs it.
+    extra: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,8 +53,49 @@ impl Outline {
 pub struct GridRow {
     family: String,
     name: String,
+    /// The base this row is drawn from. Usually the family id; Sebatbeit and
+    /// Gurage rows share the base of the plain row.
+    base: String,
     group: Option<ShapeGroup>,
+    /// The character set the row is listed under.
+    section: CharSet,
     cells: Vec<GridCell>,
+}
+
+/// A punctuation mark, numeral or combining mark.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolCell {
+    id: String,
+    codepoint: char,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<Outline>,
+}
+
+/// One entry of the character set picker.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharSetInfo {
+    id: CharSet,
+    name: &'static str,
+    range: &'static str,
+    count: usize,
+    enabled: bool,
+}
+
+pub fn charset_list(project: &Project) -> Vec<CharSetInfo> {
+    let on = project.charsets();
+    CharSet::ALL
+        .iter()
+        .map(|&id| CharSetInfo {
+            id,
+            name: id.name(),
+            range: id.range(),
+            count: id.count(),
+            enabled: on.contains(&id),
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -60,28 +104,22 @@ pub struct FidelGrid {
     metrics: Metrics,
     orders: Vec<OrderHeader>,
     rows: Vec<GridRow>,
+    symbols: Vec<SymbolCell>,
+    charsets: Vec<CharSetInfo>,
 }
 
 impl FidelGrid {
     pub fn from_project(project: &Project) -> Self {
-        let orders = Order::ALL
-            .iter()
-            .map(|&order| OrderHeader { order, number: order.number(), name: order.name() })
-            .collect();
-
-        // Rows in chart order (by 1st-order codepoint), not alphabetical by id.
-        let mut families: Vec<_> = project.families.values().collect();
-        families.sort_by_key(|f| f.fidels.get(&Order::Giiz).and_then(|g| g.codepoint));
-
-        let rows = families
-            .into_iter()
-            .map(|f| GridRow {
-                family: f.id.clone(),
-                name: f.name.clone(),
-                group: f.group,
-                cells: Order::ALL
+        let visible = |c: Option<char>| c.is_none_or(|c| project.in_charset(c));
+        let mut rows: Vec<(char, GridRow)> = project
+            .families
+            .values()
+            .filter_map(|f| {
+                let cells: Vec<GridCell> = Order::ALL
                     .iter()
+                    .chain(Order::EXTRA.iter())
                     .filter_map(|o| f.fidels.get(o).map(|fidel| (o, fidel)))
+                    .filter(|(_, fidel)| visible(fidel.codepoint))
                     .map(|(&order, fidel)| {
                         let state = fidel.state.kind();
                         let note = match &fidel.state {
@@ -97,11 +135,64 @@ impl FidelGrid {
                             outline: Outline::of(project, &f.id, order),
                         }
                     })
-                    .collect(),
+                    .collect();
+                // Listed under the set of its first character, and in chart
+                // order by that character.
+                let first = cells.iter().filter_map(|c| c.codepoint).min()?;
+                let section = f
+                    .fidels
+                    .values()
+                    .filter_map(|x| x.codepoint)
+                    .min()
+                    .and_then(charset::set_of)
+                    .filter(|s| project.charsets().contains(s))
+                    .or_else(|| charset::set_of(first))
+                    .unwrap_or(CharSet::Geez);
+                Some((
+                    first,
+                    GridRow {
+                        family: f.id.clone(),
+                        name: f.name.clone(),
+                        base: f.base.clone(),
+                        group: f.group,
+                        section,
+                        cells,
+                    },
+                ))
+            })
+            .collect();
+        rows.sort_by_key(|(first, r)| (CharSet::ALL.iter().position(|s| *s == r.section), *first));
+        let rows: Vec<GridRow> = rows.into_iter().map(|(_, r)| r).collect();
+
+        let orders = Order::ALL
+            .iter()
+            .chain(
+                Order::EXTRA.iter().filter(|o| rows.iter().any(|r| r.cells.iter().any(|c| c.order == **o))),
+            )
+            .map(|&order| OrderHeader {
+                order,
+                number: order.number(),
+                name: order.name(),
+                extra: !order.is_main(),
             })
             .collect();
 
-        FidelGrid { metrics: project.metrics.clone(), orders, rows }
+        let symbols = project
+            .symbols
+            .values()
+            .filter(|s| project.in_charset(s.codepoint))
+            .map(|s| SymbolCell {
+                id: s.id.clone(),
+                codepoint: s.codepoint,
+                name: s.name.clone(),
+                outline: (!s.contours.is_empty())
+                    .then(|| Outline { d: svg_path(&s.contours), advance_width: s.advance_width }),
+            })
+            .collect::<Vec<_>>();
+        let mut symbols = symbols;
+        symbols.sort_by_key(|s| s.codepoint);
+
+        FidelGrid { metrics: project.metrics.clone(), orders, rows, symbols, charsets: charset_list(project) }
     }
 }
 
@@ -235,6 +326,32 @@ mod tests {
         assert_eq!(json["rows"][0]["cells"][4]["codepoint"], "ሄ");
         assert_eq!(json["rows"][0]["cells"][4]["state"], "linked");
         assert_eq!(json["orders"][0]["name"], "Gi'iz");
+    }
+
+    #[test]
+    fn sets_add_rows_columns_and_symbols() {
+        let mut p = geez_project(Metrics::default());
+        p.set_charsets([
+            CharSet::Geez,
+            CharSet::EthiopicLetters,
+            CharSet::EthiopicLabialized,
+            CharSet::EthiopicMarks,
+        ]);
+        let grid = FidelGrid::from_project(&p);
+        assert!(grid.orders.iter().any(|o| o.order == Order::Oa && o.extra));
+        assert_eq!(grid.rows[0].section, CharSet::Geez);
+        assert!(grid.rows.iter().any(|r| r.family == "sha" && r.section == CharSet::EthiopicLetters));
+        let la = grid.rows.iter().find(|r| r.family == "la").unwrap();
+        assert!(la.cells.iter().any(|c| c.codepoint == Some('ሏ')));
+        assert!(grid.symbols.iter().any(|s| s.codepoint == '።'));
+
+        // Turning a set off hides it but keeps the work.
+        p.set_charsets([CharSet::Geez]);
+        let grid = FidelGrid::from_project(&p);
+        assert_eq!(grid.rows.len(), 26);
+        assert_eq!(grid.orders.len(), 7);
+        assert!(grid.symbols.is_empty());
+        assert!(p.families.contains_key("sha"));
     }
 
     #[test]

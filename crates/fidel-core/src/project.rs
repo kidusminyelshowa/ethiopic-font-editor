@@ -1,12 +1,13 @@
 //! The project: everything a .kid file will hold for one master.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::alteration::{Alteration, AlterationId};
 use crate::base::{Base, BaseId};
+use crate::charset::CharSet;
 use crate::fidel::{merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, StateKind};
 use crate::geometry::{Contour, ContourProblem, Vec2};
 use crate::order::{Order, OrderRule};
@@ -34,6 +35,28 @@ pub struct Project {
     pub alterations: BTreeMap<AlterationId, Alteration>,
     pub order_rules: BTreeMap<Order, OrderRule>,
     pub families: BTreeMap<FamilyId, Family>,
+    /// The parts of the Ethiopic repertoire this project covers. Fidel and
+    /// symbols outside these sets are kept but hidden and not exported.
+    /// Empty means Ge'ez only.
+    #[serde(default)]
+    pub charsets: BTreeSet<CharSet>,
+    /// Standalone glyphs: punctuation, numerals, combining marks.
+    #[serde(default)]
+    pub symbols: BTreeMap<SymbolId, Symbol>,
+}
+
+pub type SymbolId = String;
+
+/// A glyph outside the fidel system: ፡ ። ፩ ፲ and the like. Drawn directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Symbol {
+    /// `uni1361`.
+    pub id: SymbolId,
+    pub codepoint: char,
+    pub name: String,
+    pub advance_width: f64,
+    #[serde(default)]
+    pub contours: Vec<Contour>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -46,6 +69,8 @@ pub enum ModelError {
     NotGenerated(StateKind),
     #[error("no base `{0}`")]
     UnknownBase(BaseId),
+    #[error("no symbol `{0}`")]
+    UnknownSymbol(SymbolId),
     #[error("no alteration `{0}`")]
     UnknownAlteration(AlterationId),
     #[error("no fidel in that scope uses `{0}`")]
@@ -60,12 +85,13 @@ pub enum ModelError {
     DuplicateContourId(u32),
 }
 
-/// A drawing the glyph editor can open: a base or an alteration.
+/// A drawing the glyph editor can open: a base, an alteration or a symbol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "kind", content = "id")]
 pub enum DrawingTarget {
     Base(BaseId),
     Alteration(AlterationId),
+    Symbol(SymbolId),
 }
 
 /// Something upstream that is about to change.
@@ -111,6 +137,11 @@ impl Project {
                 .get(id)
                 .map(|a| a.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownAlteration(id.clone())),
+            DrawingTarget::Symbol(id) => self
+                .symbols
+                .get(id)
+                .map(|s| s.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
         }
     }
 
@@ -134,6 +165,9 @@ impl Project {
                     .get_mut(id)
                     .ok_or_else(|| ModelError::UnknownAlteration(id.clone()))?
                     .contours
+            }
+            DrawingTarget::Symbol(id) => {
+                &mut self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.contours
             }
         };
         *slot = contours;
@@ -311,7 +345,7 @@ impl Project {
             let mut at = Some(parent);
             let mut steps = 0;
             while let Some(o) = at {
-                if o == order || steps > Order::ALL.len() {
+                if o == order || steps > Order::ALL.len() + Order::EXTRA.len() {
                     return Err(ModelError::BuiltOnCycle(parent));
                 }
                 at = self.fidel(family, o)?.built_on;

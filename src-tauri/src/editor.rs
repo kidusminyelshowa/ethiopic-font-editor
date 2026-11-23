@@ -73,6 +73,18 @@ impl DrawingView {
                     metrics,
                 }
             }
+            DrawingTarget::Symbol(id) => {
+                let sym = &project.symbols[id];
+                DrawingView {
+                    title: format!("{} {}", sym.name, sym.codepoint),
+                    subtitle: format!("Symbol · U+{:04X}", sym.codepoint as u32),
+                    advance_width: Some(sym.advance_width),
+                    context: None,
+                    target,
+                    contours,
+                    metrics,
+                }
+            }
         })
     }
 }
@@ -201,8 +213,11 @@ pub struct FidelPreview {
 }
 
 pub fn family_preview(project: &Project, family: &str) -> Result<Vec<FidelPreview>, ModelError> {
+    let fam = project.families.get(family).ok_or_else(|| ModelError::UnknownFamily(family.into()))?;
     Order::ALL
         .iter()
+        .chain(Order::EXTRA.iter())
+        .filter(|o| fam.fidels.contains_key(o) && project.fidel_in_charset(family, **o))
         .map(|&order| {
             let r = project.resolve(family, order)?;
             let issues = r.diagnostics.iter().map(describe).collect();

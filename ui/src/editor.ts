@@ -552,9 +552,9 @@ export class GlyphEditor {
   }
 
   async setAdvance(width: number): Promise<void> {
-    if (!this.drawing || this.target?.kind !== "base") return;
+    if (!this.drawing || !this.target || this.target.kind === "alteration") return;
     const w = Math.max(0, Math.round(width));
-    await api.setAdvance(this.target.id, w);
+    await api.setAdvance(this.target, w);
     this.drawing.advanceWidth = w;
     this.render();
     this.host.changed(this.target);
@@ -910,12 +910,6 @@ export class GlyphEditor {
       const b = { x: sx(g.now.x), y: sy(g.now.y) };
       parts.push(
         `<rect class="marquee" x="${Math.min(a.x, b.x)}" y="${Math.min(a.y, b.y)}" width="${Math.abs(a.x - b.x)}" height="${Math.abs(a.y - b.y)}"/>`,
-      );
-    }
-
-    if (!this.contours.length && !this.pen) {
-      parts.push(
-        `<text class="empty-hint" x="${W / 2}" y="${H / 2 - 40}">Draw with the pen (P), paste SVG (Ctrl+V), or load a sketch.</text>`,
       );
     }
 
