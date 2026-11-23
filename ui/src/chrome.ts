@@ -33,8 +33,13 @@ export function applyTheme(choice: ThemeChoice) {
   void getCurrentWindow()
     .setTheme(choice === "system" ? null : choice)
     .catch(() => {});
-  for (const item of document.querySelectorAll<HTMLElement>("[data-theme-choice]")) {
-    item.setAttribute("aria-checked", String(item.dataset.themeChoice === choice));
+  for (const item of document.querySelectorAll<HTMLElement>(
+    "[data-theme-choice]",
+  )) {
+    item.setAttribute(
+      "aria-checked",
+      String(item.dataset.themeChoice === choice),
+    );
   }
 }
 
@@ -50,7 +55,7 @@ function setupMenu() {
     e.stopPropagation();
     menu.hidden = !menu.hidden;
     btn.setAttribute("aria-expanded", String(!menu.hidden));
-    if (!menu.hidden) menu.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+    if (!menu.hidden) menu.querySelector<HTMLElement>(".menu-item")?.focus();
   });
   menu.addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", close);
@@ -60,9 +65,10 @@ function setupMenu() {
       btn.focus();
     }
   });
-  for (const item of menu.querySelectorAll<HTMLElement>("[data-theme-choice]")) {
+  for (const item of menu.querySelectorAll<HTMLElement>(".menu-item")) {
     item.addEventListener("click", () => {
-      applyTheme(item.dataset.themeChoice as ThemeChoice);
+      if (item.dataset.themeChoice)
+        applyTheme(item.dataset.themeChoice as ThemeChoice);
       close();
     });
   }
@@ -76,12 +82,21 @@ function setupWindowControls() {
     controls.hidden = true;
     return;
   }
-  controls.querySelector('[data-win="minimize"]')?.addEventListener("click", () => void win.minimize());
-  controls.querySelector('[data-win="maximize"]')?.addEventListener("click", () => void win.toggleMaximize());
+  controls
+    .querySelector('[data-win="minimize"]')
+    ?.addEventListener("click", () => void win.minimize());
+  controls
+    .querySelector('[data-win="maximize"]')
+    ?.addEventListener("click", () => void win.toggleMaximize());
   // Goes through onCloseRequested, so unsaved work is still asked about.
-  controls.querySelector('[data-win="close"]')?.addEventListener("click", () => void win.close());
+  controls
+    .querySelector('[data-win="close"]')
+    ?.addEventListener("click", () => void win.close());
   const syncMax = async () => {
-    controls.classList.toggle("maximized", await win.isMaximized().catch(() => false));
+    controls.classList.toggle(
+      "maximized",
+      await win.isMaximized().catch(() => false),
+    );
   };
   void win.onResized(() => void syncMax());
   void syncMax();
