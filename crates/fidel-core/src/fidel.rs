@@ -60,6 +60,8 @@ pub enum Source {
     Alteration(AlterationId),
     /// Drawn directly on this fidel (Irregular drawn, or Detached).
     Own,
+    /// A component placed on the base, by its placement id.
+    Component(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

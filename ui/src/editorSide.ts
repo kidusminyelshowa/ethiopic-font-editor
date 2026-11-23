@@ -239,7 +239,7 @@ export function historyRows(ed: GlyphEditor): HTMLElement[] {
 
 // ---------- Menus ----------
 
-type MenuEntry =
+export type MenuEntry =
   | { label: string; keys?: string; run: () => void; disabled?: boolean; checked?: boolean }
   | "sep"
   | { heading: string };
@@ -259,7 +259,7 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("blur", closeMenu);
 
-function showMenu(entries: MenuEntry[], at: { x: number; y: number }) {
+export function showMenu(entries: MenuEntry[], at: { x: number; y: number }) {
   closeMenu();
   const menu = el("div", { class: "menu context-menu", role: "menu" });
   for (const e of entries) {

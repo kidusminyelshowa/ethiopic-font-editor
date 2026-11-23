@@ -256,6 +256,18 @@ pub struct FidelDetail {
     built_on_choices: Vec<OrderRef>,
     /// Detached or drawn Irregular: the editor opens its own outline.
     drawn_by_hand: bool,
+    /// The order rule's variants, when it has more than one, and which one
+    /// this family uses.
+    variants: Vec<VariantView>,
+    variant: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantView {
+    index: usize,
+    /// The variant's alteration names, joined.
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -334,6 +346,23 @@ impl FidelDetail {
             note,
             recipe,
             nudge_count: fidel.state.nudges().len(),
+            variants: match project.order_rules.get(&order) {
+                Some(rule) if rule.variants.len() > 1 => rule
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ids)| VariantView {
+                        index,
+                        label: ids
+                            .iter()
+                            .map(|id| project.alterations.get(id).map_or(id.as_str(), |a| a.name.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(" + "),
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            variant: fam.rule_variants.get(&order).copied().unwrap_or(0),
         })
     }
 }

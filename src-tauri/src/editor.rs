@@ -1,8 +1,8 @@
 //! What the glyph editor reads and writes.
 
 use fidel_core::{
-    Alteration, Change, Contour, DrawingTarget, Effect, Metrics, ModelError, Order, Project, StateKind, Vec2,
-    Verb,
+    Alteration, Change, ComponentKind, ComponentRef, Contour, DrawingTarget, Effect, Metrics, ModelError,
+    Order, Project, StateKind, Vec2, Verb,
 };
 use serde::Serialize;
 
@@ -23,6 +23,86 @@ pub struct DrawingView {
     /// the part is drawn in the same space as the base.
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<ContextGhost>,
+    /// Pa-height zones, in font units.
+    zones: Vec<ZoneView>,
+    /// For a base: the components placed on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    components: Option<Vec<PlacedComponent>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneView {
+    id: String,
+    name: String,
+    position: f64,
+    size: f64,
+}
+
+pub fn zone_views(metrics: &Metrics) -> Vec<ZoneView> {
+    let h = metrics.pa_height();
+    metrics
+        .zones()
+        .into_iter()
+        .map(|z| ZoneView {
+            position: metrics.pa_bottom + z.at * h,
+            size: z.size * h,
+            id: z.id,
+            name: z.name,
+        })
+        .collect()
+}
+
+/// A component placed on a base, with its outline in base coordinates.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacedComponent {
+    placement: ComponentRef,
+    name: String,
+    kind: Option<ComponentKind>,
+    d: String,
+}
+
+fn placed_components(project: &Project, base: &str) -> Vec<PlacedComponent> {
+    project.bases[base]
+        .components
+        .iter()
+        .map(|r| {
+            let comp = project.components.get(&r.component);
+            PlacedComponent {
+                name: comp.map_or_else(|| r.component.clone(), |c| c.name.clone()),
+                kind: comp.map(|c| c.kind),
+                d: comp.map(|c| fidel_core::svg_path(&r.place(c))).unwrap_or_default(),
+                placement: r.clone(),
+            }
+        })
+        .collect()
+}
+
+/// A component the editor can open or place.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentSummary {
+    id: String,
+    name: String,
+    kind: ComponentKind,
+    drawn: bool,
+    /// How many bases place it.
+    uses: usize,
+}
+
+pub fn component_summaries(project: &Project) -> Vec<ComponentSummary> {
+    project
+        .components
+        .values()
+        .map(|c| ComponentSummary {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            kind: c.kind,
+            drawn: !c.contours.is_empty(),
+            uses: project.bases.values().filter(|b| b.components.iter().any(|r| r.component == c.id)).count(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +145,8 @@ impl DrawingView {
                     subtitle: "Base · 1st order".into(),
                     advance_width: Some(base.advance_width),
                     context: None,
+                    components: Some(placed_components(project, id)),
+                    zones: zone_views(&metrics),
                     target,
                     contours,
                     metrics,
@@ -77,6 +159,8 @@ impl DrawingView {
                     subtitle: "Alteration".into(),
                     advance_width: None,
                     context: context_ghost(project, alt, context_family),
+                    components: None,
+                    zones: zone_views(&metrics),
                     target,
                     contours,
                     metrics,
@@ -93,6 +177,8 @@ impl DrawingView {
                     subtitle: format!("{} · drawn by hand", order.name()),
                     advance_width: None,
                     context: None,
+                    components: None,
+                    zones: zone_views(&metrics),
                     target,
                     contours,
                     metrics,
@@ -105,6 +191,27 @@ impl DrawingView {
                     subtitle: format!("Symbol · U+{:04X}", sym.codepoint as u32),
                     advance_width: Some(sym.advance_width),
                     context: None,
+                    components: None,
+                    zones: zone_views(&metrics),
+                    target,
+                    contours,
+                    metrics,
+                }
+            }
+            DrawingTarget::Component(id) => {
+                let comp = &project.components[id];
+                let kind = match comp.kind {
+                    ComponentKind::Leaf => "Leaf",
+                    ComponentKind::Cap => "Cap",
+                    ComponentKind::Corner => "Corner",
+                };
+                DrawingView {
+                    title: comp.name.clone(),
+                    subtitle: format!("{kind} component"),
+                    advance_width: None,
+                    context: None,
+                    components: None,
+                    zones: zone_views(&metrics),
                     target,
                     contours,
                     metrics,
@@ -154,6 +261,11 @@ pub struct AlterationSummary {
     /// For a copy made by a scoped edit: the shared alteration it came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     forked_from: Option<String>,
+    /// For deforms: the zone it lands on and how far it pulls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    amount: Option<f64>,
 }
 
 pub fn alteration_summaries(project: &Project) -> Vec<AlterationSummary> {
@@ -184,6 +296,8 @@ pub fn alteration_summaries(project: &Project) -> Vec<AlterationSummary> {
             },
             users: project.users_of(&a.id).len(),
             forked_from: a.forked_from.clone(),
+            zone: a.zone.clone(),
+            amount: a.amount,
         })
         .collect()
 }
@@ -260,6 +374,8 @@ fn describe(d: &fidel_core::Diagnostic) -> String {
         AlterationNotDrawn { alteration } => format!("{alteration} not drawn yet"),
         PlacedByFallback { reason, .. } => reason.clone(),
         DeformNotApplied { verb, .. } => format!("{verb:?} not applied yet").to_lowercase(),
+        NoDeformTarget { .. } => "no stroke to deform; tag the base's legs".into(),
+        MissingComponent { component } => format!("component {component} missing"),
         OrphanedNudge { .. } => "a nudge lost its point".into(),
         NotYetDrawn => "not drawn yet".into(),
         MissingBuiltOn { order } => format!("built on {}, which is missing", order.name()),

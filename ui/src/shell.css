@@ -1839,3 +1839,154 @@ body.editing .side-list {
 
 .view-menu { width: 270px; }
 .menu-field input { min-width: 0; width: 100%; box-sizing: border-box; }
+
+/* ---------- Orders, zones and components (M2) ---------- */
+
+.canvas .zone {
+  fill: rgba(43, 108, 176, 0.05);
+  pointer-events: none;
+}
+.canvas .zone-line {
+  stroke: rgba(43, 108, 176, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+.canvas .zone-line.active {
+  stroke: #2b6cb0;
+  stroke-dasharray: none;
+}
+.canvas .zone-label {
+  fill: rgba(43, 108, 176, 0.75);
+  font-size: 10px;
+  text-anchor: end;
+  pointer-events: none;
+}
+.canvas .component {
+  fill: rgba(43, 108, 176, 0.28);
+  stroke: rgba(43, 108, 176, 0.7);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+.canvas .component.selected {
+  fill: rgba(43, 108, 176, 0.42);
+  stroke: #2b6cb0;
+  stroke-width: 1.5px;
+}
+
+.tree-section.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 10px;
+}
+.tree-add {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tree-add:hover {
+  background: var(--panel-line);
+  color: var(--ink);
+}
+
+.rules-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.variant-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.variant-order {
+  font-size: 12px;
+  color: var(--ink-soft, var(--ink));
+}
+.variant-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.variant-pick .variant {
+  text-align: left;
+  border: 1px solid var(--panel-line);
+  background: transparent;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.variant-pick .variant:hover {
+  background: var(--panel-line);
+}
+.variant-pick .variant.on {
+  border-color: var(--orange);
+  box-shadow: inset 0 0 0 1px var(--orange);
+}
+.deform-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.deform-name {
+  font-size: 12px;
+}
+.zone-select {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  outline: none;
+  width: 100%;
+}
+.side-box > .zone-select {
+  border: 1px solid var(--panel-line);
+  border-radius: 6px;
+  height: 28px;
+  padding: 0 6px;
+}
+.placement {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.placement-head {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.placement-head:hover {
+  background: var(--panel-line);
+}
+.placement-head.on {
+  background: rgba(43, 108, 176, 0.12);
+}
+.field.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.side-box.rules-box { flex-wrap: nowrap; align-items: stretch; }
+.rules-box > * { width: 100%; }
+.side-box > .placement, .side-box > .zone-select { flex-basis: 100%; }
+.variant-order { font-size: 11px; font-weight: 600; color: var(--ink-faint); }

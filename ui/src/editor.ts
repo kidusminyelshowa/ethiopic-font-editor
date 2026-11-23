@@ -3,7 +3,7 @@
 // to the core (set_drawing) when each gesture ends, so every fidel that uses
 // the drawing updates.
 
-import { api, PARTS, type DrawingTarget, type DrawingView, type Part } from "./api";
+import { api, PARTS, type ComponentRef, type DrawingTarget, type DrawingView, type Part } from "./api";
 import {
   clone,
   constrain45,
@@ -114,6 +114,8 @@ type Gesture =
   | { kind: "rotate"; center: Vec2; start: Vec2; base: Contour[]; moved: boolean; angle: number }
   | { kind: "pivot" }
   | { kind: "metric"; side: "left" | "right"; start: number; now: number; base: Contour[]; advance: number }
+  | { kind: "zone"; id: string; start: number; now: number }
+  | { kind: "placement"; id: number; start: Vec2; d: Vec2; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
@@ -530,6 +532,62 @@ export class GlyphEditor {
     return null;
   }
 
+  /** A Pa-height zone line under the pointer (Move tool, zones shown). */
+  private hitZone(screen: Vec2): string | null {
+    if (!this.drawing?.zones || this.tool !== "select" || !prefs.showZones) return null;
+    for (const z of this.drawing.zones) {
+      if (Math.abs(screen.y - this.toScreen({ x: 0, y: z.position }).y) <= 3) return z.id;
+    }
+    return null;
+  }
+
+  // ---------- Components placed on a base ----------
+
+  /** The placement selected on the canvas or in the inspector. */
+  placementSel: number | null = null;
+  private pendingPlacement: { id: number; d: Vec2 } | null = null;
+
+  get placements(): ComponentRef[] {
+    return (this.drawing?.components ?? []).map((c) => c.placement);
+  }
+
+  /** Redraw the side panel, e.g. after picking a placement there. */
+  refreshSide(): void {
+    this.host.renderSide(this);
+  }
+
+  /** Write the base's component placements and reload their outlines. */
+  async setPlacements(refs: ComponentRef[]): Promise<void> {
+    const target = this.target;
+    if (target?.kind !== "base" || !this.drawing) return;
+    try {
+      await api.setBaseComponents(target.id, refs);
+      const fresh = await api.getDrawing(target);
+      if (this.target?.kind === target.kind && this.target.id === target.id && this.drawing) {
+        this.drawing.components = fresh.components;
+      }
+      if (this.placementSel !== null && !refs.some((r) => r.id === this.placementSel)) this.placementSel = null;
+      this.render();
+      this.host.changed(target);
+      this.host.renderSide(this);
+    } catch (err) {
+      this.host.toast(`Could not place the component: ${err}`, "error");
+    }
+  }
+
+  /** Move a zone line; every deform that lands on it follows. */
+  async moveZone(id: string, position: number): Promise<void> {
+    try {
+      const zones = await api.setZone(id, Math.round(position));
+      if (this.drawing) this.drawing.zones = zones;
+      this.render();
+      if (this.target) this.host.changed(this.target);
+      this.host.renderSide(this);
+    } catch (err) {
+      this.host.toast(`Could not move the zone: ${err}`, "error");
+    }
+  }
+
   /** Apply a transform to what is selected: whole contours with Move, points with Direct. */
   private transformed(base: Contour[], m: Matrix): Contour[] {
     if (this.tool === "select") return transformWhole(base, m, new Set(this.selectedContours()));
@@ -787,6 +845,19 @@ export class GlyphEditor {
       }
     }
 
+    const pid = (e.target as Element | null)?.closest?.("[data-pid]")?.getAttribute("data-pid");
+    if (pid != null && !direct) {
+      this.placementSel = Number(pid);
+      this.selection.clear();
+      this.gesture = { kind: "placement", id: Number(pid), start: font, d: { x: 0, y: 0 }, moved: false };
+      this.changedSelection();
+      return;
+    }
+    if (this.placementSel !== null) {
+      this.placementSel = null;
+      this.host.renderSide(this);
+    }
+
     const ci = this.hitShape(e);
     const shape = ci !== null && this.pickable(ci) ? ci : null;
     const inBox = !direct && this.selectionBoxHit(font);
@@ -807,6 +878,13 @@ export class GlyphEditor {
       const adv = this.drawing.advanceWidth ?? 0;
       const at = metric === "left" ? 0 : adv;
       this.gesture = { kind: "metric", side: metric, start: at, now: at, base: clone(this.contours), advance: adv };
+      return;
+    }
+
+    const zone = this.hitZone(screen);
+    if (zone) {
+      const at = this.drawing.zones!.find((z) => z.id === zone)!.position;
+      this.gesture = { kind: "zone", id: zone, start: at, now: at };
       return;
     }
 
@@ -971,6 +1049,19 @@ export class GlyphEditor {
         this.pivot = this.snapped(font, e).pos;
         break;
       }
+      case "zone": {
+        g.now = Math.round(this.snapped({ x: 0, y: font.y }, { altKey: true }).pos.y);
+        const z = this.drawing?.zones?.find((z) => z.id === g.id);
+        if (z) z.position = g.now;
+        break;
+      }
+      case "placement": {
+        let d = { x: font.x - g.start.x, y: font.y - g.start.y };
+        if (e.shiftKey) d = Math.abs(d.x) > Math.abs(d.y) ? { x: d.x, y: 0 } : { x: 0, y: d.y };
+        g.d = { x: Math.round(d.x), y: Math.round(d.y) };
+        g.moved ||= Math.hypot(d.x, d.y) * this.view.scale > 2;
+        break;
+      }
       case "metric": {
         let x = this.snapped({ x: font.x, y: 0 }, e).pos.x;
         x = Math.round(x);
@@ -1018,6 +1109,7 @@ export class GlyphEditor {
         const { x, y } = hb.handle;
         cursor = x === 0 ? "ns" : y === 0 ? "ew" : x === y ? "nesw" : "nwse";
       } else if (this.hitMetric(screen) && this.hitShapeAt(screen) === null) cursor = "ew";
+      else if (this.hitZone(screen) && this.hitShapeAt(screen) === null) cursor = "ns";
       else if (this.tool === "direct" && !this.hitPoint(screen) && this.hitSegment(font)) cursor = "segment";
     } else if (this.tool === "pen" && !this.pen && !this.hitPoint(screen) && this.hitSegment(font)) cursor = "add";
     if (cursor) this.svg.dataset.hover = cursor;
@@ -1047,6 +1139,20 @@ export class GlyphEditor {
       roundContours(this.contours);
       this.commit(g.kind === "scale" ? "Scale" : `Rotate ${Math.round(g.angle)}°`);
       this.host.renderSide(this);
+    } else if (g.kind === "zone") {
+      if (g.now !== g.start) void this.moveZone(g.id, g.now);
+    } else if (g.kind === "placement") {
+      if (g.moved && (g.d.x || g.d.y)) {
+        const refs = this.placements.map((r) =>
+          r.id === g.id ? { ...r, at: { x: r.at.x + g.d.x, y: r.at.y + g.d.y } } : r,
+        );
+        // Keep the dragged outline where it was dropped until the core answers.
+        this.pendingPlacement = { id: g.id, d: g.d };
+        void this.setPlacements(refs).finally(() => {
+          this.pendingPlacement = null;
+          this.render();
+        });
+      } else this.host.renderSide(this);
     } else if (g.kind === "metric") {
       if (g.now !== g.start) {
         this.commit(g.side === "left" ? "Left sidebearing" : "Width");
@@ -1295,7 +1401,7 @@ export class GlyphEditor {
       }
     }
     if (prefs.snapZones) {
-      for (const z of this.drawing?.zones ?? []) ys.push(z.position, z.position + z.size);
+      for (const z of this.drawing?.zones ?? []) ys.push(z.position);
     }
     if (prefs.snapPoints) {
       this.contours.forEach((c, ci) => {
@@ -2322,12 +2428,18 @@ export class GlyphEditor {
     parts.push(
       `<rect class="pa-band" x="0" y="${sy(m.pa_top)}" width="${W}" height="${(m.pa_top - m.pa_bottom) * scale}"/>`,
     );
-    // Pa-height zones: bands where shapes overshoot the Pa lines.
+    // Pa-height zones: where shortened legs end, cricks bend, and so on.
     if (prefs.showZones) {
+      const g0 = this.gesture;
       for (const z of this.drawing.zones ?? []) {
-        const y0 = sy(Math.max(z.position, z.position + z.size));
-        const h = Math.abs(z.size) * scale;
-        parts.push(`<rect class="zone" x="0" y="${y0}" width="${W}" height="${h}"><title>${esc(z.name)}</title></rect>`);
+        const active = g0?.kind === "zone" && g0.id === z.id;
+        const y = sy(z.position);
+        const h = z.size * scale;
+        parts.push(
+          `<rect class="zone" x="0" y="${y - h / 2}" width="${W}" height="${h}"/>`,
+          `<line class="zone-line${active ? " active" : ""}" x1="0" x2="${W}" y1="${y}" y2="${y}"/>`,
+          `<text class="zone-label" x="${W - 12}" y="${y - 5}">${esc(z.name)} ${Math.round(z.position)}</text>`,
+        );
       }
     }
     const guide = (y: number, label: string, cls = "guide") =>
@@ -2394,6 +2506,18 @@ export class GlyphEditor {
         );
       }
     });
+
+    // Components placed on a base: drawn once elsewhere, moved here as a whole.
+    for (const pc of this.drawing.components ?? []) {
+      const id = pc.placement.id;
+      const g1 = this.gesture;
+      const drag = g1?.kind === "placement" && g1.id === id ? g1.d : this.pendingPlacement?.id === id ? this.pendingPlacement.d : null;
+      const move = drag ? ` translate(${drag.x} ${drag.y})` : "";
+      const sel = this.placementSel === id ? " selected" : "";
+      parts.push(
+        `<path class="component${sel}" data-pid="${id}" transform="${xf}${move}" d="${pc.d}"><title>${esc(pc.name)}</title></path>`,
+      );
+    }
 
     // Pen in progress.
     if (this.pen?.length) {
