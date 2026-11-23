@@ -2,6 +2,7 @@ import "@fontsource-variable/fraunces/opsz.css";
 import "@fontsource-variable/inter/index.css";
 import "@fontsource-variable/noto-serif-ethiopic/index.css";
 import "./style.css";
+import "./shell.css";
 
 import {
   api,
@@ -123,6 +124,7 @@ async function refreshGrid() {
   ui.summary.textContent = `${state.grid.rows.length} families · ${state.grid.orders.length} orders · Ge'ez`;
   renderFilters(state.grid);
   renderGrid(state.grid);
+  renderSidebar();
 }
 
 function renderFilters(grid: FidelGrid) {
@@ -210,6 +212,7 @@ function renderGrid(grid: FidelGrid) {
 }
 
 function markSelected() {
+  markSidebar();
   for (const node of ui.grid.querySelectorAll<HTMLElement>(".cell.selected")) node.classList.remove("selected");
   if (!state.selected) return;
   ui.grid
@@ -402,6 +405,160 @@ function renderEmptyInspector() {
   );
 }
 
+// ---------- Left sidebar: glyphs and parts ----------
+
+const side = {
+  tab: "glyphs" as "glyphs" | "parts",
+  query: "",
+  open: new Set<string>(),
+  list: document.getElementById("side-list")!,
+  search: document.getElementById("side-search") as HTMLInputElement,
+};
+
+function matches(...texts: (string | null | undefined)[]) {
+  const q = side.query.trim().toLowerCase();
+  if (!q) return true;
+  return texts.some((t) => t?.toLowerCase().includes(q));
+}
+
+function codeOf(c: string | null) {
+  return c ? `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}` : "";
+}
+
+function treeRow(opts: {
+  depth: number;
+  glyph?: string;
+  label: string;
+  meta?: string;
+  dot?: string;
+  twisty?: boolean;
+  expanded?: boolean;
+  data?: Record<string, string>;
+  dim?: boolean;
+}) {
+  const row = el(
+    "button",
+    {
+      class: `tree-row depth-${opts.depth}${opts.dim ? " dim" : ""}`,
+      role: "treeitem",
+      ...(opts.twisty ? { "aria-expanded": String(!!opts.expanded) } : {}),
+      ...(opts.data ?? {}),
+    },
+    el(
+      "span",
+      { class: `twisty${opts.twisty ? "" : " none"}`, "aria-hidden": "true" },
+      ...(opts.twisty
+        ? [
+            (() => {
+              const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+              svg.setAttribute("viewBox", "0 0 10 10");
+              svg.setAttribute("width", "8");
+              svg.setAttribute("height", "8");
+              svg.innerHTML = '<path d="M3.5 2l3 3-3 3" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+              return svg;
+            })(),
+          ]
+        : []),
+    ),
+    el("span", { class: "tree-glyph", lang: "gez" }, opts.glyph ?? ""),
+    el("span", { class: "tree-label" }, opts.label),
+    el("span", { class: "tree-meta" }, opts.meta ?? ""),
+    ...(opts.dot ? [el("span", { class: `badge badge-${opts.dot}`, "aria-hidden": "true" })] : []),
+  );
+  return row;
+}
+
+function renderSidebar() {
+  const rows: HTMLElement[] = [];
+  if (side.tab === "glyphs") {
+    for (const r of state.grid?.rows ?? []) {
+      const base = r.cells[0]?.codepoint ?? "";
+      const cells = r.cells.filter((c) => matches(r.name, r.family, c.codepoint, codeOf(c.codepoint), c.order));
+      if (!cells.length) continue;
+      const expanded = side.open.has(r.family) || !!side.query.trim();
+      const fam = treeRow({ depth: 0, glyph: base, label: r.name, meta: String(r.cells.length), twisty: true, expanded, data: { "data-fam": r.family } });
+      fam.addEventListener("click", () => {
+        if (side.open.has(r.family)) side.open.delete(r.family);
+        else side.open.add(r.family);
+        renderSidebar();
+      });
+      rows.push(fam);
+      if (!expanded) continue;
+      for (const c of cells) {
+        const order = state.grid?.orders.find((o) => o.order === c.order);
+        const item = treeRow({
+          depth: 1,
+          glyph: c.codepoint ?? "",
+          label: order ? `${order.number} · ${order.name}` : c.order,
+          meta: codeOf(c.codepoint),
+          dot: c.badge,
+          data: { "data-family": r.family, "data-order": c.order },
+        });
+        item.addEventListener("click", () => {
+          if (state.view !== "grid") showView("grid");
+          void select(r.family, c.order);
+        });
+        item.addEventListener("dblclick", () => void editFromCell(r.family, c.order));
+        rows.push(item);
+      }
+    }
+  } else {
+    const head = (t: string) => el("div", { class: "tree-section" }, t);
+    const bases = (state.grid?.rows ?? []).filter((r) => matches(r.name, r.family, r.cells[0]?.codepoint));
+    if (bases.length) rows.push(head("Bases"));
+    for (const r of bases) {
+      const item = treeRow({ depth: 0, glyph: r.cells[0]?.codepoint ?? "", label: r.name, meta: "base", data: { "data-target": `base:${r.family}` } });
+      item.addEventListener("click", () => void openDrawing({ kind: "base", id: r.family }));
+      rows.push(item);
+    }
+    const alts = state.alterations.filter((a) => matches(a.name, a.id));
+    if (alts.length) rows.push(head("Alterations"));
+    for (const a of alts) {
+      const item = treeRow({
+        depth: 0,
+        glyph: a.drawable ? "+" : "~",
+        label: a.name,
+        meta: a.drawable ? (a.drawn ? "" : "to draw") : "deform",
+        dim: !a.drawable,
+        data: { "data-target": `alteration:${a.id}` },
+      });
+      if (a.drawable) item.addEventListener("click", () => void openDrawing({ kind: "alteration", id: a.id }));
+      else item.title = "Deforming alterations are not drawn; they reshape the base.";
+      rows.push(item);
+    }
+  }
+  if (!rows.length) rows.push(el("p", { class: "side-empty" }, side.query ? "Nothing matches." : "Loading…"));
+  side.list.replaceChildren(...rows);
+  markSidebar();
+}
+
+function markSidebar() {
+  for (const n of side.list.querySelectorAll(".tree-row.selected")) n.classList.remove("selected");
+  if (side.tab === "glyphs" && state.selected) {
+    side.list
+      .querySelector(`.tree-row[data-family="${state.selected.family}"][data-order="${state.selected.order}"]`)
+      ?.classList.add("selected");
+  }
+  if (side.tab === "parts" && editor.drawing && state.view === "editor") {
+    side.list.querySelector(`.tree-row[data-target="${ui.drawingSelect.value}"]`)?.classList.add("selected");
+  }
+}
+
+document.querySelectorAll<HTMLElement>(".side-tab").forEach((t) =>
+  t.addEventListener("click", () => {
+    side.tab = t.dataset.side as "glyphs" | "parts";
+    document.querySelectorAll<HTMLElement>(".side-tab").forEach((o) => {
+      o.classList.toggle("active", o === t);
+      o.setAttribute("aria-selected", String(o === t));
+    });
+    renderSidebar();
+  }),
+);
+side.search.addEventListener("input", () => {
+  side.query = side.search.value;
+  renderSidebar();
+});
+
 // ---------- Editor ----------
 
 const editor = new GlyphEditor(ui.editorView, {
@@ -425,6 +582,8 @@ async function openDrawing(target: DrawingTarget) {
     }
     await editor.open(target, target.kind === "alteration" ? state.contextFamily : undefined);
     ui.drawingSelect.value = `${target.kind}:${target.id}`;
+    if (target.kind === "base") side.open.add(target.id);
+    markSidebar();
   } catch (err) {
     toast(`Could not open the drawing: ${err}`, "error");
   }
@@ -801,7 +960,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((b) =>
     const action = b.dataset.file;
     if (action === "new") void newProject();
     else if (action === "open") void openProject();
-    else void saveProject(e.shiftKey);
+    else void saveProject(action === "saveas" || e.shiftKey);
   }),
 );
 
@@ -846,6 +1005,31 @@ async function exportFont() {
 }
 
 document.getElementById("export-font")!.addEventListener("click", () => void exportFont());
+
+function toggleSidebars() {
+  document.body.classList.toggle("panels-hidden");
+}
+
+document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
+  b.addEventListener("click", () => {
+    const m = b.dataset.menu;
+    if (m === "export") void exportFont();
+    else if (m === "view-grid") showView("grid");
+    else if (m === "view-editor") showView("editor");
+    else if (m === "toggle-left") toggleSidebars();
+  }),
+);
+
+window.addEventListener("keydown", (e) => {
+  const t = e.target as HTMLElement | null;
+  if (t && (t.closest("input, select, textarea") || t.isContentEditable)) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
+    e.preventDefault();
+    toggleSidebars();
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2")) {
+    showView(e.key === "1" ? "grid" : "editor");
+  }
+});
 window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
     e.preventDefault();
