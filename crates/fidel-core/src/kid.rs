@@ -9,13 +9,17 @@
 //! bases/<base id>.json          one base: outlines, part tags, anchors
 //! families/<family id>.json     one family: its base, rule variants, fidel states and nudges
 //! alterations/<id>.json         one alteration: drawn parts and placement rule
+//! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! ```
+//!
+//! `project.json` also lists the character sets the project covers. Files
+//! from before sets existed open as Ge'ez only.
 //!
 //! Multiple masters will add a `masters/<name>/` level later; version 1 holds
 //! a single master. Entries are written in sorted order with a fixed
 //! timestamp, so saving the same project twice gives identical bytes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 
@@ -24,6 +28,7 @@ use thiserror::Error;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
+use crate::charset::CharSet;
 use crate::order::{Order, OrderRule};
 use crate::project::{Metrics, Project};
 
@@ -55,6 +60,12 @@ struct Manifest {
     version: u32,
     metrics: Metrics,
     order_rules: BTreeMap<Order, OrderRule>,
+    #[serde(default = "geez_only")]
+    charsets: BTreeSet<CharSet>,
+}
+
+fn geez_only() -> BTreeSet<CharSet> {
+    BTreeSet::from([CharSet::Geez])
 }
 
 /// Write `project` as a .kid package.
@@ -65,6 +76,7 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
         version: VERSION,
         metrics: project.metrics.clone(),
         order_rules: project.order_rules.clone(),
+        charsets: project.charsets(),
     };
     entries.insert("project.json".into(), to_json("project.json", &manifest)?);
     for (id, base) in &project.bases {
@@ -78,6 +90,10 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     for (id, alt) in &project.alterations {
         let name = entry("alterations", id)?;
         entries.insert(name.clone(), to_json(&name, alt)?);
+    }
+    for (id, sym) in &project.symbols {
+        let name = entry("symbols", id)?;
+        entries.insert(name.clone(), to_json(&name, sym)?);
     }
 
     let mut zip = ZipWriter::new(writer);
@@ -108,8 +124,12 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
         return Err(KidError::TooNew(manifest.version));
     }
 
-    let mut project =
-        Project { metrics: manifest.metrics, order_rules: manifest.order_rules, ..Default::default() };
+    let mut project = Project {
+        metrics: manifest.metrics,
+        order_rules: manifest.order_rules,
+        charsets: manifest.charsets,
+        ..Default::default()
+    };
     let names: Vec<String> = zip.file_names().map(|n| n.map(|s| s.into_owned())).collect::<Result<_, _>>()?;
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {
@@ -133,6 +153,11 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
                 let alt: crate::alteration::Alteration = read_entry(&mut zip, &name)?;
                 check_id(&name, id, &alt.id)?;
                 project.alterations.insert(alt.id.clone(), alt);
+            }
+            "symbols" => {
+                let sym: crate::project::Symbol = read_entry(&mut zip, &name)?;
+                check_id(&name, id, &sym.id)?;
+                project.symbols.insert(sym.id.clone(), sym);
             }
             // Unknown folders are left alone, for files from later versions.
             _ => {}

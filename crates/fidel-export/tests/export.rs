@@ -161,3 +161,27 @@ fn export_is_deterministic() {
     let b = export(&p, &ExportOptions::new("Test Geez")).unwrap();
     assert_eq!(a.bytes, b.bytes);
 }
+
+#[test]
+fn exports_only_the_chosen_character_sets() {
+    let mut p = project();
+    p.set_charsets([CharSet::Geez, CharSet::EthiopicLabialized, CharSet::EthiopicMarks]);
+    p.alterations.get_mut(defaults::LABIAL_MARK).unwrap().contours =
+        vec![Contour::rect(0, None, Vec2::new(0.0, -10.0), Vec2::new(80.0, 10.0))];
+    p.set_drawing(
+        &DrawingTarget::Symbol("uni1362".into()),
+        vec![Contour::rect(0, None, Vec2::new(50.0, 0.0), Vec2::new(150.0, 100.0))],
+    )
+    .unwrap();
+    let font = export(&p, &ExportOptions::new("Test Sets")).unwrap();
+    assert!(font.exported.contains(&'ሏ'), "the -wa form of Lawi, built on ላ");
+    assert!(font.exported.contains(&'።'));
+    let f = FontRef::new(&font.bytes).unwrap();
+    assert!(f.charmap().map('ሏ').is_some() && f.charmap().map('።').is_some());
+
+    // Off again: the work stays in the project but leaves the font.
+    p.set_charsets([CharSet::Geez]);
+    let font = export(&p, &ExportOptions::new("Test Sets")).unwrap();
+    assert!(!font.exported.contains(&'ሏ') && !font.exported.contains(&'።'));
+    assert!(!p.symbols["uni1362"].contours.is_empty());
+}

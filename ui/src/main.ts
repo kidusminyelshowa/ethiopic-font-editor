@@ -17,6 +17,9 @@ import {
   type FidelPreview,
   type ProjectInfo,
   type StateKind,
+  type CharSetId,
+  type DrawingKind,
+  type SymbolCell,
 } from "./api";
 import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -73,6 +76,8 @@ const state = {
   alterations: [] as AlterationSummary[],
   filter: "all" as StateKind | "all",
   selected: null as { family: string; order: string } | null,
+  /** A selected punctuation mark or numeral, by symbol id. */
+  selectedSymbol: null as string | null,
   /** Family whose base is drawn behind an alteration in the editor. */
   contextFamily: undefined as string | undefined,
 };
@@ -104,7 +109,7 @@ function showView(view: ViewName) {
       else renderEmptyInspector();
     });
   } else {
-    if (!editor.drawing) void openDrawing({ kind: "base", id: state.grid?.rows[0]?.family ?? "ha" });
+    if (!editor.drawing) void openDrawing({ kind: "base", id: state.grid?.rows[0]?.base ?? "ha" });
     else {
       editor.render();
       renderEditorSide(editor);
@@ -121,10 +126,28 @@ document.querySelectorAll<HTMLElement>(".tab[data-view]").forEach((t) =>
 async function refreshGrid() {
   void refreshProof();
   state.grid = await api.fidelGrid();
-  ui.summary.textContent = `${state.grid.rows.length} families · ${state.grid.orders.length} orders · Ge'ez`;
+  ui.summary.textContent = gridSummary(state.grid);
   renderFilters(state.grid);
   renderGrid(state.grid);
   renderSidebar();
+  renderCharsetMenu();
+}
+
+function gridSummary(grid: FidelGrid): string {
+  const fidel = grid.rows.reduce((n, r) => n + r.cells.length, 0);
+  const parts = [`${fidel} fidel`, `${grid.rows.length} families`];
+  if (grid.symbols.length) parts.push(`${grid.symbols.length} symbols`);
+  return parts.join(" · ");
+}
+
+/** The set a family row is listed under, by name. */
+function setName(id: CharSetId): string {
+  return state.grid?.charsets.find((c) => c.id === id)?.name ?? id;
+}
+
+/** The base drawing a family row is built from. */
+function baseOf(family: string): string {
+  return state.grid?.rows.find((r) => r.family === family)?.base ?? family;
 }
 
 function renderFilters(grid: FidelGrid) {
@@ -158,21 +181,33 @@ function renderFilters(grid: FidelGrid) {
 }
 
 function renderGrid(grid: FidelGrid) {
-  const table = el("table", { class: "fidel-grid" });
+  const extras = grid.orders.filter((o) => o.extra).length;
+  const table = el("table", { class: `fidel-grid${extras ? " has-extra" : ""}` });
   const head = table.createTHead().insertRow();
   head.append(el("th", { scope: "col", class: "corner" }, "Family"));
-  for (const o of grid.orders) {
+  for (const [i, o] of grid.orders.entries()) {
+    const first = o.extra && !grid.orders[i - 1]?.extra;
     head.append(
       el(
         "th",
-        { scope: "col" },
-        el("span", { class: "order-pill" }, el("span", { class: "order-num" }, String(o.number)), o.name),
+        { scope: "col", class: o.extra ? `extra${first ? " extra-first" : ""}` : "" },
+        o.extra
+          ? el("span", { class: "order-pill" }, o.name)
+          : el("span", { class: "order-pill" }, el("span", { class: "order-num" }, String(o.number)), o.name),
       ),
     );
   }
 
   const body = table.createTBody();
+  const sections = new Set(grid.rows.map((r) => r.section));
+  let section: string | null = null;
   for (const row of grid.rows) {
+    if (sections.size > 1 && row.section !== section) {
+      section = row.section;
+      const tr = body.insertRow();
+      tr.className = "section-row";
+      tr.append(el("th", { scope: "rowgroup", colspan: String(grid.orders.length + 1) }, setName(row.section)));
+    }
     const tr = body.insertRow();
     const base = row.cells[0]?.codepoint ?? "";
     tr.append(
@@ -187,8 +222,11 @@ function renderGrid(grid: FidelGrid) {
         ),
       ),
     );
-    for (const cell of row.cells) {
+    for (const [i, o] of grid.orders.entries()) {
       const td = tr.insertCell();
+      if (o.extra) td.className = !grid.orders[i - 1]?.extra ? "extra extra-first" : "extra";
+      const cell = row.cells.find((c) => c.order === o.order);
+      if (!cell) continue;
       const btn = el(
         "button",
         {
@@ -196,8 +234,8 @@ function renderGrid(grid: FidelGrid) {
           "data-family": row.family,
           "data-order": cell.order,
           "data-state": cell.state,
-          "aria-label": `${cell.codepoint ?? ""}, ${row.name}, ${cell.order}, ${STATE_LABEL[cell.state]}`,
-          title: `${cell.note ? `${STATE_LABEL[cell.state]}: ${cell.note}` : STATE_LABEL[cell.state]}. Double-click to edit.`,
+          "aria-label": `${cell.codepoint ?? ""}, ${row.name}, ${o.name}, ${STATE_LABEL[cell.state]}`,
+          title: cell.note ? `${STATE_LABEL[cell.state]}: ${cell.note}` : STATE_LABEL[cell.state],
         },
         glyphView(cell.outline, grid.metrics, cell.codepoint),
         el("span", { class: `badge badge-${cell.badge}`, "aria-hidden": "true" }),
@@ -207,13 +245,75 @@ function renderGrid(grid: FidelGrid) {
       td.append(btn);
     }
   }
-  ui.grid.replaceChildren(table);
+  const nodes: Node[] = [table];
+  if (grid.symbols.length) {
+    const wrap = el("section", { class: "symbol-grid", "aria-label": "Symbols" });
+    wrap.append(el("h2", { class: "symbol-heading" }, "Punctuation, numerals and marks"));
+    const list = el("div", { class: "symbol-cells" });
+    for (const s of grid.symbols) list.append(symbolButton(s, grid));
+    wrap.append(list);
+    nodes.push(wrap);
+  }
+  ui.grid.replaceChildren(...nodes);
   markSelected();
+}
+
+function symbolButton(s: SymbolCell, grid: FidelGrid) {
+  const btn = el(
+    "button",
+    {
+      class: `cell symbol-cell${s.outline ? " drawn" : ""}`,
+      "data-symbol": s.id,
+      "data-state": "linked",
+      "aria-label": `${s.codepoint}, ${s.name}`,
+      title: `${s.name} · ${codeOf(s.codepoint)}`,
+    },
+    glyphView(s.outline, grid.metrics, s.codepoint),
+  );
+  btn.addEventListener("click", () => selectSymbol(s.id));
+  btn.addEventListener("dblclick", () => void openDrawing({ kind: "symbol", id: s.id }));
+  return btn;
+}
+
+function selectSymbol(id: string) {
+  state.selected = null;
+  state.selectedSymbol = id;
+  markSelected();
+  const s = state.grid?.symbols.find((x) => x.id === id);
+  if (!s || !state.grid) return;
+  const edit = el("button", { class: "pill pill-dark symbol-open" }, "Open in editor");
+  edit.addEventListener("click", () => void openDrawing({ kind: "symbol", id }));
+  const metrics = state.grid.metrics;
+  ui.inspector.replaceChildren(
+    el(
+      "div",
+      { class: "preview preview-linked" },
+      s.outline
+        ? el("span", { class: "preview-glyph drawn" }, glyphView(s.outline, metrics, s.codepoint))
+        : el("span", { class: "preview-glyph", lang: "gez" }, s.codepoint),
+      el("span", { class: "chip chip-glass preview-code" }, hex(s.codepoint)),
+    ),
+    el(
+      "div",
+      { class: "inspector-body" },
+      el("h2", { class: "display inspector-title" }, s.name),
+      el(
+        "dl",
+        { class: "facts" },
+        el("div", {}, el("dt", {}, "Kind"), el("dd", {}, "Symbol")),
+        el("div", {}, el("dt", {}, "Outline"), el("dd", {}, s.outline ? "Drawn" : "Not drawn")),
+      ),
+      edit,
+    ),
+  );
 }
 
 function markSelected() {
   markSidebar();
   for (const node of ui.grid.querySelectorAll<HTMLElement>(".cell.selected")) node.classList.remove("selected");
+  if (state.selectedSymbol) {
+    ui.grid.querySelector<HTMLElement>(`.cell[data-symbol="${state.selectedSymbol}"]`)?.classList.add("selected");
+  }
   if (!state.selected) return;
   ui.grid
     .querySelector<HTMLElement>(`.cell[data-family="${state.selected.family}"][data-order="${state.selected.order}"]`)
@@ -222,6 +322,7 @@ function markSelected() {
 
 async function select(family: string, order: string) {
   state.selected = { family, order };
+  state.selectedSymbol = null;
   markSelected();
   try {
     renderInspector(await api.fidelDetail(family, order));
@@ -241,7 +342,7 @@ async function editFromCell(family: string, order: string) {
       return;
     }
   }
-  await openDrawing({ kind: "base", id: family });
+  await openDrawing({ kind: "base", id: baseOf(family) });
 }
 
 function cellOutline(family: string, order: string) {
@@ -270,7 +371,7 @@ function renderInspector(d: FidelDetail) {
       el("span", {}, `Base · ${d.familyName}`),
       el("span", { class: "step-edit" }, "Edit"),
     );
-    b.addEventListener("click", () => void openDrawing({ kind: "base", id: d.family }));
+    b.addEventListener("click", () => void openDrawing({ kind: "base", id: baseOf(d.family) }));
     recipe.append(el("li", {}, b));
   }
   for (const step of d.recipe) {
@@ -308,7 +409,7 @@ function renderInspector(d: FidelDetail) {
       el("span", { class: "chip chip-glass preview-code" }, hex(d.codepoint)),
       el(
         "span",
-        { class: `chip chip-glass preview-state state-${d.state}` },
+        { class: `chip chip-glass preview-state state-${d.state}`, title: STATE_HELP[d.state] },
         el("span", { class: `badge badge-${d.badge}`, "aria-hidden": "true" }),
         STATE_LABEL[d.state],
       ),
@@ -320,11 +421,11 @@ function renderInspector(d: FidelDetail) {
       el(
         "dl",
         { class: "facts" },
-        el("div", {}, el("dt", {}, "Order"), el("dd", {}, `${d.orderNumber} · ${d.orderName}`)),
+        el("div", {}, el("dt", {}, "Order"), el("dd", {}, d.orderNumber > 7 ? d.orderName : `${d.orderNumber} · ${d.orderName}`)),
         el("div", {}, el("dt", {}, "Group"), el("dd", {}, d.group ? (GROUP_LABEL[d.group] ?? d.group) : "—")),
         el("div", {}, el("dt", {}, "Nudges"), el("dd", {}, String(d.nudgeCount))),
       ),
-      el("p", { class: "state-help" }, d.note ?? STATE_HELP[d.state]),
+      ...(d.note ? [el("p", { class: "state-help" }, d.note)] : []),
       el("h3", { class: "section-label" }, "Recipe"),
       recipe,
       ...(d.builtOnChoices.length && d.order !== "giiz" ? [builtOnPicker(d)] : []),
@@ -395,12 +496,7 @@ function renderEmptyInspector() {
     el(
       "div",
       { class: "inspector-body" },
-      el("h2", { class: "display inspector-title" }, "Pick a fidel"),
-      el(
-        "p",
-        { class: "state-help" },
-        "Select any cell to see its order, state and recipe. Double-click to draw its base or alteration.",
-      ),
+      el("h2", { class: "display inspector-title muted" }, "No selection"),
     ),
   );
 }
@@ -471,10 +567,16 @@ function treeRow(opts: {
 function renderSidebar() {
   const rows: HTMLElement[] = [];
   if (side.tab === "glyphs") {
+    const multi = new Set((state.grid?.rows ?? []).map((r) => r.section)).size > 1 || !!state.grid?.symbols.length;
+    let section: string | null = null;
     for (const r of state.grid?.rows ?? []) {
       const base = r.cells[0]?.codepoint ?? "";
       const cells = r.cells.filter((c) => matches(r.name, r.family, c.codepoint, codeOf(c.codepoint), c.order));
       if (!cells.length) continue;
+      if (multi && r.section !== section) {
+        section = r.section;
+        rows.push(el("div", { class: "tree-section" }, setName(r.section)));
+      }
       const expanded = side.open.has(r.family) || !!side.query.trim();
       const fam = treeRow({ depth: 0, glyph: base, label: r.name, meta: String(r.cells.length), twisty: true, expanded, data: { "data-fam": r.family } });
       fam.addEventListener("click", () => {
@@ -502,13 +604,24 @@ function renderSidebar() {
         rows.push(item);
       }
     }
+    const symbols = (state.grid?.symbols ?? []).filter((s) => matches(s.name, s.id, s.codepoint, codeOf(s.codepoint)));
+    if (symbols.length) rows.push(el("div", { class: "tree-section" }, "Symbols"));
+    for (const s of symbols) {
+      const item = treeRow({ depth: 0, glyph: s.codepoint, label: s.name, meta: codeOf(s.codepoint), data: { "data-symbol": s.id } });
+      item.addEventListener("click", () => {
+        if (state.view !== "grid") showView("grid");
+        selectSymbol(s.id);
+      });
+      item.addEventListener("dblclick", () => void openDrawing({ kind: "symbol", id: s.id }));
+      rows.push(item);
+    }
   } else {
     const head = (t: string) => el("div", { class: "tree-section" }, t);
-    const bases = (state.grid?.rows ?? []).filter((r) => matches(r.name, r.family, r.cells[0]?.codepoint));
+    const bases = baseRows().filter((r) => matches(r.name, r.family, r.cells[0]?.codepoint));
     if (bases.length) rows.push(head("Bases"));
     for (const r of bases) {
-      const item = treeRow({ depth: 0, glyph: r.cells[0]?.codepoint ?? "", label: r.name, meta: "base", data: { "data-target": `base:${r.family}` } });
-      item.addEventListener("click", () => void openDrawing({ kind: "base", id: r.family }));
+      const item = treeRow({ depth: 0, glyph: r.cells[0]?.codepoint ?? "", label: r.name, meta: "base", data: { "data-target": `base:${r.base}` } });
+      item.addEventListener("click", () => void openDrawing({ kind: "base", id: r.base }));
       rows.push(item);
     }
     const alts = state.alterations.filter((a) => matches(a.name, a.id));
@@ -527,9 +640,24 @@ function renderSidebar() {
       rows.push(item);
     }
   }
+  if (side.tab === "parts") {
+    const symbols = (state.grid?.symbols ?? []).filter((s) => matches(s.name, s.id, s.codepoint, codeOf(s.codepoint)));
+    if (symbols.length) rows.push(el("div", { class: "tree-section" }, "Symbols"));
+    for (const s of symbols) {
+      const item = treeRow({ depth: 0, glyph: s.codepoint, label: s.name, meta: s.outline ? "" : "to draw", data: { "data-target": `symbol:${s.id}` } });
+      item.addEventListener("click", () => void openDrawing({ kind: "symbol", id: s.id }));
+      rows.push(item);
+    }
+  }
   if (!rows.length) rows.push(el("p", { class: "side-empty" }, side.query ? "Nothing matches." : "Loading…"));
   side.list.replaceChildren(...rows);
   markSidebar();
+}
+
+/** One row per base: Sebatbeit and Gurage rows share the plain row's base. */
+function baseRows() {
+  const seen = new Set<string>();
+  return (state.grid?.rows ?? []).filter((r) => !seen.has(r.base) && !!seen.add(r.base));
 }
 
 function markSidebar() {
@@ -538,6 +666,9 @@ function markSidebar() {
     side.list
       .querySelector(`.tree-row[data-family="${state.selected.family}"][data-order="${state.selected.order}"]`)
       ?.classList.add("selected");
+  }
+  if (side.tab === "glyphs" && state.selectedSymbol) {
+    side.list.querySelector(`.tree-row[data-symbol="${state.selectedSymbol}"]`)?.classList.add("selected");
   }
   if (side.tab === "parts" && editor.drawing && state.view === "editor") {
     side.list.querySelector(`.tree-row[data-target="${ui.drawingSelect.value}"]`)?.classList.add("selected");
@@ -591,20 +722,26 @@ async function openDrawing(target: DrawingTarget) {
 
 function fillDrawingSelect() {
   const bases = el("optgroup", { label: "Bases" });
-  for (const row of state.grid?.rows ?? []) {
-    bases.append(el("option", { value: `base:${row.family}` }, `${row.cells[0]?.codepoint ?? ""}  ${row.name}`));
+  for (const row of baseRows()) {
+    bases.append(el("option", { value: `base:${row.base}` }, `${row.cells[0]?.codepoint ?? ""}  ${row.name}`));
   }
   const alts = el("optgroup", { label: "Alterations" });
   for (const a of state.alterations.filter((a) => a.drawable)) {
     alts.append(el("option", { value: `alteration:${a.id}` }, `${a.name}${a.drawn ? "" : " (not drawn)"}`));
   }
-  ui.drawingSelect.replaceChildren(bases, alts);
+  const groups = [bases, alts];
+  if (state.grid?.symbols.length) {
+    const syms = el("optgroup", { label: "Symbols" });
+    for (const s of state.grid.symbols) syms.append(el("option", { value: `symbol:${s.id}` }, `${s.codepoint}  ${s.name}`));
+    groups.push(syms);
+  }
+  ui.drawingSelect.replaceChildren(...groups);
   if (editor.target) ui.drawingSelect.value = editor.targetKey;
 }
 
 ui.drawingSelect.addEventListener("change", () => {
   const [kind, ...rest] = ui.drawingSelect.value.split(":");
-  void openDrawing({ kind: kind as "base" | "alteration", id: rest.join(":") });
+  void openDrawing({ kind: kind as DrawingKind, id: rest.join(":") });
 });
 
 let sideTimer: number | undefined;
@@ -630,9 +767,11 @@ function renderEditorSide(ed: GlyphEditor) {
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
-  sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
+  if (d.target.kind !== "symbol") sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
   const token = ++previewToken;
-  if (d.target.kind === "base") {
+  if (d.target.kind === "symbol") {
+    // A symbol stands alone: nothing else is built from it.
+  } else if (d.target.kind === "base") {
     void api.familyPreview(d.target.id).then((list) => {
       if (token === previewToken) strip.replaceChildren(...list.map((p) => previewCell(p, metrics)));
     });
@@ -645,11 +784,6 @@ function renderEditorSide(ed: GlyphEditor) {
       strip.replaceChildren(...impacts.map((i) => impactCell(i, d.target, d.context?.family, metrics)));
       renderScope(scopeBox, impacts, alt, d.context?.family);
     });
-    if (d.context) {
-      sections.push(el("p", { class: "side-note" }, `Drawn against ${d.context.familyName}. Click a fidel to switch.`));
-    } else {
-      sections.push(el("p", { class: "side-note" }, "Draw a base first to see this alteration in context."));
-    }
     sections.push(el("h3", { class: "section-label" }, "Where this applies"), scopeBox);
   }
 
@@ -657,7 +791,7 @@ function renderEditorSide(ed: GlyphEditor) {
   const sel = ed.selection.size;
   const selBox = el("div", { class: "side-box" });
   if (!sel) {
-    selBox.append(el("p", { class: "side-note" }, `${ed.contours.length} contour${ed.contours.length === 1 ? "" : "s"}. Nothing selected.`));
+    selBox.append(el("p", { class: "side-note" }, `${ed.contours.length} contour${ed.contours.length === 1 ? "" : "s"}`));
   } else {
     const contours = ed.selectedContours();
     selBox.append(
@@ -730,18 +864,9 @@ function renderEditorSide(ed: GlyphEditor) {
       remove,
       rangeField("Opacity", sk.opacity, 0.05, 1, (v) => ed.updateSketch({ opacity: v })),
       rangeField("Size", sk.h / (metrics.pa_top - metrics.pa_bottom), 0.3, 2, (v) => ed.updateSketch({ scale: v })),
-      el("p", { class: "side-note" }, "Alt-drag on the canvas to move it. Kept for this session only."),
     );
   }
-  sections.push(el("h3", { class: "section-label" }, "Sketch"), sketchBox);
-
-  sections.push(
-    el(
-      "p",
-      { class: "shortcuts" },
-      "V select · P pen · H or Space pan · Ctrl+V paste SVG · Delete · Arrows nudge (Shift ×10) · Double-click toggles smooth",
-    ),
-  );
+  sections.push(el("h3", { class: "section-label", title: "Alt-drag on the canvas to move the sketch. Kept for this session only." }, "Sketch"), sketchBox);
 
   ui.inspector.replaceChildren(el("div", { class: "inspector-body editor-side" }, ...sections));
 }
@@ -811,9 +936,7 @@ function renderScope(box: HTMLElement, impacts: ImpactView[], alt: AlterationSum
     for (const o of orders) fork(`Only ${state.grid?.orders.find((h) => h.order === o)?.name ?? o} order`, { kind: "order", order: o });
   }
   if (actions.childElementCount) {
-    box.append(el("p", { class: "side-note" }, "To change just part of the system, split off a copy:"), actions);
-  } else if (!alt.forkedFrom && impacts.length > 1) {
-    box.append(el("p", { class: "side-note" }, "Pick a fidel above to split off a copy just for it."));
+    box.append(actions);
   }
   if (alt.forkedFrom) {
     const shared = state.alterations.find((a) => a.id === alt.forkedFrom);
@@ -1006,6 +1129,97 @@ async function exportFont() {
 
 document.getElementById("export-font")!.addEventListener("click", () => void exportFont());
 
+// ---------- Character sets ----------
+
+const charsetBtn = document.getElementById("charset-btn") as HTMLButtonElement;
+const charsetMenu = document.getElementById("charset-menu")!;
+
+function renderCharsetMenu() {
+  const sets = state.grid?.charsets ?? [];
+  const on = sets.filter((s) => s.enabled);
+  document.getElementById("charset-label")!.textContent =
+    on.length === 1 ? on[0].name : on.length === sets.length ? "Full Ethiopic" : `${on.length} sets`;
+  const item = (s: (typeof sets)[number]) => {
+    const b = el(
+      "button",
+      {
+        class: "menu-item check",
+        role: "menuitemcheckbox",
+        "aria-checked": String(s.enabled),
+        title: s.range,
+      },
+      el("span", { class: "check-box", "aria-hidden": "true" }),
+      el("span", { class: "check-name" }, s.name),
+      el("span", { class: "check-count" }, String(s.count)),
+    );
+    b.addEventListener("click", () => void toggleCharset(s.id));
+    return b;
+  };
+  const group = (label: string, ids: CharSetId[]) => [
+    el("div", { class: "menu-label" }, label),
+    ...sets.filter((s) => ids.includes(s.id)).map(item),
+  ];
+  const all = el("button", { class: "menu-item" }, "Full Ethiopic");
+  all.addEventListener("click", () => void applyCharsets(sets.map((s) => s.id)));
+  const geez = el("button", { class: "menu-item" }, "Ge'ez only");
+  geez.addEventListener("click", () => void applyCharsets(["geez"]));
+  charsetMenu.replaceChildren(
+    ...group("Ethiopic", ["geez", "ethiopic-letters", "ethiopic-labialized", "ethiopic-marks"]),
+    ...group("Supplements", ["supplement", "extended", "extended-a", "extended-b"]),
+    el("div", { class: "menu-sep", role: "separator" }),
+    all,
+    geez,
+  );
+}
+
+async function toggleCharset(id: CharSetId) {
+  const sets = state.grid?.charsets ?? [];
+  const next = sets.filter((s) => (s.id === id ? !s.enabled : s.enabled)).map((s) => s.id);
+  if (!next.length) return;
+  await applyCharsets(next);
+}
+
+async function applyCharsets(ids: CharSetId[]) {
+  try {
+    state.grid = await api.setCharsets(ids);
+    if (state.selected && !state.grid.rows.some((r) => r.family === state.selected!.family && r.cells.some((c) => c.order === state.selected!.order))) {
+      state.selected = null;
+      renderEmptyInspector();
+    }
+    if (state.selectedSymbol && !state.grid.symbols.some((s) => s.id === state.selectedSymbol)) {
+      state.selectedSymbol = null;
+      renderEmptyInspector();
+    }
+    ui.summary.textContent = gridSummary(state.grid);
+    renderFilters(state.grid);
+    renderGrid(state.grid);
+    renderSidebar();
+    renderCharsetMenu();
+    fillDrawingSelect();
+    state.alterations = await api.listAlterations();
+    void refreshProjectInfo();
+    void refreshProof();
+  } catch (err) {
+    toast(`Could not change the character sets: ${err}`, "error");
+  }
+}
+
+function toggleCharsetMenu(open = charsetMenu.hidden) {
+  charsetMenu.hidden = !open;
+  charsetBtn.setAttribute("aria-expanded", String(open));
+  if (open) charsetMenu.querySelector<HTMLElement>(".menu-item")?.focus();
+}
+
+charsetBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleCharsetMenu();
+});
+charsetMenu.addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => toggleCharsetMenu(false));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !charsetMenu.hidden) toggleCharsetMenu(false);
+});
+
 function toggleSidebars() {
   document.body.classList.toggle("panels-hidden");
 }
@@ -1017,6 +1231,10 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
     else if (m === "toggle-left") toggleSidebars();
+    else if (m === "charsets") {
+      showView("grid");
+      setTimeout(() => toggleCharsetMenu(true), 0);
+    }
   }),
 );
 
@@ -1051,7 +1269,7 @@ async function refreshProof() {
     proofFace = null;
     if (!bytes.byteLength) {
       input.style.fontFamily = "";
-      note.textContent = "System font until you draw";
+      note.title = "System font until you draw";
       return;
     }
     const face = new FontFace(`Fidel Proof ${++proofSerial}`, bytes);
@@ -1059,7 +1277,7 @@ async function refreshProof() {
     document.fonts.add(face);
     proofFace = face;
     input.style.fontFamily = `"${face.family}", var(--ethiopic)`;
-    note.textContent = "Your drawings · the rest in the system font";
+    note.title = "Your drawings, the rest in the system font";
   } catch (err) {
     console.warn("Proof font failed", err);
   }

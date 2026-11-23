@@ -123,14 +123,35 @@ fn set_drawing(state: State<'_, AppState>, target: DrawingTarget, contours: Vec<
 }
 
 #[tauri::command]
-fn set_advance(state: State<'_, AppState>, base: String, advance_width: f64) -> CmdResult<()> {
+fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width: f64) -> CmdResult<()> {
     {
         let mut project = state.project();
-        let b = project.bases.get_mut(&base).ok_or_else(|| format!("no base `{base}`"))?;
-        b.advance_width = advance_width.max(0.0);
+        let w = advance_width.max(0.0);
+        match &target {
+            DrawingTarget::Base(id) => {
+                project.bases.get_mut(id).ok_or_else(|| format!("no base `{id}`"))?.advance_width = w
+            }
+            DrawingTarget::Symbol(id) => {
+                project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
+            }
+            DrawingTarget::Alteration(_) => return Err("alterations have no advance width".into()),
+        }
     }
     state.mark_dirty();
     Ok(())
+}
+
+/// Cover these character sets. Creates the rows and symbols they need;
+/// turning a set off only hides it.
+#[tauri::command]
+fn set_charsets(state: State<'_, AppState>, sets: Vec<fidel_core::CharSet>) -> FidelGrid {
+    let grid = {
+        let mut project = state.project();
+        project.set_charsets(sets);
+        FidelGrid::from_project(&project)
+    };
+    state.mark_dirty();
+    grid
 }
 
 #[tauri::command]
@@ -303,6 +324,7 @@ pub fn run() {
             get_drawing,
             set_drawing,
             set_advance,
+            set_charsets,
             family_preview,
             project_info,
             new_project,

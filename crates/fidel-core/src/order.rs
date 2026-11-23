@@ -15,11 +15,32 @@ pub enum Order {
     Hamis,
     Sadis,
     Sabi,
+    /// Labialized -wa form: the 8th order (ሏ) or the first labiovelar (ቈ).
+    Wa,
+    /// Labiovelar -wi (ቊ).
+    Wi,
+    /// Labiovelar -waa (ቋ).
+    Waa,
+    /// Labiovelar -wee (ቌ).
+    Wee,
+    /// Labiovelar -we (ቍ).
+    We,
+    /// The -oa form (ሇ, ቇ, ⶀ).
+    Oa,
 }
 
 impl Order {
+    /// The seven vowel orders: the columns of the Fidel Grid.
     pub const ALL: [Order; 7] =
         [Order::Giiz, Order::Kaib, Order::Salis, Order::Rabi, Order::Hamis, Order::Sadis, Order::Sabi];
+
+    /// Labialized and -oa forms, which only some families have.
+    pub const EXTRA: [Order; 6] = [Order::Wa, Order::Wi, Order::Waa, Order::Wee, Order::We, Order::Oa];
+
+    /// One of the seven vowel orders, not a labialized form.
+    pub fn is_main(self) -> bool {
+        (self as u8) < 7
+    }
 
     /// 1 to 7.
     pub fn number(self) -> u8 {
@@ -40,6 +61,12 @@ impl Order {
             Order::Hamis => "Hamis",
             Order::Sadis => "Sadis",
             Order::Sabi => "Sab'i",
+            Order::Wa => "-wa",
+            Order::Wi => "-wi",
+            Order::Waa => "-waa",
+            Order::Wee => "-wee",
+            Order::We => "-we",
+            Order::Oa => "-oa",
         }
     }
 }

@@ -20,6 +20,8 @@ pub const LOOP_BOTTOM_RIGHT: &str = "loop.bottom-right";
 pub const CRICK_FIRST_STROKE: &str = "crick.first-stroke";
 pub const LOOP_TOP_RIGHT: &str = "loop.top-right";
 pub const SHORTEN_RIGHT_LEG: &str = "shorten.right-leg";
+pub const LABIAL_MARK: &str = "mark.labial";
+pub const OA_MARK: &str = "mark.oa";
 
 fn alteration(id: &str, name: &str, verb: Verb, region: Region, parts: &[Part]) -> Alteration {
     Alteration {
@@ -78,6 +80,32 @@ pub fn hornus_alterations() -> Vec<Alteration> {
     ]
 }
 
+/// The marks of the labialized and -oa forms, undrawn. Added when a project
+/// takes on a set that has them.
+pub fn extra_alterations() -> Vec<Alteration> {
+    use Part::*;
+    vec![
+        alteration(LABIAL_MARK, "Labial mark (-wa)", Verb::Stroke, Region::TopRight, &[Leg, Stem, Diagonal]),
+        alteration(OA_MARK, "-oa mark", Verb::Loop, Region::TopRight, &[Leg, Stem, Diagonal]),
+    ]
+}
+
+/// Rules for the labialized and -oa orders. Each starts from the fidel it is
+/// built on (see [`crate::coverage`]) and adds the labial mark, plus the
+/// vowel mark of its own order where the parent does not carry it.
+pub fn extra_order_rules() -> Vec<OrderRule> {
+    let one = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let rule = |order, ids: &[&str]| OrderRule { order, variants: vec![one(ids)] };
+    vec![
+        rule(Order::Wa, &[LABIAL_MARK]),
+        rule(Order::Wi, &[LABIAL_MARK, STROKE_BOTTOM_RIGHT]),
+        rule(Order::Waa, &[LABIAL_MARK]),
+        rule(Order::Wee, &[LABIAL_MARK, LOOP_BOTTOM_RIGHT]),
+        rule(Order::We, &[LABIAL_MARK]),
+        rule(Order::Oa, &[OA_MARK]),
+    ]
+}
+
 /// Default order rules (Hornus 3.1): 2nd = middle-right stroke, 3rd =
 /// bottom-right stroke, 4th = shortened left leg or stretched stem, 5th =
 /// bottom-right loop, 6th = crick, 7th = top-right loop or shortened right leg.
@@ -100,6 +128,7 @@ pub fn hornus_order_rules() -> Vec<OrderRule> {
 /// Linked unless pre-flagged.
 pub fn geez_project(metrics: Metrics) -> Project {
     let mut p = Project { metrics, ..Default::default() };
+    p.charsets.insert(crate::charset::CharSet::Geez);
     for alt in hornus_alterations() {
         p.alterations.insert(alt.id.clone(), alt);
     }
