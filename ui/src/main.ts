@@ -1201,7 +1201,7 @@ function showProjectInfo(info: ProjectInfo) {
   ui.projectMeta.textContent = info.dirty ? "Unsaved changes" : info.path ? "Saved" : "Regular · 1000 UPM";
   ui.projectMeta.classList.toggle("unsaved", info.dirty);
   ui.projectName.title = info.path ?? "Not saved yet";
-  document.title = `${info.dirty ? "• " : ""}${info.name} · Ethiopic Font Editor`;
+  document.title = `${info.dirty ? "• " : ""}${info.name} · Hohe`;
 }
 
 async function refreshProjectInfo() {
@@ -1480,6 +1480,7 @@ async function main() {
     const info = await api.appInfo();
     await refreshProjectInfo();
     label.textContent = `Core ${info.coreVersion}`;
+    document.getElementById("about-line")!.textContent = `Hohe ${info.appVersion} · Ethiopic font editor`;
     ui.status.classList.add("ok");
     ui.status.title = `${info.familyCount} families · ${info.alterationCount} alterations`;
     state.alterations = await api.listAlterations();

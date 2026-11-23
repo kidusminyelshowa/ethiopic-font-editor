@@ -1,4 +1,4 @@
-# Ethiopic Font Editor
+# Hohe
 
 A desktop font editor where the fidel family system is the core data model.
 A fidel is a recipe (a base plus the alterations its order rule names), not a
