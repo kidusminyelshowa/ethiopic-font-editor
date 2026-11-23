@@ -33,7 +33,7 @@ import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
 
 setupChrome();
-import { isOn } from "./geometry";
+import { isClockwise, isOn } from "./geometry";
 
 const STATES: StateKind[] = ["linked", "adjusted", "irregular", "detached"];
 
@@ -667,7 +667,10 @@ function renderLayers() {
     for (let ci = ed.contours.length - 1; ci >= 0; ci--) {
       const c = ed.contours[ci];
       const label = c.name || (c.part ? c.part[0].toUpperCase() + c.part.slice(1) : "Path");
-      const row = treeRow({ depth: 0, label, meta: `${c.points.filter((p) => p.kind !== "offcurve").length} pt`, data: { "data-layer": String(ci) } });
+      const pts = c.points.filter((p) => p.kind !== "offcurve").length;
+      const dir = isClockwise(c) ? "↻" : "↺";
+      const row = treeRow({ depth: 0, label, meta: `${pts} pt ${dir}`, data: { "data-layer": String(ci) } });
+      row.title = isClockwise(c) ? "Clockwise" : "Counter-clockwise";
       row.classList.add("layer-row");
       if (selected.has(ci)) row.classList.add("selected");
       const swatch = row.querySelector<HTMLElement>(".tree-glyph")!;
@@ -973,14 +976,33 @@ function renderEditorSide(ed: GlyphEditor) {
         const x = numberField("X", p.pos.x, (v) => ed.setPointPosition(v, p.pos.y));
         const y = numberField("Y", p.pos.y, (v) => ed.setPointPosition(p.pos.x, v));
         selBox.append(el("div", { class: "field-row" }, x, y));
-        if (isOn(p)) {
-          const smooth = el("button", { class: `toggle${p.smooth ? " on" : ""}` }, p.smooth ? "Smooth" : "Corner");
-          smooth.title = "Toggle smooth (double-click a point)";
-          smooth.addEventListener("click", () => ed.setSmooth(!p.smooth));
-          selBox.append(smooth);
-        }
       }
     }
+    // Point type of the selected on-curve points.
+    const nodes = ed.selectedNodes();
+    if (nodes.length && ed.tool !== "select") {
+      const allSmooth = nodes.every((n) => n.smooth);
+      const allCorner = nodes.every((n) => !n.smooth);
+      const seg = el("div", { class: "segmented", role: "group", "aria-label": "Point type" });
+      const corner = el("button", { class: allCorner ? "on" : "", title: "Handles move on their own (double-click a point to switch)" }, "Corner");
+      const smooth = el("button", { class: allSmooth ? "on" : "", title: "Handles stay in line; adds handles to a point without them" }, "Smooth");
+      corner.addEventListener("click", () => ed.setNodeType("corner"));
+      smooth.addEventListener("click", () => ed.setNodeType("smooth"));
+      seg.append(corner, smooth);
+      const retract = el("button", { class: "pill small ghost", title: "Remove the handles, so the segments next to the point go straight" }, "Retract handles");
+      retract.disabled = !nodes.some((n) => n.handles);
+      retract.addEventListener("click", () => ed.setNodeType("retract"));
+      selBox.append(el("h3", { class: "section-label" }, nodes.length === 1 ? "Point" : `${nodes.length} points`), el("div", { class: "button-row" }, seg, retract));
+    }
+    // Direction of the selected contours.
+    const dirs = new Set(contours.map((ci) => isClockwise(ed.contours[ci])));
+    const dirLabel = dirs.size > 1 ? "Mixed" : dirs.has(true) ? "↻ Clockwise" : "↺ Counter-clockwise";
+    const reverse = el("button", { class: "pill small", title: "Reverse path direction (Ctrl+Shift+R)" }, "Reverse");
+    reverse.addEventListener("click", () => ed.reverseDirection());
+    selBox.append(
+      el("h3", { class: "section-label", title: "Outer contours run counter-clockwise, counters clockwise" }, "Direction"),
+      el("div", { class: "button-row" }, el("span", { class: "side-note" }, dirLabel), reverse),
+    );
     // Part tags for the selected contours.
     const current = new Set(contours.map((ci) => ed.contours[ci]?.part ?? null));
     const only = current.size === 1 ? [...current][0] : undefined;

@@ -51,16 +51,17 @@ impl Order {
         Order::ALL.get(usize::from(n).checked_sub(1)?).copied()
     }
 
-    /// Traditional name, as used for the Fidel Grid column headers.
+    /// Traditional name in Ge'ez script (ግዕዝ … ሳብዕ), as used for the Fidel
+    /// Grid column headers. The labialized forms keep their Latin labels.
     pub fn name(self) -> &'static str {
         match self {
-            Order::Giiz => "Gi'iz",
-            Order::Kaib => "Ka'ib",
-            Order::Salis => "Salis",
-            Order::Rabi => "Rabi'",
-            Order::Hamis => "Hamis",
-            Order::Sadis => "Sadis",
-            Order::Sabi => "Sab'i",
+            Order::Giiz => "ግዕዝ",
+            Order::Kaib => "ካብዕ",
+            Order::Salis => "ሳልስ",
+            Order::Rabi => "ራብዕ",
+            Order::Hamis => "ሐምስ",
+            Order::Sadis => "ሳድስ",
+            Order::Sabi => "ሳብዕ",
             Order::Wa => "-wa",
             Order::Wi => "-wi",
             Order::Waa => "-waa",

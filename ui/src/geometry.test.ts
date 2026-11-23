@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   constrain45,
   contourPath,
+  convertNodes,
   ellipseContour,
   fromNodes,
+  isClockwise,
   mirrorSmooth,
   rectContour,
+  reversed,
+  startDirection,
   toNodes,
   validate,
   type Contour,
@@ -95,5 +99,56 @@ describe("shapes and constraints", () => {
     expect(validate(e)).toBeNull();
     expect(e.points.filter((p) => p.kind === "curve")).toHaveLength(4);
     expect(e.points).toHaveLength(12);
+  });
+});
+
+describe("path direction and point types", () => {
+  it("reverses a contour, keeping its start point and ids", () => {
+    const e = ellipseContour(1, { x: 0, y: 0 }, { x: 200, y: 100 });
+    expect(isClockwise(e)).toBe(false);
+    const r = reversed(e);
+    expect(validate(r)).toBeNull();
+    expect(isClockwise(r)).toBe(true);
+    expect(r.points[0].id).toBe(e.points[0].id);
+    expect(new Set(r.points.map((p) => p.id))).toEqual(new Set(e.points.map((p) => p.id)));
+    expect(contourPath(reversed(r))).toBe(contourPath(e));
+    expect(startDirection(e)!.dir.x).toBeGreaterThan(0);
+    expect(startDirection(r)!.dir.x).toBeLessThan(0);
+  });
+
+  it("reverses a rectangle", () => {
+    const r = reversed(rectContour(0, { x: 0, y: 0 }, { x: 10, y: 20 }));
+    expect(r.points.map((p) => p.pos)).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: 20 },
+      { x: 10, y: 20 },
+      { x: 10, y: 0 },
+    ]);
+    expect(isClockwise(r)).toBe(true);
+  });
+
+  it("turns a corner into a smooth point with handles and back", () => {
+    const rect = rectContour(0, { x: 0, y: 0 }, { x: 100, y: 100 });
+    const corner = rect.points[1].id;
+    const s = convertNodes(rect, new Set([corner]), "smooth");
+    expect(validate(s)).toBeNull();
+    const nd = toNodes(s).find((n) => n.id === corner)!;
+    expect(nd.smooth).toBe(true);
+    // Handles in line through the point, along the neighbour-to-neighbour tangent.
+    const a = Math.atan2(nd.pos.y - nd.in!.pos.y, nd.pos.x - nd.in!.pos.x);
+    const b = Math.atan2(nd.out!.pos.y - nd.pos.y, nd.out!.pos.x - nd.pos.x);
+    expect(a).toBeCloseTo(b);
+    const ids = s.points.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const back = convertNodes(s, new Set([corner]), "retract");
+    expect(validate(back)).toBeNull();
+    const c = toNodes(back).find((n) => n.id === corner)!;
+    expect(c.smooth).toBe(false);
+    expect(c.in).toBeUndefined();
+    expect(c.out).toBeUndefined();
+
+    const flag = convertNodes(s, new Set([corner]), "corner");
+    expect(toNodes(flag).find((n) => n.id === corner)!.out).toEqual(nd.out);
   });
 });

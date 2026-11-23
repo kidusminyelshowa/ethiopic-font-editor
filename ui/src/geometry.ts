@@ -289,3 +289,105 @@ export function ellipseContour(id: number, a: Vec2, b: Vec2): Contour {
   ];
   return fromNodes(nodes, id, null, 12);
 }
+
+/**
+ * Twice the signed area of the contour's control polygon. Positive means
+ * counter-clockwise with y up, the direction of outer contours here.
+ */
+export function signedArea(c: Contour): number {
+  const pts = c.points;
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i].pos;
+    const q = pts[(i + 1) % pts.length].pos;
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a;
+}
+
+export const isClockwise = (c: Contour): boolean => signedArea(c) < 0;
+
+/** Same outline drawn the other way round. The start point stays first and every id is kept. */
+export function reversed(c: Contour): Contour {
+  const nodes = toNodes(c);
+  if (nodes.length < 2) return clone(c);
+  const back = [nodes[0], ...nodes.slice(1).reverse()].map((nd) => ({ ...nd, in: nd.out, out: nd.in }));
+  return rebuilt(c, back);
+}
+
+/** The start point and the unit direction the contour leaves it in, for the direction arrow. */
+export function startDirection(c: Contour): { at: Vec2; dir: Vec2 } | null {
+  const pts = c.points;
+  const start = pts.findIndex(isOn);
+  if (start < 0) return null;
+  const at = pts[start].pos;
+  for (let i = 1; i < pts.length; i++) {
+    const q = pts[(start + i) % pts.length].pos;
+    const len = Math.hypot(q.x - at.x, q.y - at.y);
+    if (len > 1e-6) return { at: { ...at }, dir: { x: (q.x - at.x) / len, y: (q.y - at.y) / len } };
+  }
+  return null;
+}
+
+/**
+ * What an on-curve point is. A corner's handles move on their own; a smooth
+ * point keeps its handles in line; retracting removes the handles, so the
+ * segments next to it straighten.
+ */
+const same = (a: Vec2, b: Vec2) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
+
+export type NodeType = "corner" | "smooth" | "retract";
+
+/** Change the type of the on-curve points in `ids`. New handles get fresh ids. */
+export function convertNodes(c: Contour, ids: Set<number>, to: NodeType): Contour {
+  const nodes = toNodes(c);
+  const n = nodes.length;
+  let next = c.points.reduce((m, p) => Math.max(m, p.id), -1) + 1;
+  nodes.forEach((nd, k) => {
+    if (!ids.has(nd.id)) return;
+    if (to === "corner") {
+      nd.smooth = false;
+    } else if (to === "retract") {
+      nd.smooth = false;
+      delete nd.in;
+      delete nd.out;
+      // A neighbour's handle that sits on its own point would keep the segment curved.
+      const prev = nodes[(k - 1 + n) % n];
+      const nxt = nodes[(k + 1) % n];
+      if (prev.out && same(prev.out.pos, prev.pos)) delete prev.out;
+      if (nxt.in && same(nxt.in.pos, nxt.pos)) delete nxt.in;
+    } else {
+      nd.smooth = true;
+      if (n < 2) return;
+      const prev = nodes[(k - 1 + n) % n].pos;
+      const nxt = nodes[(k + 1) % n].pos;
+      // The tangent: through the handles when there are both, else from neighbour to neighbour.
+      let tx = nxt.x - prev.x;
+      let ty = nxt.y - prev.y;
+      if (nd.in && nd.out) {
+        const ix = nd.pos.x - nd.in.pos.x;
+        const iy = nd.pos.y - nd.in.pos.y;
+        const ox = nd.out.pos.x - nd.pos.x;
+        const oy = nd.out.pos.y - nd.pos.y;
+        const il = Math.hypot(ix, iy);
+        const ol = Math.hypot(ox, oy);
+        if (il > 1e-6 && ol > 1e-6) {
+          tx = ix / il + ox / ol;
+          ty = iy / il + oy / ol;
+        }
+      }
+      const tl = Math.hypot(tx, ty);
+      if (tl < 1e-6) return;
+      tx /= tl;
+      ty /= tl;
+      const inLen = nd.in ? Math.hypot(nd.in.pos.x - nd.pos.x, nd.in.pos.y - nd.pos.y) : 0;
+      const outLen = nd.out ? Math.hypot(nd.out.pos.x - nd.pos.x, nd.out.pos.y - nd.pos.y) : 0;
+      const li = inLen > 1e-6 ? inLen : Math.hypot(nd.pos.x - prev.x, nd.pos.y - prev.y) / 3;
+      const lo = outLen > 1e-6 ? outLen : Math.hypot(nxt.x - nd.pos.x, nxt.y - nd.pos.y) / 3;
+      const r = (v: number) => Math.round(v);
+      nd.in = { id: nd.in?.id ?? next++, pos: { x: r(nd.pos.x - tx * li), y: r(nd.pos.y - ty * li) } };
+      nd.out = { id: nd.out?.id ?? next++, pos: { x: r(nd.pos.x + tx * lo), y: r(nd.pos.y + ty * lo) } };
+    }
+  });
+  return rebuilt(c, nodes, next);
+}
