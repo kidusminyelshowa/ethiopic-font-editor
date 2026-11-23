@@ -3,6 +3,7 @@
 use serde::Serialize;
 
 use crate::alteration::{AlterationId, Verb};
+use crate::base::Base;
 use crate::fidel::{FamilyId, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind};
 use crate::geometry::{bounds_of, Contour, Vec2};
 use crate::order::Order;
@@ -38,6 +39,11 @@ pub enum Diagnostic {
     OrphanedNudge { target: NudgeTarget },
     /// Irregular drawn fidel with no contours yet.
     NotYetDrawn,
+    /// The fidel it is built on does not exist; built from the base instead.
+    MissingBuiltOn { order: Order },
+    /// "Built on" links that lead back to this fidel; built from the base
+    /// instead.
+    BuiltOnCycle { order: Order },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -59,6 +65,17 @@ impl ResolvedFidel {
 }
 
 pub(crate) fn resolve(project: &Project, family_id: &str, order: Order) -> Option<ResolvedFidel> {
+    resolve_in_chain(project, family_id, order, &mut Vec::new())
+}
+
+/// `chain` holds the orders already being resolved below this one, to stop
+/// "built on" loops.
+fn resolve_in_chain(
+    project: &Project,
+    family_id: &str,
+    order: Order,
+    chain: &mut Vec<Order>,
+) -> Option<ResolvedFidel> {
     let family = project.families.get(family_id)?;
     let fidel = family.fidels.get(&order)?;
     let base = project.bases.get(&family.base);
@@ -103,8 +120,46 @@ pub(crate) fn resolve(project: &Project, family_id: &str, order: Order) -> Optio
     let alterations = project.effective_alterations(family_id, order).unwrap_or_default();
     let nudges = fidel.state.nudges();
 
-    out.contours
-        .extend(base.contours.iter().map(|c| ResolvedContour { source: Source::Base, contour: c.clone() }));
+    // Start from the bare base, or from the fidel this one is built on. The
+    // parent's outline then stands in for the base: alterations attach to it
+    // and the advance grows from it.
+    let parent = fidel.built_on.and_then(|parent| {
+        if parent == order || chain.contains(&parent) {
+            out.diagnostics.push(Diagnostic::BuiltOnCycle { order: parent });
+            return None;
+        }
+        if !family.fidels.contains_key(&parent) {
+            out.diagnostics.push(Diagnostic::MissingBuiltOn { order: parent });
+            return None;
+        }
+        chain.push(order);
+        let resolved = resolve_in_chain(project, family_id, parent, chain);
+        chain.pop();
+        resolved
+    });
+    let start_base;
+    let base = match parent {
+        Some(p) => {
+            // A broken link further up still needs to be seen here.
+            out.diagnostics.extend(p.diagnostics.into_iter().filter(|d| {
+                matches!(d, Diagnostic::BuiltOnCycle { .. } | Diagnostic::MissingBuiltOn { .. })
+            }));
+            out.contours = p.contours;
+            start_base = Base {
+                contours: out.contours.iter().map(|c| c.contour.clone()).collect(),
+                advance_width: p.advance_width,
+                ..base.clone()
+            };
+            &start_base
+        }
+        None => {
+            out.contours.extend(
+                base.contours.iter().map(|c| ResolvedContour { source: Source::Base, contour: c.clone() }),
+            );
+            base
+        }
+    };
+    out.advance_width = base.advance_width;
 
     for alt_id in &alterations {
         let Some(alt) = project.alterations.get(alt_id) else {

@@ -1,6 +1,8 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
-use fidel_core::{svg_path, Badge, FidelState, Metrics, ModelError, Order, Project, ShapeGroup, StateKind};
+use fidel_core::{
+    svg_path, Badge, FidelState, IrregularForm, Metrics, ModelError, Order, Project, ShapeGroup, StateKind,
+};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -121,6 +123,20 @@ pub struct FidelDetail {
     /// Alterations that build this fidel, with their display names.
     recipe: Vec<RecipeStep>,
     nudge_count: usize,
+    /// The order this fidel starts from instead of the bare base.
+    built_on: Option<OrderRef>,
+    /// Orders built on this fidel, which follow any change to it.
+    built_on_by: Vec<OrderRef>,
+    /// Orders this fidel could be built on; empty when it is drawn by hand.
+    built_on_choices: Vec<OrderRef>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderRef {
+    order: Order,
+    order_name: &'static str,
+    codepoint: Option<char>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,7 +171,28 @@ impl FidelDetail {
                 })
                 .collect(),
         };
+        let order_ref = |o: Order| OrderRef {
+            order: o,
+            order_name: o.name(),
+            codepoint: fam.fidels.get(&o).and_then(|f| f.codepoint),
+        };
+        // A Detached or drawn fidel ignores its link, so there is nothing to show.
+        let generated = !matches!(
+            fidel.state,
+            FidelState::Detached { .. } | FidelState::Irregular { form: IrregularForm::Drawn { .. }, .. }
+        );
         Ok(FidelDetail {
+            built_on: fidel.built_on.filter(|_| generated).map(order_ref),
+            built_on_by: project.built_on_by(family, order).into_iter().map(order_ref).collect(),
+            built_on_choices: if generated {
+                fam.fidels
+                    .keys()
+                    .filter(|o| **o != order && **o != Order::Giiz)
+                    .map(|o| order_ref(*o))
+                    .collect()
+            } else {
+                Vec::new()
+            },
             family: fam.id.clone(),
             family_name: fam.name.clone(),
             base_glyph: fam.fidels.get(&Order::Giiz).and_then(|f| f.codepoint),

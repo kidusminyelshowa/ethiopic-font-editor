@@ -52,6 +52,8 @@ pub enum ModelError {
     NotUsedInScope(AlterationId),
     #[error("`{0}` is the shared alteration, not a copy")]
     NotAFork(AlterationId),
+    #[error("{0:?} is already built on this fidel, directly or through another order")]
+    BuiltOnCycle(Order),
     #[error("contour {contour}: {problem:?}")]
     InvalidContour { contour: u32, problem: ContourProblem },
     #[error("two contours share the id {0}")]
@@ -262,13 +264,7 @@ impl Project {
         let mut out = Vec::new();
         for (fam_id, family) in &self.families {
             for (order, fidel) in &family.fidels {
-                let uses = match change {
-                    Change::Base(id) => &family.base == id,
-                    Change::Alteration(id) => {
-                        self.effective_alterations(fam_id, *order).map(|a| a.contains(id)).unwrap_or(false)
-                    }
-                };
-                if !uses {
+                if !self.depends_on(change, fam_id, *order, &mut Vec::new()) {
                     continue;
                 }
                 let effect = match &fidel.state {
@@ -281,5 +277,56 @@ impl Project {
             }
         }
         out
+    }
+
+    /// Whether `change` reaches this fidel: it uses the base or alteration
+    /// itself, or is built on a fidel that does.
+    fn depends_on(&self, change: &Change, family: &str, order: Order, chain: &mut Vec<Order>) -> bool {
+        let Some(fam) = self.families.get(family) else { return false };
+        let direct = match change {
+            Change::Base(id) => &fam.base == id,
+            Change::Alteration(id) => {
+                self.effective_alterations(family, order).map(|a| a.contains(id)).unwrap_or(false)
+            }
+        };
+        if direct {
+            return true;
+        }
+        let Some(parent) = fam.fidels.get(&order).and_then(|f| f.built_on) else { return false };
+        if parent == order || chain.contains(&parent) {
+            return false;
+        }
+        chain.push(order);
+        let reached = self.depends_on(change, family, parent, chain);
+        chain.pop();
+        reached
+    }
+
+    /// Build this fidel on another order of its family (`Some`), or on the
+    /// bare base again (`None`). Refuses a link that would loop back.
+    pub fn set_built_on(&mut self, family: &str, order: Order, on: Option<Order>) -> Result<(), ModelError> {
+        if let Some(parent) = on {
+            self.fidel(family, parent)?;
+            // Walk up from the parent; reaching `order` means a loop.
+            let mut at = Some(parent);
+            let mut steps = 0;
+            while let Some(o) = at {
+                if o == order || steps > Order::ALL.len() {
+                    return Err(ModelError::BuiltOnCycle(parent));
+                }
+                at = self.fidel(family, o)?.built_on;
+                steps += 1;
+            }
+        }
+        self.fidel_mut(family, order)?.built_on = on;
+        Ok(())
+    }
+
+    /// The fidel of this family built on `order`, directly.
+    pub fn built_on_by(&self, family: &str, order: Order) -> Vec<Order> {
+        self.families
+            .get(family)
+            .map(|f| f.fidels.iter().filter(|(_, x)| x.built_on == Some(order)).map(|(o, _)| *o).collect())
+            .unwrap_or_default()
     }
 }

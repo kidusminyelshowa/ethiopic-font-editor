@@ -78,6 +78,15 @@ export interface FidelDetail {
   note: string | null;
   recipe: RecipeStep[];
   nudgeCount: number;
+  builtOn: OrderRef | null;
+  builtOnBy: OrderRef[];
+  builtOnChoices: OrderRef[];
+}
+
+export interface OrderRef {
+  order: string;
+  orderName: string;
+  codepoint: string | null;
 }
 
 export type DrawingTarget = { kind: "base"; id: string } | { kind: "alteration"; id: string };
@@ -142,6 +151,10 @@ export interface ExportSummary {
 }
 
 export const api = {
+  setBuiltOn: (family: string, order: string, on: string | null) =>
+    invoke<FidelDetail>("set_built_on", { family, order, on }),
+  detachFidel: (family: string, order: string) => invoke<FidelDetail>("detach_fidel", { family, order }),
+  relinkFidel: (family: string, order: string) => invoke<FidelDetail>("relink_fidel", { family, order }),
   alterationImpacts: (id: string) => invoke<ImpactView[]>("alteration_impacts", { id }),
   forkAlteration: (id: string, scope: Scope) => invoke<string>("fork_alteration", { id, scope }),
   rejoinAlteration: (id: string) => invoke<string>("rejoin_alteration", { id }),

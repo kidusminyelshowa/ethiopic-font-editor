@@ -228,6 +228,8 @@ fn describe(d: &fidel_core::Diagnostic) -> String {
         DeformNotApplied { verb, .. } => format!("{verb:?} not applied yet").to_lowercase(),
         OrphanedNudge { .. } => "a nudge lost its point".into(),
         NotYetDrawn => "not drawn yet".into(),
+        MissingBuiltOn { order } => format!("built on {}, which is missing", order.name()),
+        BuiltOnCycle { order } => format!("built-on links loop through {}", order.name()),
     }
 }
 
