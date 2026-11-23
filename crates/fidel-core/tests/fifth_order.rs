@@ -50,11 +50,13 @@ fn loop_lands_on_every_base() {
         assert_eq!(r.state, StateKind::Linked, "{}", r.family);
         assert!(r.diagnostics.is_empty(), "{}: {:?}", r.family, r.diagnostics);
         let base = &p.bases[&p.families[&r.family].base];
-        let leg = base.contours[1].bounds().unwrap();
+        // The leg as this fidel has it: ሄ ሜ ... are built on a 4th order
+        // whose leg is shortened.
+        let leg = r.from_source(&Source::Base).find(|c| c.id == 1).and_then(Contour::bounds).unwrap();
         let b = loop_box(r);
         // Attached at the middle of the leg's bottom end.
         assert_eq!(b.min.x, (leg.min.x + leg.max.x) / 2.0, "{}", r.family);
-        assert_eq!(b.max.y, 0.0);
+        assert_eq!(b.max.y, leg.min.y);
         // Advance grows to keep the base's right sidebearing.
         assert!(r.advance_width >= base.advance_width);
     }
@@ -157,9 +159,17 @@ fn undrawn_and_deforming_alterations_are_reported_not_fatal() {
     assert!(r.diagnostics.contains(&Diagnostic::BaseNotDrawn));
     assert!(r.diagnostics.contains(&Diagnostic::AlterationNotDrawn { alteration: LOOP_BOTTOM_RIGHT.into() }));
 
-    let p = project();
+    let mut p = project();
     let r = p.resolve("la", Order::Sadis).unwrap();
-    assert!(matches!(r.diagnostics[..], [Diagnostic::DeformNotApplied { verb: Verb::Crick, .. }]));
+    assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+    // The crick bends the first stroke: the stem's foot moves left.
+    let stem = r.from_source(&Source::Base).find(|c| c.id == 0).and_then(Contour::bounds).unwrap();
+    assert!(stem.min.x < 50.0);
+
+    // Bend is the one verb not built yet; it is reported, not fatal.
+    p.alterations.get_mut(defaults::CRICK_FIRST_STROKE).unwrap().verb = Verb::Bend;
+    let r = p.resolve("la", Order::Sadis).unwrap();
+    assert!(matches!(r.diagnostics[..], [Diagnostic::DeformNotApplied { verb: Verb::Bend, .. }]));
 }
 
 #[test]

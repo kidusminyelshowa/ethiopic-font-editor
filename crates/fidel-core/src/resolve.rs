@@ -31,9 +31,13 @@ pub enum Diagnostic {
     AlterationNotDrawn { alteration: AlterationId },
     /// Placement used a fallback, e.g. the base has no leg tagged.
     PlacedByFallback { alteration: AlterationId, reason: String },
-    /// Deforming verbs (shorten, crick ...) are recorded but not yet applied
-    /// to outlines.
+    /// A verb that is recorded but not yet applied to outlines (bend).
     DeformNotApplied { alteration: AlterationId, verb: Verb },
+    /// A deform found no stroke to work on: the base has none of its parts
+    /// tagged and no upright stroke to fall back on.
+    NoDeformTarget { alteration: AlterationId },
+    /// A placed component that is not in the project.
+    MissingComponent { component: String },
     /// A nudge whose point no longer exists. It is kept, not dropped, so it
     /// comes back if the point does.
     OrphanedNudge { target: NudgeTarget },
@@ -156,10 +160,44 @@ fn resolve_in_chain(
             out.contours.extend(
                 base.contours.iter().map(|c| ResolvedContour { source: Source::Base, contour: c.clone() }),
             );
+            for r in &base.components {
+                match project.components.get(&r.component) {
+                    Some(comp) => out.contours.extend(
+                        r.place(comp)
+                            .into_iter()
+                            .map(|contour| ResolvedContour { source: Source::Component(r.id), contour }),
+                    ),
+                    None => {
+                        out.diagnostics.push(Diagnostic::MissingComponent { component: r.component.clone() })
+                    }
+                }
+            }
             base
         }
     };
     out.advance_width = base.advance_width;
+    let family_base = project.bases.get(&family.base).expect("checked above");
+
+    // Deforms first, so marks attach to the deformed strokes.
+    let mut deformed = false;
+    for alt_id in &alterations {
+        let Some(alt) = project.alterations.get(alt_id) else { continue };
+        if alt.verb.is_additive() {
+            continue;
+        }
+        if apply_deform(&mut out, alt, family_base, &project.metrics) {
+            deformed = true;
+        }
+    }
+    let undeformed = base;
+    let deformed_base;
+    let base = if deformed {
+        deformed_base =
+            Base { contours: out.contours.iter().map(|c| c.contour.clone()).collect(), ..base.clone() };
+        &deformed_base
+    } else {
+        base
+    };
 
     for alt_id in &alterations {
         let Some(alt) = project.alterations.get(alt_id) else {
@@ -167,7 +205,6 @@ fn resolve_in_chain(
             continue;
         };
         if !alt.verb.is_additive() {
-            out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt_id.clone(), verb: alt.verb });
             continue;
         }
         if alt.contours.is_empty() {
@@ -181,7 +218,11 @@ fn resolve_in_chain(
         if let Some(reason) = attach.fallback {
             out.diagnostics.push(Diagnostic::PlacedByFallback { alteration: alt_id.clone(), reason });
         }
-        let shift = attach.at + project.attach_offset(family_id, alt_id) + placement_nudge(nudges, alt_id);
+        let mut at = attach.at;
+        if let Some(y) = alt.zone.as_deref().and_then(|z| project.metrics.zone_y(z)) {
+            at.y = y;
+        }
+        let shift = at + project.attach_offset(family_id, alt_id) + placement_nudge(nudges, alt_id);
         for c in &alt.contours {
             let mut c = c.clone();
             c.translate(shift);
@@ -193,13 +234,81 @@ fn resolve_in_chain(
 
     // Grow the advance so added parts keep the base's right sidebearing.
     if let (Some(base_box), Some(all_box)) =
-        (bounds_of(&base.contours), bounds_of(out.contours.iter().map(|c| &c.contour)))
+        (bounds_of(&undeformed.contours), bounds_of(out.contours.iter().map(|c| &c.contour)))
     {
-        let rsb = base.advance_width - base_box.max.x;
-        out.advance_width = base.advance_width.max(all_box.max.x + rsb);
+        let rsb = undeformed.advance_width - base_box.max.x;
+        out.advance_width = undeformed.advance_width.max(all_box.max.x + rsb);
     }
 
     Some(out)
+}
+
+/// Apply one deforming alteration to the base strokes in `out`. Returns
+/// whether anything changed.
+fn apply_deform(
+    out: &mut ResolvedFidel,
+    alt: &crate::alteration::Alteration,
+    family_base: &Base,
+    metrics: &crate::project::Metrics,
+) -> bool {
+    use crate::deform::{pick, warp_contour, warp_for};
+    if alt.verb == Verb::Bend {
+        out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt.id.clone(), verb: alt.verb });
+        return false;
+    }
+    let strokes: Vec<(usize, crate::geometry::Rect, Option<crate::parts::Part>)> = out
+        .contours
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.source == Source::Base)
+        .filter_map(|(i, c)| c.contour.bounds().map(|b| (i, b, c.contour.part)))
+        .collect();
+    // Unlike additive marks, a deform treats its parts as one set and lets the
+    // region choose: "the stroke reaching lowest on the left" may be a leg in
+    // one family and a stem in the next.
+    let mut candidates: Vec<(usize, crate::geometry::Rect)> = strokes
+        .iter()
+        .filter(|(_, _, p)| p.is_some_and(|p| alt.placement.parts.contains(&p)))
+        .map(|(i, b, _)| (*i, *b))
+        .collect();
+    if candidates.is_empty() {
+        // Fall back to upright strokes.
+        candidates = strokes
+            .iter()
+            .filter(|(_, b, _)| b.max.y - b.min.y > b.max.x - b.min.x)
+            .map(|(i, b, _)| (*i, *b))
+            .collect();
+        if candidates.is_empty() {
+            if !strokes.is_empty() {
+                out.diagnostics.push(Diagnostic::NoDeformTarget { alteration: alt.id.clone() });
+            }
+            return false;
+        }
+        if !alt.placement.parts.is_empty() {
+            let names: Vec<String> =
+                alt.placement.parts.iter().map(|p| format!("{p:?}").to_lowercase()).collect();
+            out.diagnostics.push(Diagnostic::PlacedByFallback {
+                alteration: alt.id.clone(),
+                reason: format!("no {} tagged on the base; used an upright stroke", names.join("/")),
+            });
+        }
+    }
+    let Some(i) = pick(&candidates, alt.placement.region) else { return false };
+    let b = candidates.iter().find(|(j, _)| *j == i).map(|(_, b)| *b).expect("picked from candidates");
+    let Some(warp) = warp_for(alt, b, metrics) else {
+        out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt.id.clone(), verb: alt.verb });
+        return false;
+    };
+    let stroke_id = out.contours[i].contour.id;
+    warp_contour(&mut out.contours[i].contour, &warp);
+    // Components sitting on that stroke move with it.
+    for r in family_base.components.iter().filter(|r| r.on == Some(stroke_id)) {
+        let d = warp.apply(r.at) - r.at;
+        for c in out.contours.iter_mut().filter(|c| c.source == Source::Component(r.id)) {
+            c.contour.translate(d);
+        }
+    }
+    true
 }
 
 fn placement_nudge(nudges: &[Nudge], alt: &str) -> Vec2 {

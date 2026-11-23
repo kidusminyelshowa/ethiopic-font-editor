@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 
 use crate::alteration::{Alteration, Placement, Region, Verb};
 use crate::base::Base;
-use crate::ethiopic::{default_built_on, default_irregular_note, GEEZ_FAMILIES};
+use crate::ethiopic::{default_built_on, default_irregular_note, DEFAULT_RULE_VARIANTS, GEEZ_FAMILIES};
 use crate::fidel::{Family, Fidel, FidelState, IrregularForm};
 use crate::geometry::Vec2;
 use crate::order::{Order, OrderRule};
 use crate::parts::Part;
-use crate::project::{Metrics, Project};
+use crate::project::{Metrics, Project, ZONE_CRICK, ZONE_SHORT_LEG, ZONE_STRETCH};
 
 pub const STROKE_MIDDLE_RIGHT: &str = "stroke.middle-right";
 pub const STROKE_BOTTOM_RIGHT: &str = "stroke.bottom-right";
@@ -31,7 +31,14 @@ fn alteration(id: &str, name: &str, verb: Verb, region: Region, parts: &[Part]) 
         placement: Placement { anchor: None, region, parts: parts.to_vec(), offset: Vec2::ZERO },
         contours: Vec::new(),
         forked_from: None,
+        zone: None,
+        amount: None,
     }
+}
+
+fn on_zone(mut a: Alteration, zone: &str) -> Alteration {
+    a.zone = Some(zone.into());
+    a
 }
 
 /// Hornus's alterations, undrawn. The designer draws each additive one once.
@@ -53,16 +60,31 @@ pub fn hornus_alterations() -> Vec<Alteration> {
             Region::BottomRight,
             &legs,
         ),
-        alteration(
-            SHORTEN_LEFT_LEG,
-            "4th-order shortened left leg",
-            Verb::Shorten,
-            Region::BottomLeft,
-            &[Leg],
+        on_zone(
+            alteration(
+                SHORTEN_LEFT_LEG,
+                "4th-order shortened left leg",
+                Verb::Shorten,
+                Region::BottomLeft,
+                &[Leg],
+            ),
+            ZONE_SHORT_LEG,
         ),
-        alteration(STRETCH_STEM, "4th-order stretched stem", Verb::Stretch, Region::BottomRight, &[Stem]),
+        on_zone(
+            alteration(
+                STRETCH_STEM,
+                "4th-order stretched stem",
+                Verb::Stretch,
+                Region::BottomRight,
+                &[Stem, Leg],
+            ),
+            ZONE_STRETCH,
+        ),
         alteration(LOOP_BOTTOM_RIGHT, "5th-order loop, bottom right", Verb::Loop, Region::BottomRight, &legs),
-        alteration(CRICK_FIRST_STROKE, "6th-order crick", Verb::Crick, Region::BottomLeft, &legs),
+        on_zone(
+            alteration(CRICK_FIRST_STROKE, "6th-order crick", Verb::Crick, Region::BottomLeft, &legs),
+            ZONE_CRICK,
+        ),
         alteration(
             LOOP_TOP_RIGHT,
             "7th-order loop, top right",
@@ -70,12 +92,15 @@ pub fn hornus_alterations() -> Vec<Alteration> {
             Region::TopRight,
             &[Stem, Leg, Arm],
         ),
-        alteration(
-            SHORTEN_RIGHT_LEG,
-            "7th-order shortened right leg",
-            Verb::Shorten,
-            Region::BottomRight,
-            &[Leg],
+        on_zone(
+            alteration(
+                SHORTEN_RIGHT_LEG,
+                "7th-order shortened right leg",
+                Verb::Shorten,
+                Region::BottomRight,
+                &[Leg],
+            ),
+            ZONE_SHORT_LEG,
         ),
     ]
 }
@@ -150,7 +175,11 @@ pub fn geez_project(metrics: Metrics) -> Project {
             name: f.name.into(),
             base: f.id.into(),
             group: Some(f.group),
-            rule_variants: BTreeMap::new(),
+            rule_variants: DEFAULT_RULE_VARIANTS
+                .iter()
+                .filter(|(id, _, _)| *id == f.id)
+                .map(|(_, o, v)| (*o, *v))
+                .collect(),
             attach_offsets: BTreeMap::new(),
             fidels: BTreeMap::new(),
         };

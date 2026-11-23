@@ -108,6 +108,12 @@ pub const DEFAULT_BUILT_ON: &[(char, char)] = &[
     ('ፄ', 'ፃ'),
 ];
 
+/// Families that use another variant of an order rule than the default:
+/// (family id, order, variant). Hornus: the 4th order of ቀ ተ ነ stretches the
+/// stem instead of shortening the left leg.
+pub const DEFAULT_RULE_VARIANTS: &[(&str, Order, usize)] =
+    &[("qa", Order::Rabi, 1), ("ta", Order::Rabi, 1), ("na", Order::Rabi, 1)];
+
 /// The fidel `c` is built on by default, if any.
 pub fn default_built_on(c: char) -> Option<char> {
     DEFAULT_BUILT_ON.iter().find(|(ch, _)| *ch == c).map(|(_, parent)| *parent)

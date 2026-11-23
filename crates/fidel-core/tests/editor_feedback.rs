@@ -26,9 +26,11 @@ fn ring(p: &Project, family: &str) -> Rect {
 fn an_attach_offset_moves_the_mark_on_one_family_only() {
     let mut p = project();
     let before = ring(&p, "la");
+    // ሄ is built on ሃ, whose shortened leg lifts the loop; only the offset matters here.
+    let before_ha = ring(&p, "ha");
     p.set_attach_offset("la", LOOP_BOTTOM_RIGHT, Vec2::new(12.0, -30.0)).unwrap();
     assert_eq!(ring(&p, "la").min, before.min + Vec2::new(12.0, -30.0));
-    assert_eq!(ring(&p, "ha").min, before.min);
+    assert_eq!(ring(&p, "ha").min, before_ha.min);
     assert_eq!(p.auto_attach_point("la", LOOP_BOTTOM_RIGHT), Some(Vec2::new(370.0, 0.0)));
 
     // A scoped copy follows the family's offset.

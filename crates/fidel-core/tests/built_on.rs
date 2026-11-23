@@ -20,6 +20,14 @@ fn project() -> Project {
     p
 }
 
+/// The same, with the 4th order left as the bare base, so the numbers only
+/// show what the link carries over. Deforms have their own tests.
+fn plain_fourth() -> Project {
+    let mut p = project();
+    p.order_rules.get_mut(&Order::Rabi).unwrap().variants = vec![vec![]];
+    p
+}
+
 /// ማ redrawn by hand: the leg dropped lower and further right.
 fn redraw_ma_fourth(p: &mut Project) {
     p.detach("ma", Order::Rabi).unwrap();
@@ -51,7 +59,7 @@ fn defaults_follow_the_derivation_map() {
 
 #[test]
 fn a_change_to_the_fourth_order_reaches_the_fifth() {
-    let mut p = project();
+    let mut p = plain_fourth();
     let before = p.resolve("ma", Order::Hamis).unwrap();
     // Untouched ማ is just the base, so ሜ looks as it did before links existed.
     assert_eq!(ring(&before).min, Vec2::new(370.0, -80.0));
@@ -72,7 +80,7 @@ fn a_change_to_the_fourth_order_reaches_the_fifth() {
 
 #[test]
 fn nudges_on_the_child_sit_on_top_of_the_parent() {
-    let mut p = project();
+    let mut p = plain_fourth();
     p.nudge(
         "ha",
         Order::Rabi,

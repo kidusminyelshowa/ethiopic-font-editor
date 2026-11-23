@@ -85,6 +85,16 @@ pub struct Alteration {
     /// one order), so it can be joined back to the shared alteration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<AlterationId>,
+    /// The Pa-height zone this alteration lands on (see
+    /// [`crate::project::Metrics::zones`]). A shortened leg ends on it, a
+    /// crick or stretch starts at it, an additive mark sits at its height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// How far a deform pulls, in font units: the sideways throw of a crick
+    /// or stretch, how much a lengthen adds. `None` uses a default that
+    /// follows the stroke width and Pa-height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f64>,
 }
 
 /// Points this close (in font units) count as being on the same edge.
@@ -193,7 +203,7 @@ mod tests {
     use crate::geometry::Contour;
 
     fn base_with(contours: Vec<Contour>) -> Base {
-        Base { id: "t".into(), name: "t".into(), advance_width: 600.0, contours, anchors: Default::default() }
+        Base { contours, ..Base::new("t", "t", 600.0) }
     }
 
     fn placement(region: Region, parts: Vec<Part>) -> Placement {

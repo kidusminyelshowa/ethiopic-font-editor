@@ -10,6 +10,7 @@
 //! families/<family id>.json     one family: its base, rule variants, fidel states and nudges
 //! alterations/<id>.json         one alteration: drawn parts and placement rule
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
+//! components/<id>.json          one leaf, cap or corner, drawn once
 //! ```
 //!
 //! `project.json` also lists the character sets the project covers. Files
@@ -101,6 +102,10 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
         let name = entry("symbols", id)?;
         entries.insert(name.clone(), to_json(&name, sym)?);
     }
+    for (id, comp) in &project.components {
+        let name = entry("components", id)?;
+        entries.insert(name.clone(), to_json(&name, comp)?);
+    }
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -166,6 +171,11 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
                 let sym: crate::project::Symbol = read_entry(&mut zip, &name)?;
                 check_id(&name, id, &sym.id)?;
                 project.symbols.insert(sym.id.clone(), sym);
+            }
+            "components" => {
+                let comp: crate::component::Component = read_entry(&mut zip, &name)?;
+                check_id(&name, id, &comp.id)?;
+                project.components.insert(comp.id.clone(), comp);
             }
             // Unknown folders are left alone, for files from later versions.
             _ => {}

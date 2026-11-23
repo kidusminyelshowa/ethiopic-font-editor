@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::component::ComponentRef;
 use crate::geometry::{Contour, Vec2};
 
 pub type BaseId = String;
@@ -20,6 +21,10 @@ pub struct Base {
     /// automatic placement rule is not what the designer wants.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub anchors: BTreeMap<String, Vec2>,
+    /// Leaves, caps and corners placed on this base. They are part of its
+    /// outline in every fidel built from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<ComponentRef>,
 }
 
 impl Base {
@@ -30,6 +35,7 @@ impl Base {
             advance_width,
             contours: Vec::new(),
             anchors: BTreeMap::new(),
+            components: Vec::new(),
         }
     }
 }

@@ -8,6 +8,8 @@ import {
   api,
   PARTS,
   type AlterationSummary,
+  type ComponentKind,
+  type ComponentSummary,
   type Effect,
   type ImpactView,
   type Scope,
@@ -29,6 +31,20 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
+import { componentsSection, orderRulesSection } from "./orderSide";
+import {
+  bindViewMenu,
+  historyRows,
+  issuesSection,
+  LAYER_ICONS,
+  metricsSection,
+  numberField,
+  onRefresh,
+  shapeSection,
+  showContextMenu,
+  showMenu,
+  transformSection,
+} from "./editorSide";
 import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
 
@@ -78,6 +94,7 @@ const state = {
   view: "grid" as ViewName,
   grid: null as FidelGrid | null,
   alterations: [] as AlterationSummary[],
+  components: [] as ComponentSummary[],
   filter: "all" as StateKind | "all",
   selected: null as { family: string; order: string } | null,
   /** A selected punctuation mark or numeral, by symbol id. */
@@ -85,6 +102,11 @@ const state = {
   /** Family whose base is drawn behind an alteration in the editor. */
   contextFamily: undefined as string | undefined,
 };
+
+/** Alterations and components, for the Parts list and the editor. */
+async function loadParts() {
+  [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
+}
 
 // ---------- Toasts ----------
 
@@ -387,13 +409,15 @@ function renderInspector(d: FidelDetail) {
       el("span", {}, step.name),
       ...(drawable
         ? [el("span", { class: step.drawn ? "step-edit" : "step-note" }, step.drawn ? "Edit" : "Draw")]
-        : [el("span", { class: "step-note muted-note" }, "not applied yet")]),
+        : [el("span", { class: "step-note" }, "Deform")]),
     );
     if (drawable) {
       chip.addEventListener("click", () => {
         state.contextFamily = d.family;
         void openDrawing({ kind: "alteration", id: step.id });
       });
+    } else {
+      chip.title = "Reshapes the base. Set its zone and throw from the base, under Orders.";
     }
     recipe.append(el("li", {}, chip));
   }
@@ -432,6 +456,7 @@ function renderInspector(d: FidelDetail) {
       ...(d.note ? [el("p", { class: "state-help" }, d.note)] : []),
       el("h3", { class: "section-label" }, "Recipe"),
       recipe,
+      ...(d.variants.length > 1 ? [variantPicker(d)] : []),
       ...(d.builtOnChoices.length && d.order !== "giiz" ? [builtOnPicker(d)] : []),
       ...(d.builtOnBy.length
         ? [
@@ -445,6 +470,25 @@ function renderInspector(d: FidelDetail) {
         : []),
       el("div", { class: "actions" }, open, ...stateActions(d)),
     ),
+  );
+}
+
+/** Which variant of the order rule this family uses. */
+function variantPicker(d: FidelDetail) {
+  const pick = el("select", { class: "built-on-select", "aria-label": "Rule" });
+  for (const v of d.variants) {
+    const opt = el("option", { value: String(v.index) }, v.label || "Nothing added");
+    if (v.index === d.variant) opt.selected = true;
+    pick.append(opt);
+  }
+  pick.addEventListener("change", () => {
+    void changeFidel(() => api.setRuleVariant(d.family, d.order, Number(pick.value)), d);
+  });
+  return el(
+    "label",
+    { class: "built-on", title: `Used by every ${d.orderName} of ${d.familyName}` },
+    el("span", { class: "section-label" }, "Rule"),
+    pick,
   );
 }
 
@@ -675,7 +719,27 @@ function renderLayers() {
       if (selected.has(ci)) row.classList.add("selected");
       const swatch = row.querySelector<HTMLElement>(".tree-glyph")!;
       swatch.replaceChildren(el("span", { class: "layer-swatch", style: c.part ? `--part:${PART_COLORS[c.part]}` : "" }));
-      row.addEventListener("click", (e) => ed.selectLayer(ci, e.shiftKey));
+      if (c.hidden) row.classList.add("layer-hidden");
+      if (c.locked) row.classList.add("layer-locked");
+      const flags = el("span", { class: "layer-flags" });
+      const flag = (name: "locked" | "hidden", on: boolean, iconOn: string, iconOff: string, title: string) => {
+        const b = el("button", { class: `layer-flag${on ? " on" : ""}`, title, "aria-label": title, "aria-pressed": String(on) });
+        b.append(LAYER_ICONS.icon(on ? iconOn : iconOff, 12));
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          ed.setLayerFlag(name, [ci]);
+        });
+        b.addEventListener("dblclick", (e) => e.stopPropagation());
+        return b;
+      };
+      flags.append(
+        flag("locked", !!c.locked, LAYER_ICONS.lock, LAYER_ICONS.unlock, c.locked ? "Unlock" : "Lock"),
+        flag("hidden", !!c.hidden, LAYER_ICONS.eyeOff, LAYER_ICONS.eye, c.hidden ? "Show" : "Hide"),
+      );
+      row.append(flags);
+      row.addEventListener("click", (e) => {
+        if (!c.locked && !c.hidden) ed.selectLayer(ci, e.shiftKey);
+      });
       row.addEventListener("dblclick", () => {
         const labelEl = row.querySelector<HTMLElement>(".tree-label")!;
         const input = el("input", { class: "layer-rename", type: "text", value: label, spellcheck: "false" }) as HTMLInputElement;
@@ -703,6 +767,7 @@ function renderLayers() {
         treeRow({ depth: 0, glyph: "", label: `Base · ${d.context.familyName}`, meta: "", dim: true }),
       );
     }
+    rows.push(...historyRows(ed));
   }
   side.list.replaceChildren(...rows);
 }
@@ -785,7 +850,35 @@ function renderSidebar() {
         data: { "data-target": `alteration:${a.id}` },
       });
       if (a.drawable) item.addEventListener("click", () => void openDrawing({ kind: "alteration", id: a.id }));
-      else item.title = "Deforming alterations are not drawn; they reshape the base.";
+      else {
+        item.title = "Reshapes the base. Its zone and throw are set from a base, under Orders.";
+        item.addEventListener("click", () => void openDrawing({ kind: "base", id: baseOf(state.contextFamily ?? firstDrawnFamily()) }));
+      }
+      rows.push(item);
+    }
+    const comps = state.components.filter((c) => matches(c.name, c.id));
+    const add = el("button", { class: "tree-add", title: "New component", "aria-label": "New component" }, "+");
+    add.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const r = add.getBoundingClientRect();
+      showMenu(
+        (["leaf", "cap", "corner"] as const).map((kind) => ({
+          label: `${kind[0].toUpperCase()}${kind.slice(1)}`,
+          run: () => void newComponent(kind),
+        })),
+        { x: r.left, y: r.bottom + 4 },
+      );
+    });
+    rows.push(el("div", { class: "tree-section with-action" }, el("span", {}, "Components"), add));
+    for (const c of comps) {
+      const item = treeRow({
+        depth: 0,
+        glyph: c.kind === "leaf" ? "❦" : c.kind === "cap" ? "⌒" : "⌐",
+        label: c.name,
+        meta: c.drawn ? (c.uses ? `${c.uses} base${c.uses === 1 ? "" : "s"}` : "") : "to draw",
+        data: { "data-target": `component:${c.id}` },
+      });
+      item.addEventListener("click", () => void openDrawing({ kind: "component", id: c.id }));
       rows.push(item);
     }
   }
@@ -801,6 +894,24 @@ function renderSidebar() {
   if (!rows.length) rows.push(el("p", { class: "side-empty" }, side.query ? "Nothing matches." : "Loading…"));
   side.list.replaceChildren(...rows);
   markSidebar();
+}
+
+async function newComponent(kind: ComponentKind) {
+  const name = `${kind[0].toUpperCase()}${kind.slice(1)}`;
+  try {
+    const id = await api.addComponent(name, kind);
+    await loadParts();
+    fillDrawingSelect();
+    await openDrawing({ kind: "component", id });
+  } catch (err) {
+    toast(`Could not add the component: ${err}`, "error");
+  }
+}
+
+/** The first family whose base is drawn, for opening something to look at. */
+function firstDrawnFamily(): string {
+  const rows = state.grid?.rows ?? [];
+  return (rows.find((r) => r.cells[0]?.outline) ?? rows[0])?.family ?? "ha";
 }
 
 /** One row per base: Sebatbeit and Gurage rows share the plain row's base. */
@@ -848,7 +959,10 @@ const editor = new GlyphEditor(ui.editorView, {
   },
   toast,
   renderSide: (ed) => renderEditorSide(ed),
+  contextMenu: (ed, at) => showContextMenu(ed, at),
 });
+onRefresh((ed) => renderEditorSide(ed));
+bindViewMenu(ui.editorView);
 
 async function openDrawing(target: DrawingTarget) {
   try {
@@ -879,6 +993,11 @@ function fillDrawingSelect() {
     alts.append(el("option", { value: `alteration:${a.id}` }, `${a.name}${a.drawn ? "" : " (not drawn)"}`));
   }
   const groups = [bases, alts];
+  if (state.components.length) {
+    const comps = el("optgroup", { label: "Components" });
+    for (const c of state.components) comps.append(el("option", { value: `component:${c.id}` }, `${c.name}${c.drawn ? "" : " (not drawn)"}`));
+    groups.push(comps);
+  }
   if (state.grid?.symbols.length) {
     const syms = el("optgroup", { label: "Symbols" });
     for (const s of state.grid.symbols) syms.append(el("option", { value: `symbol:${s.id}` }, `${s.codepoint}  ${s.name}`));
@@ -897,7 +1016,7 @@ let sideTimer: number | undefined;
 function scheduleSideRefresh() {
   clearTimeout(sideTimer);
   sideTimer = window.setTimeout(async () => {
-    state.alterations = await api.listAlterations();
+    await loadParts();
     state.grid = await api.fidelGrid();
     fillDrawingSelect();
     if (state.view === "editor") renderEditorSide(editor);
@@ -917,7 +1036,7 @@ function renderEditorSide(ed: GlyphEditor) {
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
-  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel";
+  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component";
   if (!standalone) sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
   const token = ++previewToken;
   if (standalone) {
@@ -955,6 +1074,11 @@ function renderEditorSide(ed: GlyphEditor) {
     }
   }
 
+  if (d.target.kind === "base") {
+    const fam = baseRows().find((r) => r.base === d.target.id)?.family ?? d.target.id;
+    sections.push(...orderRulesSection(fam, state.alterations, d.zones ?? [], () => scheduleSideRefresh()));
+  }
+
   // Selection.
   const sel = ed.selection.size;
   const selBox = el("div", { class: "side-box" });
@@ -981,27 +1105,43 @@ function renderEditorSide(ed: GlyphEditor) {
     // Point type of the selected on-curve points.
     const nodes = ed.selectedNodes();
     if (nodes.length && ed.tool !== "select") {
-      const allSmooth = nodes.every((n) => n.smooth);
-      const allCorner = nodes.every((n) => !n.smooth);
+      const types = new Set(nodes.map((n) => n.type));
+      const only = types.size === 1 ? [...types][0] : null;
       const seg = el("div", { class: "segmented", role: "group", "aria-label": "Point type" });
-      const corner = el("button", { class: allCorner ? "on" : "", title: "Handles move on their own (double-click a point to switch)" }, "Corner");
-      const smooth = el("button", { class: allSmooth ? "on" : "", title: "Handles stay in line; adds handles to a point without them" }, "Smooth");
-      corner.addEventListener("click", () => ed.setNodeType("corner"));
-      smooth.addEventListener("click", () => ed.setNodeType("smooth"));
-      seg.append(corner, smooth);
-      const retract = el("button", { class: "pill small ghost", title: "Remove the handles, so the segments next to the point go straight" }, "Retract handles");
+      const typeBtn = (t: "corner" | "smooth" | "tangent", label: string, title: string) => {
+        const b = el("button", { class: only === t ? "on" : "", title }, label);
+        b.addEventListener("click", () => ed.setNodeType(t));
+        seg.append(b);
+      };
+      typeBtn("corner", "Corner", "Handles move on their own (double-click a point to switch, Shift+C cycles)");
+      typeBtn("smooth", "Smooth", "Handles stay in line; adds handles to a point without them");
+      typeBtn("tangent", "Tangent", "Smooth between a straight segment and a curve");
+      const retract = el("button", { class: "pill small ghost", title: "Remove the handles, so the segments next to the point go straight" }, "Retract");
       retract.disabled = !nodes.some((n) => n.handles);
       retract.addEventListener("click", () => ed.setNodeType("retract"));
-      selBox.append(el("h3", { class: "section-label" }, nodes.length === 1 ? "Point" : `${nodes.length} points`), el("div", { class: "button-row" }, seg, retract));
+      const row = el("div", { class: "button-row" }, seg, retract);
+      const segs = ed.selectedSegments();
+      if (segs.lines || segs.curves) {
+        const toCurve = el("button", { class: "pill small ghost", title: "Give the segment between the selected points handles" }, "Make curve");
+        toCurve.disabled = !segs.lines;
+        toCurve.addEventListener("click", () => ed.setSegmentKind("curve"));
+        const toLine = el("button", { class: "pill small ghost", title: "Straighten the segment between the selected points" }, "Make line");
+        toLine.disabled = !segs.curves;
+        toLine.addEventListener("click", () => ed.setSegmentKind("line"));
+        row.append(toCurve, toLine);
+      }
+      selBox.append(el("h3", { class: "section-label" }, nodes.length === 1 ? "Point" : `${nodes.length} points`), row);
     }
     // Direction of the selected contours.
     const dirs = new Set(contours.map((ci) => isClockwise(ed.contours[ci])));
     const dirLabel = dirs.size > 1 ? "Mixed" : dirs.has(true) ? "↻ Clockwise" : "↺ Counter-clockwise";
     const reverse = el("button", { class: "pill small", title: "Reverse path direction (Ctrl+Shift+R)" }, "Reverse");
     reverse.addEventListener("click", () => ed.reverseDirection());
+    const correct = el("button", { class: "pill small ghost", title: "Outer paths counter-clockwise, counters clockwise, for the whole drawing" }, "Correct all");
+    correct.addEventListener("click", () => ed.correctDirection());
     selBox.append(
       el("h3", { class: "section-label", title: "Outer contours run counter-clockwise, counters clockwise" }, "Direction"),
-      el("div", { class: "button-row" }, el("span", { class: "side-note" }, dirLabel), reverse),
+      el("div", { class: "button-row" }, el("span", { class: "side-note" }, dirLabel), reverse, correct),
     );
     // Part tags for the selected contours.
     const current = new Set(contours.map((ci) => ed.contours[ci]?.part ?? null));
@@ -1020,19 +1160,13 @@ function renderEditorSide(ed: GlyphEditor) {
     selBox.append(el("h3", { class: "section-label" }, "Part"), tags);
   }
   sections.push(el("h3", { class: "section-label" }, "Selection"), selBox);
+  sections.push(...transformSection(ed));
+  sections.push(...shapeSection(ed));
 
-  // Metrics.
-  if (d.advanceWidth !== null) {
-    sections.push(
-      el("h3", { class: "section-label" }, "Metrics"),
-      el(
-        "div",
-        { class: "field-row" },
-        numberField("Advance", d.advanceWidth, (v) => void ed.setAdvance(v)),
-        el("div", { class: "field static" }, el("span", {}, "Pa-height"), el("strong", {}, `${metrics.pa_bottom}–${metrics.pa_top}`)),
-      ),
-    );
-  }
+  // Metrics: sidebearings and width, for bases and symbols.
+  sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
+  if (d.target.kind === "base") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  sections.push(...issuesSection(ed));
 
   // Sketch.
   const sk = ed.sketch;
@@ -1047,13 +1181,25 @@ function renderEditorSide(ed: GlyphEditor) {
   if (sk) {
     const remove = el("button", { class: "pill small ghost" }, "Remove");
     remove.addEventListener("click", () => ed.removeSketch());
+    const lock = el("button", { class: `pill small ghost${sk.unlocked ? " on" : ""}`, title: sk.unlocked ? "Lock the sketch in place" : "Unlock to drag the sketch on the canvas" }, sk.unlocked ? "Lock" : "Unlock");
+    lock.addEventListener("click", () => {
+      ed.updateSketch({ unlocked: !sk.unlocked });
+      renderEditorSide(ed);
+    });
     sketchBox.append(
       remove,
+      lock,
+      el(
+        "div",
+        { class: "field-row" },
+        numberField("X", sk.x, (v) => ed.updateSketch({ x: v })),
+        numberField("Y", sk.y, (v) => ed.updateSketch({ y: v })),
+      ),
       rangeField("Opacity", sk.opacity, 0.05, 1, (v) => ed.updateSketch({ opacity: v })),
       rangeField("Size", sk.h / (metrics.pa_top - metrics.pa_bottom), 0.3, 2, (v) => ed.updateSketch({ scale: v })),
     );
   }
-  sections.push(el("h3", { class: "section-label", title: "Alt-drag on the canvas to move the sketch. Kept for this session only." }, "Sketch"), sketchBox);
+  sections.push(el("h3", { class: "section-label", title: "Unlock it to drag it on the canvas. Kept for this session only." }, "Sketch"), sketchBox);
 
   ui.inspector.replaceChildren(el("div", { class: "inspector-body editor-side" }, ...sections));
 }
@@ -1138,7 +1284,7 @@ async function forkTo(alt: AlterationSummary, scope: Scope, contextFamily?: stri
   try {
     const id = await api.forkAlteration(alt.id, scope);
     void refreshProjectInfo();
-    state.alterations = await api.listAlterations();
+    await loadParts();
     await refreshGrid();
     fillDrawingSelect();
     const copy = state.alterations.find((a) => a.id === id);
@@ -1154,7 +1300,7 @@ async function rejoin(alt: AlterationSummary) {
   try {
     const shared = await api.rejoinAlteration(alt.id);
     void refreshProjectInfo();
-    state.alterations = await api.listAlterations();
+    await loadParts();
     await refreshGrid();
     fillDrawingSelect();
     await openDrawing({ kind: "alteration", id: shared });
@@ -1173,15 +1319,6 @@ function previewCell(p: FidelPreview, metrics: FidelGrid["metrics"]): Node {
     el("span", { class: "mini-label" }, p.orderName),
     ...(issue ? [el("span", { class: "mini-issue", "aria-hidden": "true" })] : []),
   );
-}
-
-function numberField(label: string, value: number, onChange: (v: number) => void): HTMLElement {
-  const input = el("input", { type: "number", value: String(Math.round(value)), step: "1" }) as HTMLInputElement;
-  input.addEventListener("change", () => {
-    const v = Number(input.value);
-    if (Number.isFinite(v)) onChange(v);
-  });
-  return el("label", { class: "field" }, el("span", {}, label), input);
 }
 
 function rangeField(label: string, value: number, min: number, max: number, onInput: (v: number) => void): HTMLElement {
@@ -1225,7 +1362,7 @@ async function afterProjectChanged(info: ProjectInfo) {
   editor.reset();
   state.selected = null;
   state.contextFamily = undefined;
-  state.alterations = await api.listAlterations();
+  await loadParts();
   await refreshGrid();
   fillDrawingSelect();
   showView("grid");
@@ -1384,7 +1521,7 @@ async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
     renderSidebar();
     renderCharsetMenu();
     fillDrawingSelect();
-    state.alterations = await api.listAlterations();
+    await loadParts();
     void refreshProjectInfo();
     void refreshProof();
   } catch (err) {
@@ -1483,7 +1620,7 @@ async function main() {
     document.getElementById("about-line")!.textContent = `Hohe ${info.appVersion} · Ethiopic font editor`;
     ui.status.classList.add("ok");
     ui.status.title = `${info.familyCount} families · ${info.alterationCount} alterations`;
-    state.alterations = await api.listAlterations();
+    await loadParts();
     await refreshGrid();
     fillDrawingSelect();
     const row = state.grid?.rows[1];

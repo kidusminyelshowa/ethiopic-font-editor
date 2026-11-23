@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 use fidel_core::{
-    defaults::starter_project, kid, CharSet, Contour, DrawingTarget, FontInfo, Language, Metrics, Order,
-    Project, Scope, Vec2,
+    defaults::starter_project, kid, CharSet, ComponentKind, ComponentRef, Contour, DrawingTarget, FontInfo,
+    Language, Metrics, Order, Project, Scope, Vec2,
 };
 use serde::Serialize;
 use tauri::State;
@@ -137,7 +137,7 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
             DrawingTarget::Symbol(id) => {
                 project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
             }
-            DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) => {
+            DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) | DrawingTarget::Component(_) => {
                 return Err("this drawing has no advance width of its own".into())
             }
         }
@@ -168,6 +168,84 @@ fn set_attach_offset(
     offset: Vec2,
 ) -> CmdResult<()> {
     state.project().set_attach_offset(&family, &alteration, offset).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Pick which variant of an order rule a family uses.
+#[tauri::command]
+fn set_rule_variant(
+    state: State<'_, AppState>,
+    family: String,
+    order: Order,
+    variant: usize,
+) -> CmdResult<FidelDetail> {
+    let detail = {
+        let mut project = state.project();
+        project.set_rule_variant(&family, order, variant).map_err(err)?;
+        FidelDetail::from_project(&project, &family, order).map_err(err)?
+    };
+    state.mark_dirty();
+    Ok(detail)
+}
+
+/// Set the zone a deform lands on and how far it pulls.
+#[tauri::command]
+fn set_deform(
+    state: State<'_, AppState>,
+    id: String,
+    zone: Option<String>,
+    amount: Option<f64>,
+) -> CmdResult<()> {
+    state.project().set_deform(&id, zone, amount).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Move a Pa-height zone (or add one), at a height in font units.
+#[tauri::command]
+fn set_zone(
+    state: State<'_, AppState>,
+    id: String,
+    name: Option<String>,
+    position: f64,
+) -> Vec<editor::ZoneView> {
+    let zones = {
+        let mut project = state.project();
+        project.metrics.set_zone(&id, name.as_deref(), position);
+        editor::zone_views(&project.metrics)
+    };
+    state.mark_dirty();
+    zones
+}
+
+#[tauri::command]
+fn list_components(state: State<'_, AppState>) -> Vec<editor::ComponentSummary> {
+    editor::component_summaries(&state.project.lock().expect("project lock"))
+}
+
+#[tauri::command]
+fn add_component(state: State<'_, AppState>, name: String, kind: ComponentKind) -> String {
+    let id = state.project().add_component(&name, kind);
+    state.mark_dirty();
+    id
+}
+
+#[tauri::command]
+fn remove_component(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().remove_component(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Replace the components placed on a base.
+#[tauri::command]
+fn set_base_components(
+    state: State<'_, AppState>,
+    base: String,
+    placements: Vec<ComponentRef>,
+) -> CmdResult<()> {
+    state.project().set_base_components(&base, placements).map_err(err)?;
     state.mark_dirty();
     Ok(())
 }
@@ -417,7 +495,14 @@ pub fn run() {
             rejoin_alteration,
             set_built_on,
             detach_fidel,
-            relink_fidel
+            relink_fidel,
+            set_rule_variant,
+            set_deform,
+            set_zone,
+            list_components,
+            add_component,
+            remove_component,
+            set_base_components
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

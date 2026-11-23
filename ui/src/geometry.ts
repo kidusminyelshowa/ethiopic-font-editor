@@ -25,6 +25,10 @@ export interface Contour {
   part?: Part | null;
   /** Layer name, e.g. the alteration a detached contour came from. */
   name?: string | null;
+  /** Locked in the editor: drawn, but cannot be selected. */
+  locked?: boolean;
+  /** Hidden in the editor; still part of the glyph. */
+  hidden?: boolean;
 }
 
 /** An on-curve point with its handles: easier to edit than the flat list. */

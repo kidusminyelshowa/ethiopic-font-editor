@@ -21,8 +21,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod alteration;
 pub mod base;
 pub mod charset;
+pub mod component;
 pub mod coverage;
 pub mod defaults;
+pub mod deform;
 pub mod ethiopic;
 pub mod fidel;
 pub mod geometry;
@@ -36,6 +38,7 @@ pub mod scope;
 pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};
 pub use charset::{CharSet, Language};
+pub use component::{Component, ComponentId, ComponentKind, ComponentRef};
 pub use ethiopic::{GeezFamily, ShapeGroup, GEEZ_FAMILIES};
 pub use fidel::{
     Badge, Family, FamilyId, Fidel, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind,
@@ -44,6 +47,8 @@ pub use geometry::{svg_path, Contour, ContourId, ContourProblem, Point, PointId,
 pub use order::{Order, OrderRule};
 pub use parts::Part;
 pub use project::FontInfo;
-pub use project::{Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project, Symbol, SymbolId};
+pub use project::{
+    Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project, Symbol, SymbolId, Zone,
+};
 pub use resolve::{Diagnostic, ResolvedContour, ResolvedFidel};
 pub use scope::Scope;

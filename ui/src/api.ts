@@ -140,6 +140,10 @@ export interface FidelDetail {
   builtOnChoices: OrderRef[];
   /** Detached or drawn Irregular: opens as its own outline. */
   drawnByHand: boolean;
+  /** The order rule's variants, when it has more than one. */
+  variants: { index: number; label: string }[];
+  /** The variant this family uses. */
+  variant: number;
 }
 
 export interface OrderRef {
@@ -148,11 +152,56 @@ export interface OrderRef {
   codepoint: string | null;
 }
 
-export type DrawingKind = "base" | "alteration" | "symbol" | "fidel";
+export type DrawingKind = "base" | "alteration" | "symbol" | "fidel" | "component";
 export type DrawingTarget = { kind: DrawingKind; id: string };
+
+/** A Pa-height zone: the height where a kind of alteration lands (shortened legs end, cricks bend). */
+export interface Zone {
+  id: string;
+  name: string;
+  /** Height in font units. */
+  position: number;
+  /** Snapping band around it, in font units. */
+  size: number;
+}
+
+export type ComponentKind = "leaf" | "cap" | "corner";
+
+/** One placement of a component on a base. */
+export interface ComponentRef {
+  id: number;
+  component: string;
+  at: { x: number; y: number };
+  scale?: number;
+  rotate?: number;
+  flip_x?: boolean;
+  flip_y?: boolean;
+  /** The base contour it sits on; deforms of that contour carry it along. */
+  on?: number | null;
+}
+
+export interface PlacedComponent {
+  placement: ComponentRef;
+  name: string;
+  kind: ComponentKind | null;
+  /** Placed outline, in base coordinates. */
+  d: string;
+}
+
+export interface ComponentSummary {
+  id: string;
+  name: string;
+  kind: ComponentKind;
+  drawn: boolean;
+  uses: number;
+}
 
 export interface DrawingView {
   target: DrawingTarget;
+  /** Pa-height zones for snapping and display. */
+  zones?: Zone[];
+  /** For a base: the components placed on it. */
+  components?: PlacedComponent[];
   title: string;
   subtitle: string;
   contours: Contour[];
@@ -179,6 +228,9 @@ export interface AlterationSummary {
   orders: string[];
   users: number;
   forkedFrom?: string;
+  /** Deforms: the zone it lands on and how far it pulls (null: automatic). */
+  zone?: string;
+  amount?: number;
 }
 
 export type Effect = "regenerates" | "regenerates-keeping-nudges" | "untouched";
@@ -250,6 +302,16 @@ export const api = {
   setFontProperties: (info: FontInfo, paTop: number, paBottom: number) =>
     invoke<void>("set_font_properties", { info, paTop, paBottom }),
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
+  setRuleVariant: (family: string, order: string, variant: number) =>
+    invoke<FidelDetail>("set_rule_variant", { family, order, variant }),
+  setDeform: (id: string, zone: string | null, amount: number | null) => invoke<void>("set_deform", { id, zone, amount }),
+  setZone: (id: string, position: number, name?: string) =>
+    invoke<Zone[]>("set_zone", { id, name: name ?? null, position }),
+  listComponents: () => invoke<ComponentSummary[]>("list_components"),
+  addComponent: (name: string, kind: ComponentKind) => invoke<string>("add_component", { name, kind }),
+  removeComponent: (id: string) => invoke<void>("remove_component", { id }),
+  setBaseComponents: (base: string, placements: ComponentRef[]) =>
+    invoke<void>("set_base_components", { base, placements }),
 };
 
 export function sameTarget(a: DrawingTarget | null, b: DrawingTarget | null): boolean {

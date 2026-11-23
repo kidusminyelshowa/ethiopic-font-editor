@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::alteration::{Alteration, AlterationId};
 use crate::base::{Base, BaseId};
 use crate::charset::{CharSet, Language};
+use crate::component::{Component, ComponentId};
 use crate::fidel::{
     merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, Source, StateKind,
 };
@@ -22,11 +23,96 @@ pub struct Metrics {
     pub units_per_em: u16,
     pub pa_top: f64,
     pub pa_bottom: f64,
+    /// Pa-height zones the designer moved or added. Built-in zones not listed
+    /// here sit at their default height; see [`Metrics::zones`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<Zone>,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        Metrics { units_per_em: 1000, pa_top: 700.0, pa_bottom: 0.0 }
+        Metrics { units_per_em: 1000, pa_top: 700.0, pa_bottom: 0.0, zones: Vec::new() }
+    }
+}
+
+/// A height inside the Pa band where a kind of alteration lands: shortened
+/// legs end on the same line, cricks bend at the same height, and so on
+/// ("to similar alteration, similar positioning"). Stored as a fraction of
+/// the Pa-height so zones follow when the Pa lines move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Zone {
+    pub id: String,
+    pub name: String,
+    /// 0 is Pa-bottom, 1 is Pa-top.
+    pub at: f64,
+    /// Snapping band around the zone, as a fraction of the Pa-height.
+    #[serde(default = "default_zone_size")]
+    pub size: f64,
+}
+
+fn default_zone_size() -> f64 {
+    0.04
+}
+
+pub const ZONE_SHORT_LEG: &str = "short-leg";
+pub const ZONE_CRICK: &str = "crick";
+pub const ZONE_STRETCH: &str = "stretch";
+
+/// The built-in zones.
+pub fn default_zones() -> Vec<Zone> {
+    let z = |id: &str, name: &str, at: f64| Zone {
+        id: id.into(),
+        name: name.into(),
+        at,
+        size: default_zone_size(),
+    };
+    vec![z(ZONE_SHORT_LEG, "Short leg", 0.4), z(ZONE_STRETCH, "Stretch", 0.45), z(ZONE_CRICK, "Crick", 0.3)]
+}
+
+impl Metrics {
+    pub fn pa_height(&self) -> f64 {
+        self.pa_top - self.pa_bottom
+    }
+
+    /// Every zone: the built-in ones (moved where the designer moved them)
+    /// and any the designer added.
+    pub fn zones(&self) -> Vec<Zone> {
+        let mut out = default_zones();
+        for z in &self.zones {
+            match out.iter_mut().find(|d| d.id == z.id) {
+                Some(d) => *d = z.clone(),
+                None => out.push(z.clone()),
+            }
+        }
+        out
+    }
+
+    pub fn zone(&self, id: &str) -> Option<Zone> {
+        self.zones().into_iter().find(|z| z.id == id)
+    }
+
+    /// Height of a zone in font units.
+    pub fn zone_y(&self, id: &str) -> Option<f64> {
+        self.zone(id).map(|z| self.pa_bottom + z.at * self.pa_height())
+    }
+
+    /// Move a zone (or add one), given its height in font units.
+    pub fn set_zone(&mut self, id: &str, name: Option<&str>, y: f64) {
+        let h = self.pa_height().max(1.0);
+        let mut z = self.zone(id).unwrap_or(Zone {
+            id: id.into(),
+            name: name.unwrap_or(id).into(),
+            at: 0.0,
+            size: default_zone_size(),
+        });
+        if let Some(n) = name {
+            z.name = n.into();
+        }
+        z.at = (y - self.pa_bottom) / h;
+        match self.zones.iter_mut().find(|s| s.id == id) {
+            Some(s) => *s = z,
+            None => self.zones.push(z),
+        }
     }
 }
 
@@ -72,6 +158,9 @@ pub struct Project {
     /// Standalone glyphs: punctuation, numerals, combining marks.
     #[serde(default)]
     pub symbols: BTreeMap<SymbolId, Symbol>,
+    /// Leaves, caps and corners, drawn once and placed on bases.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<ComponentId, Component>,
 }
 
 pub type SymbolId = String;
@@ -116,6 +205,12 @@ pub enum ModelError {
     InvalidContour { contour: u32, problem: ContourProblem },
     #[error("two contours share the id {0}")]
     DuplicateContourId(u32),
+    #[error("no component `{0}`")]
+    UnknownComponent(ComponentId),
+    #[error("the {0:?} rule has no variant {1}")]
+    NoSuchVariant(Order, usize),
+    #[error("two component placements share the id {0}")]
+    DuplicatePlacementId(u32),
 }
 
 /// A drawing the glyph editor can open: a base, an alteration, a symbol, or
@@ -127,6 +222,7 @@ pub enum DrawingTarget {
     Alteration(AlterationId),
     Symbol(SymbolId),
     Fidel(String),
+    Component(ComponentId),
 }
 
 impl DrawingTarget {
@@ -196,6 +292,11 @@ impl Project {
                 .get(id)
                 .map(|s| s.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
+            DrawingTarget::Component(id) => self
+                .components
+                .get(id)
+                .map(|c| c.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownComponent(id.clone())),
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
                 match &self.fidel(&family, order)?.state {
@@ -230,6 +331,13 @@ impl Project {
             }
             DrawingTarget::Symbol(id) => {
                 &mut self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.contours
+            }
+            DrawingTarget::Component(id) => {
+                &mut self
+                    .components
+                    .get_mut(id)
+                    .ok_or_else(|| ModelError::UnknownComponent(id.clone()))?
+                    .contours
             }
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
@@ -352,6 +460,9 @@ impl Project {
                         Some(self.alterations.get(id).map_or_else(|| id.clone(), |a| a.name.clone()))
                     }
                     Source::Own => None,
+                    Source::Component(_) => Some(
+                        rc.contour.part.map_or("Component".to_string(), |p| capitalise(&format!("{p:?}"))),
+                    ),
                 });
                 Contour { id: i as u32, name, ..rc.contour }
             })
@@ -488,6 +599,87 @@ impl Project {
             .get(family)
             .map(|f| f.fidels.iter().filter(|(_, x)| x.built_on == Some(order)).map(|(o, _)| *o).collect())
             .unwrap_or_default()
+    }
+
+    /// Pick which variant of an order rule this family uses (Hornus: the 4th
+    /// order shortens the left leg in most families and stretches the stem
+    /// in ቃ ታ ና). Variant 0 is the rule's default.
+    pub fn set_rule_variant(&mut self, family: &str, order: Order, variant: usize) -> Result<(), ModelError> {
+        let count = self.order_rules.get(&order).map_or(0, |r| r.variants.len());
+        if variant >= count.max(1) {
+            return Err(ModelError::NoSuchVariant(order, variant));
+        }
+        let fam = self.families.get_mut(family).ok_or_else(|| ModelError::UnknownFamily(family.into()))?;
+        if variant == 0 {
+            fam.rule_variants.remove(&order);
+        } else {
+            fam.rule_variants.insert(order, variant);
+        }
+        Ok(())
+    }
+
+    /// Set where a deforming alteration lands and how far it pulls.
+    pub fn set_deform(
+        &mut self,
+        alteration: &str,
+        zone: Option<String>,
+        amount: Option<f64>,
+    ) -> Result<(), ModelError> {
+        let alt = self
+            .alterations
+            .get_mut(alteration)
+            .ok_or_else(|| ModelError::UnknownAlteration(alteration.into()))?;
+        alt.zone = zone;
+        alt.amount = amount;
+        Ok(())
+    }
+
+    /// Add an empty component and return its id.
+    pub fn add_component(&mut self, name: &str, kind: crate::component::ComponentKind) -> ComponentId {
+        let stem: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let stem = if stem.is_empty() { format!("{kind:?}").to_lowercase() } else { stem };
+        let mut id = stem.clone();
+        let mut n = 2;
+        while self.components.contains_key(&id) {
+            id = format!("{stem}-{n}");
+            n += 1;
+        }
+        self.components
+            .insert(id.clone(), Component { id: id.clone(), name: name.into(), kind, contours: Vec::new() });
+        id
+    }
+
+    /// Remove a component and every placement of it.
+    pub fn remove_component(&mut self, id: &str) -> Result<(), ModelError> {
+        self.components.remove(id).ok_or_else(|| ModelError::UnknownComponent(id.into()))?;
+        for b in self.bases.values_mut() {
+            b.components.retain(|r| r.component != id);
+        }
+        Ok(())
+    }
+
+    /// Replace the component placements on a base.
+    pub fn set_base_components(
+        &mut self,
+        base: &str,
+        refs: Vec<crate::component::ComponentRef>,
+    ) -> Result<(), ModelError> {
+        let mut ids = std::collections::HashSet::new();
+        for r in &refs {
+            if !self.components.contains_key(&r.component) {
+                return Err(ModelError::UnknownComponent(r.component.clone()));
+            }
+            if !ids.insert(r.id) {
+                return Err(ModelError::DuplicatePlacementId(r.id));
+            }
+        }
+        self.bases.get_mut(base).ok_or_else(|| ModelError::UnknownBase(base.into()))?.components = refs;
+        Ok(())
     }
 }
 
