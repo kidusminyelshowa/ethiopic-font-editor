@@ -1,8 +1,8 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
 use fidel_core::{
-    charset, svg_path, Badge, CharSet, FidelState, IrregularForm, Language, Metrics, ModelError, Order,
-    Project, ShapeGroup, StateKind,
+    charset, svg_path, Badge, CharSet, FidelState, Language, Metrics, ModelError, Order, Project, ShapeGroup,
+    StateKind,
 };
 use serde::Serialize;
 
@@ -141,7 +141,9 @@ impl FidelGrid {
                     .map(|(&order, fidel)| {
                         let state = fidel.state.kind();
                         let note = match &fidel.state {
-                            FidelState::Irregular { note, .. } => note.clone(),
+                            FidelState::Detached { contours } if contours.is_empty() => {
+                                Some("Drawn by hand: not drawn yet".to_string())
+                            }
                             _ => None,
                         };
                         GridCell {
@@ -254,10 +256,10 @@ pub struct FidelDetail {
     built_on_by: Vec<OrderRef>,
     /// Orders this fidel could be built on; empty when it is drawn by hand.
     built_on_choices: Vec<OrderRef>,
-    /// Detached or drawn Irregular: the editor opens its own outline.
+    /// Drawn by hand ("Draw it"): the editor opens its own outline.
     drawn_by_hand: bool,
-    /// The order rule's variants, when it has more than one, and which one
-    /// this family uses.
+    /// The forms of this order, and which one this family uses. "Draw it"
+    /// is not listed: it is `drawn_by_hand`.
     variants: Vec<VariantView>,
     variant: usize,
 }
@@ -266,7 +268,7 @@ pub struct FidelDetail {
 #[serde(rename_all = "camelCase")]
 pub struct VariantView {
     index: usize,
-    /// The variant's alteration names, joined.
+    /// The form's name, or its alteration names joined.
     label: String,
 }
 
@@ -292,7 +294,9 @@ impl FidelDetail {
         let fam = &project.families[family];
         let state = fidel.state.kind();
         let note = match &fidel.state {
-            FidelState::Irregular { note, .. } => note.clone(),
+            FidelState::Detached { contours } if contours.is_empty() => Some(
+                "Drawn by hand: not drawn yet. It shows the generated form until you draw it.".to_string(),
+            ),
             _ => None,
         };
         let recipe = match state {
@@ -316,10 +320,7 @@ impl FidelDetail {
             codepoint: fam.fidels.get(&o).and_then(|f| f.codepoint),
         };
         // A Detached or drawn fidel ignores its link, so there is nothing to show.
-        let generated = !matches!(
-            fidel.state,
-            FidelState::Detached { .. } | FidelState::Irregular { form: IrregularForm::Drawn { .. }, .. }
-        );
+        let generated = !matches!(fidel.state, FidelState::Detached { .. });
         Ok(FidelDetail {
             built_on: fidel.built_on.filter(|_| generated).map(order_ref),
             built_on_by: project.built_on_by(family, order).into_iter().map(order_ref).collect(),
@@ -347,17 +348,20 @@ impl FidelDetail {
             recipe,
             nudge_count: fidel.state.nudges().len(),
             variants: match project.order_rules.get(&order) {
-                Some(rule) if rule.variants.len() > 1 => rule
+                Some(rule) if order != Order::Giiz => rule
                     .variants
                     .iter()
                     .enumerate()
                     .map(|(index, ids)| VariantView {
                         index,
-                        label: ids
-                            .iter()
-                            .map(|id| project.alterations.get(id).map_or(id.as_str(), |a| a.name.as_str()))
-                            .collect::<Vec<_>>()
-                            .join(" + "),
+                        label: rule.name(index).map(str::to_string).unwrap_or_else(|| {
+                            ids.iter()
+                                .map(|id| {
+                                    project.alterations.get(id).map_or(id.as_str(), |a| a.name.as_str())
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" + ")
+                        }),
                     })
                     .collect(),
                 _ => Vec::new(),
@@ -384,7 +388,7 @@ mod tests {
         assert_eq!(mu.codepoint, Some('ሙ'));
         assert_eq!(mu.badge, Badge::None, "ሙ is መ with the 2nd-order mark");
         let ru = &grid.rows[5].cells[1];
-        assert_eq!(ru.badge, Badge::Outlined);
+        assert_eq!(ru.badge, Badge::Solid, "ሩ is drawn by hand");
     }
 
     #[test]

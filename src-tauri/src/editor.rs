@@ -1,8 +1,8 @@
 //! What the glyph editor reads and writes.
 
 use fidel_core::{
-    Alteration, Change, ComponentKind, ComponentRef, Contour, DrawingTarget, Effect, Metrics, ModelError,
-    Order, Project, StateKind, Vec2, Verb,
+    Alteration, Change, ComponentKind, ComponentRef, Contour, DeformHandle, DrawingTarget, Effect,
+    FidelState, Metrics, ModelError, Order, Project, StateKind, Vec2, Verb,
 };
 use serde::Serialize;
 
@@ -28,6 +28,11 @@ pub struct DrawingView {
     /// For a base: the components placed on it.
     #[serde(skip_serializing_if = "Option::is_none")]
     components: Option<Vec<PlacedComponent>>,
+    /// A generated fidel opened in place: points can be moved (they become
+    /// nudges) but not added or removed.
+    generated: bool,
+    /// For a generated fidel: the ends of its deformed strokes, to drag.
+    handles: Vec<DeformHandle>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +42,12 @@ pub struct ZoneView {
     name: String,
     position: f64,
     size: f64,
+}
+
+/// The name of the form a family uses for an order ("Short left leg").
+pub fn form_name(project: &Project, family: &str, order: Order) -> String {
+    let v = project.families.get(family).and_then(|f| f.rule_variants.get(&order).copied()).unwrap_or(0);
+    project.order_rules.get(&order).and_then(|r| r.name(v)).unwrap_or("Generated").to_string()
 }
 
 pub fn zone_views(metrics: &Metrics) -> Vec<ZoneView> {
@@ -127,7 +138,29 @@ impl DrawingView {
         target: DrawingTarget,
         context_family: Option<&str>,
     ) -> Result<Self, ModelError> {
-        let contours = project.drawing(&target)?.to_vec();
+        let mut generated = false;
+        let contours = match &target {
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                match &project.fidel(&family, order)?.state {
+                    // Drawn by hand.
+                    FidelState::Detached { contours } if !contours.is_empty() => contours.clone(),
+                    // "Draw it" with nothing drawn yet: start from what it
+                    // generates.
+                    FidelState::Detached { .. } => {
+                        let mut copy = project.clone();
+                        copy.detach(&family, order)?;
+                        copy.drawing(&target)?.to_vec()
+                    }
+                    // Generated: edited in place, moved points become nudges.
+                    _ => {
+                        generated = true;
+                        project.generated_outline(&family, order)?
+                    }
+                }
+            }
+            _ => project.drawing(&target)?.to_vec(),
+        };
         let metrics = project.metrics.clone();
         Ok(match &target {
             DrawingTarget::Base(id) => {
@@ -147,6 +180,8 @@ impl DrawingView {
                     context: None,
                     components: Some(placed_components(project, id)),
                     zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
                     target,
                     contours,
                     metrics,
@@ -161,6 +196,8 @@ impl DrawingView {
                     context: context_ghost(project, alt, context_family),
                     components: None,
                     zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
                     target,
                     contours,
                     metrics,
@@ -174,11 +211,17 @@ impl DrawingView {
                     title: format!("{} {}", fam.name, r.codepoint.map(String::from).unwrap_or_default())
                         .trim()
                         .to_string(),
-                    subtitle: format!("{} · drawn by hand", order.name()),
+                    subtitle: if generated {
+                        format!("{} · {}", order.name(), form_name(project, &family, order))
+                    } else {
+                        format!("{} · drawn by hand", order.name())
+                    },
                     advance_width: None,
                     context: None,
                     components: None,
                     zones: zone_views(&metrics),
+                    generated,
+                    handles: if generated { r.handles.clone() } else { Vec::new() },
                     target,
                     contours,
                     metrics,
@@ -193,6 +236,8 @@ impl DrawingView {
                     context: None,
                     components: None,
                     zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
                     target,
                     contours,
                     metrics,
@@ -212,6 +257,8 @@ impl DrawingView {
                     context: None,
                     components: None,
                     zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
                     target,
                     contours,
                     metrics,

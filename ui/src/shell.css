@@ -1990,3 +1990,26 @@ body.editing .side-list {
 .rules-box > * { width: 100%; }
 .side-box > .placement, .side-box > .zone-select { flex-basis: 100%; }
 .variant-order { font-size: 11px; font-weight: 600; color: var(--ink-faint); }
+
+/* A mark the fidel uses that has not been drawn yet. */
+.pill.undrawn {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+/* Deform handles on a generated fidel: drag to move where a short leg ends. */
+.deform-handle {
+  fill: var(--card, #fff);
+  stroke: var(--orange, #c2442a);
+  stroke-width: 2;
+  cursor: ns-resize;
+}
+
+.deform-handle.sideways {
+  cursor: ew-resize;
+}
+
+.deform-handle:hover,
+.deform-handle.active {
+  fill: var(--orange, #c2442a);
+}

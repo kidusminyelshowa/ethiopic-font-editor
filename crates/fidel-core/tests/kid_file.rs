@@ -30,7 +30,7 @@ fn sample() -> Project {
     )
     .unwrap();
     p.detach("ha", Order::Sabi).unwrap();
-    p.mark_irregular("ha", Order::Salis, Some("custom".into())).unwrap();
+    p.draw_by_hand("ha", Order::Salis).unwrap();
     p.families.get_mut("ta").unwrap().rule_variants.insert(Order::Rabi, 1);
     p.metrics.pa_top = 720.0;
     p

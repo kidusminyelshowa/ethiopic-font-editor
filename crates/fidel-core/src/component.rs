@@ -2,9 +2,12 @@
 //! Hornus's leafs are the Ethiopic counterpart of serifs; drawing them once
 //! keeps every terminal in the font the same.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::{Contour, ContourId, PointKind, Vec2};
+use crate::parts::Part;
 
 pub type ComponentId = String;
 
@@ -28,6 +31,52 @@ pub struct Component {
     pub kind: ComponentKind,
     #[serde(default)]
     pub contours: Vec<Contour>,
+    /// Placed by rule on both ends of every stroke tagged with one of these
+    /// parts, mirrored on the left end. A leaf is drawn for the right-hand
+    /// end of a bar, with the bar's top corner at the origin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lands_on: Vec<Part>,
+    /// Ends switched off, as `base/contour:side` or
+    /// `alteration/contour:side` (side `l` or `r`).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub off: BTreeSet<String>,
+}
+
+impl Component {
+    pub fn new(id: impl Into<ComponentId>, name: impl Into<String>, kind: ComponentKind) -> Self {
+        Component {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            contours: Vec::new(),
+            lands_on: match kind {
+                ComponentKind::Leaf => vec![Part::Bar, Part::Branch],
+                _ => Vec::new(),
+            },
+            off: BTreeSet::new(),
+        }
+    }
+
+    /// Where this component lands by rule on a stroke `owner/contour`: its
+    /// right end, then its left end mirrored. Each comes with its key.
+    pub fn ends(&self, owner: &str, contour: &Contour) -> Vec<(String, ComponentRef)> {
+        if self.contours.is_empty() || !contour.part.is_some_and(|p| self.lands_on.contains(&p)) {
+            return Vec::new();
+        }
+        let Some(b) = contour.bounds() else { return Vec::new() };
+        let mut out = Vec::new();
+        for (side, x, flip) in [("r", b.max.x, false), ("l", b.min.x, true)] {
+            let key = format!("{owner}/{}:{side}", contour.id);
+            if self.off.contains(&key) {
+                continue;
+            }
+            let mut r = ComponentRef::new(0, self.id.clone(), Vec2::new(x, b.max.y));
+            r.flip_x = flip;
+            r.on = Some(contour.id);
+            out.push((key, r));
+        }
+        out
+    }
 }
 
 /// One placement of a component on a base.
@@ -157,12 +206,7 @@ mod tests {
                 Point::curve(4, 0.0, 100.0),
             ],
         );
-        let comp = Component {
-            id: "leaf".into(),
-            name: "Leaf".into(),
-            kind: ComponentKind::Leaf,
-            contours: vec![c],
-        };
+        let comp = Component { contours: vec![c], ..Component::new("leaf", "Leaf", ComponentKind::Leaf) };
         let mut r = ComponentRef::new(0, "leaf", Vec2::ZERO);
         r.flip_x = true;
         let placed = &r.place(&comp)[0];
@@ -174,5 +218,24 @@ mod tests {
         assert_eq!(placed.points[4].kind, PointKind::Curve);
         assert_eq!(placed.points[1].kind, PointKind::Line);
         assert_eq!(placed.points[0].kind, PointKind::Line);
+    }
+
+    #[test]
+    fn a_leaf_lands_on_both_ends_of_a_bar() {
+        let leaf = Contour::rect(0, Some(Part::Leaf), Vec2::new(-20.0, -30.0), Vec2::new(0.0, 0.0));
+        let mut comp =
+            Component { contours: vec![leaf], ..Component::new("leaf", "Leaf", ComponentKind::Leaf) };
+        let bar = Contour::rect(3, Some(Part::Bar), Vec2::new(50.0, 640.0), Vec2::new(460.0, 700.0));
+        let ends = comp.ends("ta", &bar);
+        assert_eq!(ends.len(), 2);
+        assert_eq!(ends[0].0, "ta/3:r");
+        assert_eq!(ends[0].1.at, Vec2::new(460.0, 700.0));
+        let left = ends[1].1.place(&comp)[0].bounds().unwrap();
+        assert_eq!((left.min.x, left.max.x), (50.0, 70.0));
+        // Not on legs, and an end can be switched off.
+        let leg = Contour::rect(1, Some(Part::Leg), Vec2::new(0.0, 0.0), Vec2::new(60.0, 700.0));
+        assert!(comp.ends("ta", &leg).is_empty());
+        comp.off.insert("ta/3:l".into());
+        assert_eq!(comp.ends("ta", &bar).len(), 1);
     }
 }

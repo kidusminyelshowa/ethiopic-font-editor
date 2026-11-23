@@ -1,7 +1,9 @@
 //! M2: the deforming orders, rule variants per family, Pa-height zones and
 //! components.
 
-use fidel_core::defaults::{geez_project, SHORTEN_LEFT_LEG, SHORTEN_RIGHT_LEG, STRETCH_STEM};
+use fidel_core::defaults::{
+    geez_project, LOOP_TOP_RIGHT, RING_ON_BAR, SHORTEN_LEFT_LEG, SHORTEN_RIGHT_LEG, STRETCH_STEM,
+};
 use fidel_core::*;
 
 /// Every base: a stem on the left, a leg on the right, a bar on top.
@@ -40,43 +42,127 @@ fn fourth_order_shortens_the_left_leg_onto_its_zone() {
 }
 
 #[test]
-fn tawe_stretches_its_stem_instead() {
+fn tawe_sweeps_its_stem_left_instead() {
     let p = project();
     assert_eq!(p.families["ta"].rule_variants.get(&Order::Rabi), Some(&1));
     assert_eq!(p.effective_alterations("ta", Order::Rabi).unwrap(), vec![STRETCH_STEM.to_string()]);
     assert_eq!(p.effective_alterations("la", Order::Rabi).unwrap(), vec![SHORTEN_LEFT_LEG.to_string()]);
     let r = p.resolve("ta", Order::Rabi).unwrap();
-    // The right-hand stroke reaching the bottom leans out to the right.
-    assert!(stroke(&r, 1).max.x > 460.0);
-    assert!(r.advance_width > 560.0);
+    // The stroke reaching the bottom on the left sweeps out to the left and
+    // under the baseline.
+    assert!(stroke(&r, 0).min.x < 50.0);
+    assert!(stroke(&r, 0).min.y < 0.0);
 }
 
 #[test]
-fn seventh_order_variant_shortens_the_right_leg() {
+fn seventh_order_shortens_the_right_leg_or_rings_the_top() {
     let mut p = project();
-    let r = p.resolve("la", Order::Sabi).unwrap();
-    assert_eq!(stroke(&r, 1).min.y, 0.0);
-
-    p.set_rule_variant("la", Order::Sabi, 1).unwrap();
-    assert_eq!(p.effective_alterations("la", Order::Sabi).unwrap(), vec![SHORTEN_RIGHT_LEG.to_string()]);
-    let r = p.resolve("la", Order::Sabi).unwrap();
-    assert_eq!(stroke(&r, 1).min.y, p.metrics.zone_y("short-leg").unwrap());
+    // ሶ: the right leg ends on the zone, the left one stays.
+    let r = p.resolve("sa", Order::Sabi).unwrap();
+    assert_eq!(p.effective_alterations("sa", Order::Sabi).unwrap(), vec![SHORTEN_RIGHT_LEG.to_string()]);
+    assert!((stroke(&r, 1).min.y - p.metrics.zone_y("short-leg").unwrap()).abs() < 1e-9);
     assert_eq!(stroke(&r, 0).min.y, 0.0);
+    // ቶ and ሆ get a ring instead; ሎ a ring on a short bar.
+    assert_eq!(p.effective_alterations("ta", Order::Sabi).unwrap(), vec![LOOP_TOP_RIGHT.to_string()]);
+    assert_eq!(p.effective_alterations("ha", Order::Sabi).unwrap(), vec![LOOP_TOP_RIGHT.to_string()]);
+    assert_eq!(p.effective_alterations("la", Order::Sabi).unwrap(), vec![RING_ON_BAR.to_string()]);
+    // ሞ is drawn by hand.
+    assert_eq!(p.fidel("ma", Order::Sabi).unwrap().state.kind(), StateKind::Detached);
 
-    assert!(p.set_rule_variant("la", Order::Sabi, 2).is_err());
-    p.set_rule_variant("la", Order::Sabi, 0).unwrap();
-    assert!(!p.families["la"].rule_variants.contains_key(&Order::Sabi));
+    p.set_rule_variant("sa", Order::Sabi, 1).unwrap();
+    assert_eq!(p.effective_alterations("sa", Order::Sabi).unwrap(), vec![LOOP_TOP_RIGHT.to_string()]);
+    assert!(p.set_rule_variant("sa", Order::Sabi, 9).is_err());
+    p.set_rule_variant("sa", Order::Sabi, 0).unwrap();
+    assert!(!p.families["sa"].rule_variants.contains_key(&Order::Sabi));
 }
 
 #[test]
-fn sixth_order_crick_amount_is_editable() {
+fn hawt_shortens_every_leg_but_one() {
     let mut p = project();
-    let r = p.resolve("la", Order::Sadis).unwrap();
-    let default_dx = 50.0 - stroke(&r, 0).min.x;
-    assert!(default_dx > 0.0);
-    p.set_deform(defaults::CRICK_FIRST_STROKE, Some("crick".into()), Some(100.0)).unwrap();
-    let r = p.resolve("la", Order::Sadis).unwrap();
+    // ሐ: a third leg in the middle.
+    let base = p.bases.get_mut("hha").unwrap();
+    base.contours.push(Contour::rect(3, Some(Part::Leg), Vec2::new(230.0, 0.0), Vec2::new(290.0, 700.0)));
+    let y = p.metrics.zone_y("short-leg").unwrap();
+    let r = p.resolve("hha", Order::Rabi).unwrap();
+    assert!((stroke(&r, 0).min.y - y).abs() < 1e-9);
+    assert!((stroke(&r, 3).min.y - y).abs() < 1e-9);
+    assert_eq!(stroke(&r, 1).min.y, 0.0);
+    let r = p.resolve("hha", Order::Sabi).unwrap();
+    assert_eq!(stroke(&r, 0).min.y, 0.0);
+    assert!((stroke(&r, 3).min.y - y).abs() < 1e-9);
+    assert!((stroke(&r, 1).min.y - y).abs() < 1e-9);
+}
+
+#[test]
+fn a_family_moves_its_own_short_leg() {
+    let mut p = project();
+    let y = p.metrics.zone_y("short-leg").unwrap();
+    p.set_attach_offset("sa", SHORTEN_LEFT_LEG, Vec2::new(0.0, 40.0)).unwrap();
+    let r = p.resolve("sa", Order::Rabi).unwrap();
+    assert!((stroke(&r, 0).min.y - (y + 40.0)).abs() < 1e-9);
+    // Other families keep the shared height.
+    let r = p.resolve("ba", Order::Rabi).unwrap();
+    assert!((stroke(&r, 0).min.y - y).abs() < 1e-9);
+}
+
+#[test]
+fn sixth_order_forms() {
+    let mut p = project();
+    // ብ: the foot flicks left; its throw is editable.
+    let r = p.resolve("ba", Order::Sadis).unwrap();
+    assert!(stroke(&r, 0).min.x < 50.0);
+    p.set_deform(defaults::FOOT_FLICK, Some("crick".into()), Some(100.0)).unwrap();
+    let r = p.resolve("ba", Order::Sadis).unwrap();
     assert_eq!(stroke(&r, 0).min.x, -50.0);
+    // ስ: the first stroke cricks at the top, its foot stays.
+    let r = p.resolve("sa", Order::Sadis).unwrap();
+    assert!(stroke(&r, 0).min.x < 50.0);
+    // ል: a ring at the foot.
+    assert_eq!(
+        p.effective_alterations("la", Order::Sadis).unwrap(),
+        vec![defaults::LOOP_BOTTOM_LEFT.to_string()]
+    );
+}
+
+#[test]
+fn leaves_land_on_bar_ends_and_follow_them() {
+    let mut p = project();
+    let leaf = p.add_component("Leaf", ComponentKind::Leaf);
+    p.set_drawing(
+        &DrawingTarget::Component(leaf.clone()),
+        vec![Contour::rect(0, Some(Part::Leaf), Vec2::new(-20.0, -40.0), Vec2::new(0.0, 0.0))],
+    )
+    .unwrap();
+    let leaves = |r: &ResolvedFidel| {
+        r.contours
+            .iter()
+            .filter(|c| matches!(c.source, Source::Leaf(_)))
+            .filter_map(|c| c.contour.bounds())
+            .collect::<Vec<_>>()
+    };
+    // Every base has a bar: a leaf on each end, none on the legs.
+    let r = p.resolve("ta", Order::Giiz).unwrap();
+    let l = leaves(&r);
+    assert_eq!(l.len(), 2);
+    assert!(l.iter().any(|b| b.max.x == 460.0 && b.max.y == 700.0));
+    assert!(l.iter().any(|b| b.min.x == 50.0 && b.max.y == 700.0));
+    // Built on another order, the leaves are not doubled.
+    assert_eq!(leaves(&p.resolve("ha", Order::Salis).unwrap()).len(), 2);
+    // One end switched off.
+    p.components.get_mut(&leaf).unwrap().off.insert("ta/2:l".into());
+    assert_eq!(leaves(&p.resolve("ta", Order::Giiz).unwrap()).len(), 1);
+}
+
+#[test]
+fn old_irregular_fidel_load_as_drawn_or_generated() {
+    let drawn: FidelState =
+        serde_json::from_str(r#"{"state":"irregular","form":{"form":"drawn","contours":[]},"note":"x"}"#)
+            .unwrap();
+    assert_eq!(drawn, FidelState::Detached { contours: vec![] });
+    let recipe: FidelState =
+        serde_json::from_str(r#"{"state":"irregular","form":{"form":"recipe","alterations":["a"]}}"#)
+            .unwrap();
+    assert_eq!(recipe, FidelState::Linked);
 }
 
 #[test]

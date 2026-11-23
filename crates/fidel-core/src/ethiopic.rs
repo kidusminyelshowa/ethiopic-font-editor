@@ -1,5 +1,5 @@
 //! Script data: the 26 Ge'ez families, their Unicode layout, Hornus's shape
-//! groups, and the built-in table of pre-flagged irregular forms.
+//! groups, and which form of each order every family uses.
 
 use serde::{Deserialize, Serialize};
 
@@ -72,20 +72,6 @@ pub const GEEZ_FAMILIES: [GeezFamily; 26] = [
     fam!("pa", "Psa", 0x1350, StemBased),
 ];
 
-/// Built-in irregular forms: fidel whose alteration cannot be deduced from the
-/// order rule: ሩ and ፉ. ሙ is not one: it is መ with the 2nd-order mark. Hornus notes
-/// that many 4th and 7th orders "have to be considered individually"; those
-/// are left for the designer to flag, since the right list depends on the
-/// design.
-pub const DEFAULT_IRREGULARS: &[(char, &str)] = &[
-    ('ሩ', "2nd order does not follow the middle-right stroke rule"),
-    ('ፉ', "2nd order does not follow the middle-right stroke rule"),
-];
-
-pub fn default_irregular_note(c: char) -> Option<&'static str> {
-    DEFAULT_IRREGULARS.iter().find(|(ch, _)| *ch == c).map(|(_, note)| *note)
-}
-
 /// Built-in "built on" links: fidel drawn from another order of their family
 /// rather than from the bare base. From the derivation map of Noto Sans,
 /// Noto Serif and Abyssinica SIL: in the families whose 4th order changes the
@@ -108,11 +94,77 @@ pub const DEFAULT_BUILT_ON: &[(char, char)] = &[
     ('ፄ', 'ፃ'),
 ];
 
-/// Families that use another variant of an order rule than the default:
-/// (family id, order, variant). Hornus: the 4th order of ቀ ተ ነ stretches the
-/// stem instead of shortening the left leg.
-pub const DEFAULT_RULE_VARIANTS: &[(&str, Order, usize)] =
-    &[("qa", Order::Rabi, 1), ("ta", Order::Rabi, 1), ("na", Order::Rabi, 1)];
+/// How a family forms one order: a form from the order's list (see
+/// [`crate::defaults::hornus_order_rules`]), or drawn by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    Variant(usize),
+    Draw,
+}
+
+use Form::{Draw, Variant};
+
+/// Which form each family uses, by order, read off Noto Sans Ethiopic, Noto
+/// Serif Ethiopic and Abyssinica SIL. Families not listed for an order use
+/// its first form. The Extended rows follow their parent row.
+pub const DEFAULT_FORMS: &[(Order, Form, &[&str])] = &[
+    // ሩ ፉ: the 2nd-order stroke takes a shape of its own.
+    (Order::Kaib, Draw, &["ra", "fa"]),
+    // ራብዕ: 0 short left leg (the default), 1 stem sweeps left, 2 short left
+    // and middle legs, 3 head turns down, 4 a leg on the right (ሃ ማ ሣ ዋ ዓ ፃ).
+    (Order::Rabi, Variant(1), &["qa", "qha", "ta", "ca", "xa", "ga", "gga", "pa", "ya", "cca", "qya", "gya"]),
+    (Order::Rabi, Variant(2), &["hha", "tha", "cha", "ccha", "cchha", "hhya"]),
+    (Order::Rabi, Variant(3), &["na", "nya"]),
+    (Order::Rabi, Variant(4), &["ha", "ma", "sza", "wa", "pharyngeal-a", "tza"]),
+    (Order::Rabi, Draw, &["ra", "fa"]),
+    // ሳድስ: 0 first stroke cricks, 1 tick on top, 2 foot flicks left, 3 ring
+    // at the foot.
+    (
+        Order::Sadis,
+        Variant(1),
+        &[
+            "hha",
+            "qa",
+            "qha",
+            "ta",
+            "ca",
+            "pharyngeal-a",
+            "da",
+            "dda",
+            "ja",
+            "pha",
+            "tsa",
+            "tza",
+            "cca",
+            "qya",
+            "ddha",
+        ],
+    ),
+    (Order::Sadis, Variant(2), &["ba", "va", "bba"]),
+    (Order::Sadis, Variant(3), &["la"]),
+    (
+        Order::Sadis,
+        Draw,
+        &[
+            "ma", "sza", "ra", "xa", "na", "nya", "wa", "ya", "ga", "gga", "fa", "pa", "tha", "cha", "ccha",
+            "cchha", "hhya", "gya",
+        ],
+    ),
+    // ሳብዕ: 0 short right leg (the default), 1 ring on top, 2 short middle
+    // and right legs, 3 a ring on a short bar (ሎ).
+    (Order::Sabi, Variant(1), &["ha", "ra", "qa", "qha", "ta", "ca", "xa", "na", "nya", "gga", "cca", "qya"]),
+    (Order::Sabi, Variant(2), &["hha", "tha", "cha", "ccha", "cchha", "hhya"]),
+    (Order::Sabi, Variant(3), &["la"]),
+    (Order::Sabi, Draw, &["ma", "sza", "wa", "pharyngeal-a", "tza", "fa", "pa", "ya", "ga", "gya"]),
+];
+
+/// The form `family` uses for `order` by default.
+pub fn default_form(family: &str, order: Order) -> Form {
+    DEFAULT_FORMS
+        .iter()
+        .find(|(o, _, fams)| *o == order && fams.contains(&family))
+        .map_or(Variant(0), |(_, f, _)| *f)
+}
 
 /// The fidel `c` is built on by default, if any.
 pub fn default_built_on(c: char) -> Option<char> {
@@ -155,9 +207,18 @@ mod tests {
     }
 
     #[test]
-    fn default_irregulars_are_in_the_ge_ez_grid() {
-        for (c, _) in DEFAULT_IRREGULARS {
-            assert!(GEEZ_FAMILIES.iter().any(|f| Order::ALL.iter().any(|o| f.codepoint(*o) == *c)));
+    fn default_forms_name_each_family_once_per_order() {
+        for order in Order::ALL {
+            let mut seen = HashSet::new();
+            for (_, _, fams) in DEFAULT_FORMS.iter().filter(|(o, _, _)| *o == order) {
+                for f in *fams {
+                    assert!(seen.insert(*f), "{f} twice in {order:?}");
+                }
+            }
         }
+        assert_eq!(default_form("la", Order::Rabi), Form::Variant(0));
+        assert_eq!(default_form("ta", Order::Rabi), Form::Variant(1));
+        assert_eq!(default_form("ma", Order::Sabi), Form::Draw);
+        assert_eq!(default_form("ma", Order::Rabi), Form::Variant(4));
     }
 }

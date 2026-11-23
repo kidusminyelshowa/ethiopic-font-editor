@@ -95,6 +95,11 @@ pub struct Alteration {
     /// follows the stroke width and Pa-height.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount: Option<f64>,
+    /// A deform that acts on every leg reaching the baseline except the one
+    /// at the far side of its region: ሓ shortens its left and middle legs,
+    /// ሖ its middle and right legs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_but_one: bool,
 }
 
 /// Points this close (in font units) count as being on the same edge.

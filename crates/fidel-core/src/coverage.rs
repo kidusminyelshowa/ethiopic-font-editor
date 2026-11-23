@@ -124,12 +124,26 @@ impl Project {
             );
         }
         let fam = self.families.get_mut(family).expect("just ensured");
-        fam.fidels.entry(order).or_insert_with(|| Fidel {
-            codepoint: Some(cp),
-            state: FidelState::Linked,
-            alteration_overrides: BTreeMap::new(),
-            built_on: None,
-        });
+        if !fam.fidels.contains_key(&order) {
+            fam.fidels.insert(
+                order,
+                Fidel {
+                    codepoint: Some(cp),
+                    state: FidelState::Linked,
+                    alteration_overrides: BTreeMap::new(),
+                    built_on: None,
+                },
+            );
+            // Only the new fidel takes its default form: choices made on the
+            // rest of the row stay.
+            let mut one = Family { fidels: BTreeMap::new(), rule_variants: BTreeMap::new(), ..fam.clone() };
+            one.fidels.insert(order, fam.fidels[&order].clone());
+            defaults::apply_default_forms(&mut one);
+            fam.fidels.insert(order, one.fidels.remove(&order).expect("kept"));
+            if let Some(v) = one.rule_variants.get(&order) {
+                fam.rule_variants.entry(order).or_insert(*v);
+            }
+        }
     }
 
     /// ሏ is drawn from ላ, ቈ ቊ ቌ from ቀ, ቋ from ቃ, ሇ from ሎ.

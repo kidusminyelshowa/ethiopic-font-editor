@@ -3,8 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Contour } from "./geometry";
 
-export type StateKind = "linked" | "adjusted" | "irregular" | "detached";
-export type Badge = "none" | "dot" | "outlined" | "solid";
+export type StateKind = "linked" | "adjusted" | "detached";
+export type Badge = "none" | "dot" | "solid";
 export type Part =
   | "stem" | "leg" | "arm" | "bar" | "branch" | "leaf" | "ring" | "bowl" | "diagonal" | "neck" | "break";
 
@@ -138,7 +138,7 @@ export interface FidelDetail {
   builtOn: OrderRef | null;
   builtOnBy: OrderRef[];
   builtOnChoices: OrderRef[];
-  /** Detached or drawn Irregular: opens as its own outline. */
+  /** Drawn by hand: opens as its own outline. */
   drawnByHand: boolean;
   /** The order rule's variants, when it has more than one. */
   variants: { index: number; label: string }[];
@@ -217,6 +217,18 @@ export interface DrawingView {
     /** The automatic attach point, before the family's offset. */
     autoOrigin: { x: number; y: number };
   };
+  /** A generated fidel opened in place: points move (as nudges), none are added or removed. */
+  generated: boolean;
+  /** Ends of deformed strokes on a generated fidel, to drag. */
+  handles: DeformHandle[];
+}
+
+export interface DeformHandle {
+  alteration: string;
+  at: { x: number; y: number };
+  /** Moves up and down (a short leg's end) rather than sideways. */
+  vertical: boolean;
+  offset: { x: number; y: number };
 }
 
 export interface AlterationSummary {
@@ -304,6 +316,9 @@ export const api = {
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
   setRuleVariant: (family: string, order: string, variant: number) =>
     invoke<FidelDetail>("set_rule_variant", { family, order, variant }),
+  /** Pick one of the order's forms, or `null` to draw it by hand. */
+  setForm: (family: string, order: string, variant: number | null) =>
+    invoke<FidelDetail>("set_form", { family, order, variant }),
   setDeform: (id: string, zone: string | null, amount: number | null) => invoke<void>("set_deform", { id, zone, amount }),
   setZone: (id: string, position: number, name?: string) =>
     invoke<Zone[]>("set_zone", { id, name: name ?? null, position }),

@@ -72,18 +72,28 @@ impl Order {
     }
 }
 
-/// Which alterations build an order from its base. An order can have several
-/// variants (Hornus: the 4th order shortens the left leg *or* stretches the
-/// stem); variant 0 is the default and a family can pick another.
+/// Which alterations build an order from its base. An order has several
+/// forms, and which one a family uses depends on the shape of its base: the
+/// 4th order shortens the left leg of ላ but sweeps the stem of ታ. Variant 0
+/// is the default; each family picks its own. Drawing a fidel by hand is
+/// the one form outside this list (see [`crate::FidelState::Detached`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderRule {
     pub order: Order,
     pub variants: Vec<Vec<AlterationId>>,
+    /// A short name per variant ("Short left leg"), shown where a family
+    /// picks its form. Missing names fall back to the alteration names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 impl OrderRule {
     pub fn variant(&self, index: usize) -> Option<&[AlterationId]> {
         self.variants.get(index).map(Vec::as_slice)
+    }
+
+    pub fn name(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str).filter(|n| !n.is_empty())
     }
 }
 

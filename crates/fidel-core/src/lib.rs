@@ -8,9 +8,11 @@
 //! - **Linked**: fully generated; updates automatically.
 //! - **Adjusted**: generated plus local nudges keyed to stable point ids, so
 //!   the nudges survive upstream changes.
-//! - **Irregular**: the rule does not apply; it has its own recipe (still
-//!   reusing parts) or a free drawing.
-//! - **Detached**: redrawn by hand; no longer updates.
+//! - **Detached**: drawn by hand ("Draw it"); no longer updates.
+//!
+//! Which alterations an order uses depends on the family: each order has a
+//! short list of forms (ራብዕ shortens the left leg, or sweeps the stem, ...)
+//! and each family picks one.
 //!
 //! Vocabulary and default rules follow Hornus, *The Ethiopic Writing System: A
 //! Typographic Approach* (2006), sections 2.2 to 3.3.
@@ -39,10 +41,8 @@ pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};
 pub use charset::{CharSet, Language};
 pub use component::{Component, ComponentId, ComponentKind, ComponentRef};
-pub use ethiopic::{GeezFamily, ShapeGroup, GEEZ_FAMILIES};
-pub use fidel::{
-    Badge, Family, FamilyId, Fidel, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind,
-};
+pub use ethiopic::{Form, GeezFamily, ShapeGroup, GEEZ_FAMILIES};
+pub use fidel::{Badge, Family, FamilyId, Fidel, FidelState, Nudge, NudgeTarget, Source, StateKind};
 pub use geometry::{svg_path, Contour, ContourId, ContourProblem, Point, PointId, PointKind, Rect, Vec2};
 pub use order::{Order, OrderRule};
 pub use parts::Part;
@@ -50,5 +50,5 @@ pub use project::FontInfo;
 pub use project::{
     Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project, Symbol, SymbolId, Zone,
 };
-pub use resolve::{Diagnostic, ResolvedContour, ResolvedFidel};
+pub use resolve::{DeformHandle, Diagnostic, ResolvedContour, ResolvedFidel};
 pub use scope::Scope;

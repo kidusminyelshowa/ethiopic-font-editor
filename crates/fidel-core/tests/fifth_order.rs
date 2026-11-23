@@ -140,16 +140,25 @@ fn orphaned_nudges_are_kept_and_reported() {
 }
 
 #[test]
-fn irregulars_are_preflagged_and_keep_their_recipe() {
-    let p = project();
+fn ru_is_drawn_by_hand_and_starts_from_the_rule() {
+    let mut p = project();
     let ru = p.fidel("ra", Order::Kaib).unwrap();
     assert_eq!(ru.codepoint, Some('ሩ'));
-    assert_eq!(ru.state.kind(), StateKind::Irregular);
-    assert_eq!(StateKind::Irregular.badge(), Badge::Outlined);
-    // Changing the base still reaches it, since its recipe reuses the base.
+    assert_eq!(ru.state.kind(), StateKind::Detached);
+    assert_eq!(StateKind::Detached.badge(), Badge::Solid);
+    // Nothing drawn yet: it shows the generated form, and still follows
+    // the base.
+    let r = p.resolve("ra", Order::Kaib).unwrap();
+    assert!(r.diagnostics.contains(&Diagnostic::NotYetDrawn));
+    assert!(r.from_source(&Source::Base).count() > 0);
     let impacts = p.impacts(&Change::Base("ra".into()));
-    assert_eq!(impacts.len(), 7);
     assert!(impacts.iter().all(|i| i.effect == Effect::Regenerates));
+    // Drawing it starts from that outline, and from then on it stays put.
+    p.draw_by_hand("ra", Order::Kaib).unwrap();
+    let FidelState::Detached { contours } = &p.fidel("ra", Order::Kaib).unwrap().state else { panic!() };
+    assert!(!contours.is_empty());
+    let impacts = p.impacts(&Change::Base("ra".into()));
+    assert!(impacts.iter().any(|i| i.order == Order::Kaib && i.effect == Effect::Untouched));
 }
 
 #[test]
@@ -160,33 +169,29 @@ fn undrawn_and_deforming_alterations_are_reported_not_fatal() {
     assert!(r.diagnostics.contains(&Diagnostic::AlterationNotDrawn { alteration: LOOP_BOTTOM_RIGHT.into() }));
 
     let mut p = project();
-    let r = p.resolve("la", Order::Sadis).unwrap();
+    let r = p.resolve("sa", Order::Sadis).unwrap();
     assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
-    // The crick bends the first stroke: the stem's foot moves left.
+    // ስ: the first stroke cricks out to the left.
     let stem = r.from_source(&Source::Base).find(|c| c.id == 0).and_then(Contour::bounds).unwrap();
     assert!(stem.min.x < 50.0);
 
     // Bend is the one verb not built yet; it is reported, not fatal.
     p.alterations.get_mut(defaults::CRICK_FIRST_STROKE).unwrap().verb = Verb::Bend;
-    let r = p.resolve("la", Order::Sadis).unwrap();
+    let r = p.resolve("sa", Order::Sadis).unwrap();
     assert!(matches!(r.diagnostics[..], [Diagnostic::DeformNotApplied { verb: Verb::Bend, .. }]));
 }
 
 #[test]
-fn mark_irregular_keeps_nudges_and_relink_clears() {
+fn picking_a_form_relinks_and_draw_it_bakes() {
     let mut p = project();
     let t = NudgeTarget::Placement { alteration: LOOP_BOTTOM_RIGHT.into() };
     p.nudge("sa", Order::Hamis, t, Vec2::new(3.0, 0.0)).unwrap();
-    p.mark_irregular("sa", Order::Hamis, Some("custom loop".into())).unwrap();
-    let st = &p.fidel("sa", Order::Hamis).unwrap().state;
-    assert_eq!(st.kind(), StateKind::Irregular);
-    assert_eq!(st.nudges().len(), 1);
-    p.relink("sa", Order::Hamis).unwrap();
-    assert_eq!(p.fidel("sa", Order::Hamis).unwrap().state, FidelState::Linked);
-
-    p.detach("sa", Order::Hamis).unwrap();
+    p.set_form("sa", Order::Hamis, Form::Draw).unwrap();
+    assert_eq!(p.fidel("sa", Order::Hamis).unwrap().state.kind(), StateKind::Detached);
     let err = p.nudge("sa", Order::Hamis, NudgeTarget::Placement { alteration: "x".into() }, Vec2::ZERO);
     assert_eq!(err, Err(ModelError::NotGenerated(StateKind::Detached)));
+    p.set_form("sa", Order::Hamis, Form::Variant(0)).unwrap();
+    assert_eq!(p.fidel("sa", Order::Hamis).unwrap().state, FidelState::Linked);
 }
 
 #[test]
@@ -313,4 +318,26 @@ fn forks_survive_save_and_open() {
     let back = kid::read(buf).unwrap();
     assert_eq!(back.users_of(&copy), vec![("la".to_string(), Order::Hamis)]);
     assert_eq!(back, p);
+}
+
+#[test]
+fn moving_points_on_a_generated_fidel_adds_nudges_and_keeps_it_generated() {
+    let mut p = project();
+    let mut outline = p.generated_outline("la", Order::Hamis).unwrap();
+    let before = outline[0].points[0].pos;
+    outline[0].points[0].pos = before + Vec2::new(12.0, -4.0);
+    p.set_drawing(&DrawingTarget::fidel("la", Order::Hamis), outline.clone()).unwrap();
+    assert_eq!(p.fidel("la", Order::Hamis).unwrap().state.kind(), StateKind::Adjusted);
+    let after = p.generated_outline("la", Order::Hamis).unwrap();
+    assert_eq!(after[0].points[0].pos, before + Vec2::new(12.0, -4.0));
+
+    // Adding a point is not a nudge: the fidel has to be drawn by hand for that.
+    let mut grown = after.clone();
+    let extra = grown[0].points[0].clone();
+    grown[0].points.push(Point { id: 999, ..extra });
+    assert!(matches!(
+        p.set_drawing(&DrawingTarget::fidel("la", Order::Hamis), grown),
+        Err(ModelError::OutlineChanged)
+    ));
+    assert_eq!(p.generated_outline("la", Order::Hamis).unwrap(), after);
 }

@@ -3,7 +3,7 @@
 // to the core (set_drawing) when each gesture ends, so every fidel that uses
 // the drawing updates.
 
-import { api, PARTS, type ComponentRef, type DrawingTarget, type DrawingView, type Part } from "./api";
+import { api, PARTS, type ComponentRef, type DeformHandle, type DrawingTarget, type DrawingView, type Part } from "./api";
 import {
   clone,
   constrain45,
@@ -116,6 +116,7 @@ type Gesture =
   | { kind: "metric"; side: "left" | "right"; start: number; now: number; base: Contour[]; advance: number }
   | { kind: "zone"; id: string; start: number; now: number }
   | { kind: "placement"; id: number; start: Vec2; d: Vec2; moved: boolean }
+  | { kind: "deform"; i: number; start: Vec2; d: number }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
@@ -137,6 +138,8 @@ export interface EditorHost {
   /** Called after a change has been written to the core. */
   changed(target: DrawingTarget): void;
   toast(message: string, tone?: "error" | "info"): void;
+  /** The display name of an alteration. */
+  alterationName(id: string): string;
   /** Fill the side panel. */
   renderSide(editor: GlyphEditor): void;
   /** Open the canvas context menu at a screen point. */
@@ -269,6 +272,26 @@ export class GlyphEditor {
     this.subtitle.textContent = this.drawing.subtitle;
     this.render();
     this.host.renderSide(this);
+  }
+
+  private alterationName(id: string): string {
+    return this.host.alterationName(id);
+  }
+
+  /** Move a deform's end on this family by `d` (up for a short leg, sideways for a sweep). */
+  private async moveDeform(h: DeformHandle, d: number): Promise<void> {
+    const target = this.drawing?.target;
+    if (target?.kind !== "fidel") return;
+    const family = target.id.split("/")[0];
+    const offset = h.vertical ? { x: h.offset.x, y: h.offset.y + d } : { x: h.offset.x + d, y: h.offset.y };
+    try {
+      await api.setAttachOffset(family, h.alteration, offset);
+      await this.open(target);
+      this.host.changed(target);
+    } catch (err) {
+      this.host.toast(String(err), "error");
+      this.render();
+    }
   }
 
   /** Forget the open drawing, e.g. after another project is opened. */
@@ -782,6 +805,14 @@ export class GlyphEditor {
       return;
     }
 
+    // The end of a deformed stroke on a generated fidel: drag to move it for the family.
+    const hid = (e.target as Element | null)?.closest?.("[data-hid]")?.getAttribute("data-hid");
+    if (hid != null) {
+      this.gesture = { kind: "deform", i: Number(hid), start: font, d: 0 };
+      this.render();
+      return;
+    }
+
     // Transform box handles come before points and shapes.
     const boxHit = this.hitBox(screen);
     if (boxHit) {
@@ -1055,6 +1086,11 @@ export class GlyphEditor {
         if (z) z.position = g.now;
         break;
       }
+      case "deform": {
+        const h = this.drawing?.handles[g.i];
+        if (h) g.d = Math.round(h.vertical ? font.y - g.start.y : font.x - g.start.x);
+        break;
+      }
       case "placement": {
         let d = { x: font.x - g.start.x, y: font.y - g.start.y };
         if (e.shiftKey) d = Math.abs(d.x) > Math.abs(d.y) ? { x: d.x, y: 0 } : { x: 0, y: d.y };
@@ -1141,6 +1177,10 @@ export class GlyphEditor {
       this.host.renderSide(this);
     } else if (g.kind === "zone") {
       if (g.now !== g.start) void this.moveZone(g.id, g.now);
+    } else if (g.kind === "deform") {
+      const h = this.drawing?.handles[g.i];
+      if (h && g.d) void this.moveDeform(h, g.d);
+      else this.render();
     } else if (g.kind === "placement") {
       if (g.moved && (g.d.x || g.d.y)) {
         const refs = this.placements.map((r) =>
@@ -2133,7 +2173,13 @@ export class GlyphEditor {
       .then(() => api.setDrawing(target, s.c))
       .then(() => (widthChanged ? api.setAdvance(target, s.w!) : undefined))
       .then(() => this.host.changed(target))
-      .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
+      .catch((err) => {
+        this.host.toast(`Could not save the drawing: ${err}`, "error");
+        // A generated fidel only takes point moves: go back to what the core has.
+        if (this.drawing?.generated && this.target?.kind === target.kind && this.target.id === target.id) {
+          void this.open(target);
+        }
+      });
   }
 
   // ---------- Chrome: tool palette, bottom bar, keys, paste ----------
@@ -2505,6 +2551,20 @@ export class GlyphEditor {
           `<text class="part-label" x="${sx((b.minX + b.maxX) / 2)}" y="${sy(b.maxY) - 8}" style="fill:${color}">${c.part}</text>`,
         );
       }
+    });
+
+    // Ends of deformed strokes on a generated fidel.
+    (this.drawing.handles ?? []).forEach((h, i) => {
+      const g1 = this.gesture;
+      const d = g1?.kind === "deform" && g1.i === i ? g1.d : 0;
+      const at = h.vertical ? { x: h.at.x, y: h.at.y + d } : { x: h.at.x + d, y: h.at.y };
+      const name = this.alterationName(h.alteration);
+      const tip = h.vertical
+        ? `${name}: drag up or down to set where it ends on this family`
+        : `${name}: drag sideways to set how far it goes on this family`;
+      parts.push(
+        `<circle class="deform-handle${h.vertical ? "" : " sideways"}${d ? " active" : ""}" data-hid="${i}" cx="${sx(at.x)}" cy="${sy(at.y)}" r="6"><title>${esc(tip)}</title></circle>`,
+      );
     });
 
     // Components placed on a base: drawn once elsewhere, moved here as a whole.
