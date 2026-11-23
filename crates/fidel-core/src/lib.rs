@@ -29,6 +29,7 @@ pub mod order;
 pub mod parts;
 pub mod project;
 pub mod resolve;
+pub mod scope;
 
 pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};
@@ -41,3 +42,4 @@ pub use order::{Order, OrderRule};
 pub use parts::Part;
 pub use project::{Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project};
 pub use resolve::{Diagnostic, ResolvedContour, ResolvedFidel};
+pub use scope::Scope;

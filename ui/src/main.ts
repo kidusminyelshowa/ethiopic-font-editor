@@ -7,6 +7,9 @@ import {
   api,
   PARTS,
   type AlterationSummary,
+  type Effect,
+  type ImpactView,
+  type Scope,
   type DrawingTarget,
   type FidelDetail,
   type FidelGrid,
@@ -401,7 +404,7 @@ function renderEditorSide(ed: GlyphEditor) {
   // Live preview: the drawing inside the system.
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
-    d.target.kind === "base" ? "The family, live" : `On every family (${orderNamesOf(d.target.id)})`;
+    d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
   sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
   const token = ++previewToken;
   if (d.target.kind === "base") {
@@ -409,31 +412,20 @@ function renderEditorSide(ed: GlyphEditor) {
       if (token === previewToken) strip.replaceChildren(...list.map((p) => previewCell(p, metrics)));
     });
   } else {
-    const alt = state.alterations.find((a) => a.id === d.target.id);
-    const order = alt?.orders[0];
     strip.classList.add("many");
-    for (const row of state.grid?.rows ?? []) {
-      const cell = row.cells.find((c) => c.order === order);
-      if (!cell) continue;
-      const b = el(
-        "button",
-        {
-          class: `mini${d.context?.family === row.family ? " current" : ""}`,
-          title: `${row.name}: show its base behind the drawing`,
-        },
-        glyphView(cell.outline, metrics, cell.codepoint),
-      );
-      b.addEventListener("click", () => {
-        state.contextFamily = row.family;
-        void editor.open(d.target, row.family);
-      });
-      strip.append(b);
-    }
+    const alt = state.alterations.find((a) => a.id === d.target.id);
+    const scopeBox = el("div", { class: "scope-box" });
+    void api.alterationImpacts(d.target.id).then((impacts) => {
+      if (token !== previewToken) return;
+      strip.replaceChildren(...impacts.map((i) => impactCell(i, d.target, d.context?.family, metrics)));
+      renderScope(scopeBox, impacts, alt, d.context?.family);
+    });
     if (d.context) {
       sections.push(el("p", { class: "side-note" }, `Drawn against ${d.context.familyName}. Click a fidel to switch.`));
     } else {
       sections.push(el("p", { class: "side-note" }, "Draw a base first to see this alteration in context."));
     }
+    sections.push(el("h3", { class: "section-label" }, "Where this applies"), scopeBox);
   }
 
   // Selection.
@@ -533,6 +525,108 @@ function orderNamesOf(altId: string): string {
   const alt = state.alterations.find((a) => a.id === altId);
   const names = alt?.orders.map((o) => state.grid?.orders.find((h) => h.order === o)?.name ?? o) ?? [];
   return names.join(", ") || "unused";
+}
+
+const EFFECT_NOTE: Record<Effect, string> = {
+  regenerates: "updates",
+  "regenerates-keeping-nudges": "updates and keeps its nudges",
+  untouched: "drawn by hand, stays as it is",
+};
+
+function impactCell(i: ImpactView, target: DrawingTarget, current: string | undefined, metrics: FidelGrid["metrics"]) {
+  const outline = cellOutline(i.family, i.order);
+  const b = el(
+    "button",
+    {
+      class: `mini effect-${i.effect}${current === i.family ? " current" : ""}`,
+      title: `${i.codepoint ?? ""} ${i.familyName}: ${EFFECT_NOTE[i.effect]}. Click to draw against it.`,
+    },
+    glyphView(outline, metrics, i.codepoint),
+  );
+  if (i.effect !== "regenerates") b.append(el("span", { class: "mini-issue", "aria-hidden": "true" }));
+  b.addEventListener("click", () => {
+    state.contextFamily = i.family;
+    void editor.open(target, i.family);
+  });
+  return b;
+}
+
+/** "fidel" is its own plural. */
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 || word === "fidel" ? "" : "s"}`;
+}
+
+/** Summary of what an edit reaches, and buttons to narrow it to a copy. */
+function renderScope(box: HTMLElement, impacts: ImpactView[], alt: AlterationSummary | undefined, contextFamily?: string) {
+  if (!alt) return;
+  const count = (e: Effect) => impacts.filter((i) => i.effect === e).length;
+  const parts = [`${count("regenerates")} update`];
+  if (count("regenerates-keeping-nudges")) parts.push(`${count("regenerates-keeping-nudges")} keep their nudges`);
+  if (count("untouched")) parts.push(`${count("untouched")} drawn by hand stay as they are`);
+  const lead = alt.forkedFrom
+    ? `This is a copy. Edits reach only ${plural(impacts.length, "fidel")}`
+    : `Edits here reach ${plural(impacts.length, "fidel")}`;
+  box.replaceChildren(el("p", { class: "side-note" }, `${lead}: ${parts.join(", ")}.`));
+
+  const actions = el("div", { class: "scope-actions" });
+  const fork = (label: string, scope: Scope) => {
+    const b = el("button", { class: "toggle" }, label);
+    b.addEventListener("click", () => void forkTo(alt, scope, contextFamily));
+    actions.append(b);
+  };
+  const here = impacts.filter((i) => i.family === contextFamily);
+  if (impacts.length > 1 && here.length === 1) {
+    fork(`Only ${here[0].codepoint ?? here[0].familyName}`, { kind: "fidel", family: here[0].family, order: here[0].order });
+  }
+  if (here.length > 1 && here.length < impacts.length) {
+    fork(`Only ${here[0].familyName} family`, { kind: "family", family: here[0].family });
+  }
+  const orders = [...new Set(impacts.map((i) => i.order))];
+  if (orders.length > 1) {
+    for (const o of orders) fork(`Only ${state.grid?.orders.find((h) => h.order === o)?.name ?? o} order`, { kind: "order", order: o });
+  }
+  if (actions.childElementCount) {
+    box.append(el("p", { class: "side-note" }, "To change just part of the system, split off a copy:"), actions);
+  } else if (!alt.forkedFrom && impacts.length > 1) {
+    box.append(el("p", { class: "side-note" }, "Pick a fidel above to split off a copy just for it."));
+  }
+  if (alt.forkedFrom) {
+    const shared = state.alterations.find((a) => a.id === alt.forkedFrom);
+    const b = el("button", { class: "toggle" }, `Use the shared ${shared?.name ?? "alteration"} again`);
+    b.title = "Drop this copy. Its fidel go back to the shared drawing and keep their nudges.";
+    b.addEventListener("click", () => void rejoin(alt));
+    box.append(el("div", { class: "scope-actions" }, b));
+  }
+}
+
+async function forkTo(alt: AlterationSummary, scope: Scope, contextFamily?: string) {
+  try {
+    const id = await api.forkAlteration(alt.id, scope);
+    void refreshProjectInfo();
+    state.alterations = await api.listAlterations();
+    await refreshGrid();
+    fillDrawingSelect();
+    const copy = state.alterations.find((a) => a.id === id);
+    state.contextFamily = scope.kind === "fidel" || scope.kind === "family" ? scope.family : contextFamily;
+    await openDrawing({ kind: "alteration", id });
+    toast(`Made “${copy?.name ?? id}”. Edits here no longer change the others.`);
+  } catch (err) {
+    toast(`Could not split it off: ${err}`, "error");
+  }
+}
+
+async function rejoin(alt: AlterationSummary) {
+  try {
+    const shared = await api.rejoinAlteration(alt.id);
+    void refreshProjectInfo();
+    state.alterations = await api.listAlterations();
+    await refreshGrid();
+    fillDrawingSelect();
+    await openDrawing({ kind: "alteration", id: shared });
+    toast(`Back on the shared drawing. “${alt.name}” was removed.`);
+  } catch (err) {
+    toast(`Could not rejoin: ${err}`, "error");
+  }
 }
 
 function previewCell(p: FidelPreview, metrics: FidelGrid["metrics"]): Node {

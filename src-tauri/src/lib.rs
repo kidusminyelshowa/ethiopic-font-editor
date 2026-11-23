@@ -7,7 +7,7 @@ mod grid;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
-use fidel_core::{defaults::geez_project, kid, Contour, DrawingTarget, Metrics, Order, Project};
+use fidel_core::{defaults::geez_project, kid, Contour, DrawingTarget, Metrics, Order, Project, Scope};
 use serde::Serialize;
 use tauri::State;
 
@@ -223,6 +223,28 @@ fn proof_font(state: State<'_, AppState>) -> tauri::ipc::Response {
     tauri::ipc::Response::new(bytes)
 }
 
+/// Which fidel an edit to this alteration reaches, and what happens to each.
+#[tauri::command]
+fn alteration_impacts(state: State<'_, AppState>, id: String) -> Vec<editor::ImpactView> {
+    editor::alteration_impacts(&state.project(), &id)
+}
+
+/// Give the fidel in `scope` their own copy of the alteration; returns its id.
+#[tauri::command]
+fn fork_alteration(state: State<'_, AppState>, id: String, scope: Scope) -> CmdResult<String> {
+    let copy = state.project().fork_alteration(&id, &scope).map_err(err)?;
+    state.mark_dirty();
+    Ok(copy)
+}
+
+/// Put a copy's fidel back on the shared alteration; returns the shared id.
+#[tauri::command]
+fn rejoin_alteration(state: State<'_, AppState>, id: String) -> CmdResult<String> {
+    let shared = state.project().rejoin_alteration(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(shared)
+}
+
 #[tauri::command]
 fn family_preview(state: State<'_, AppState>, family: String) -> CmdResult<Vec<FidelPreview>> {
     editor::family_preview(&state.project.lock().expect("project lock"), &family).map_err(err)
@@ -249,7 +271,10 @@ pub fn run() {
             open_project,
             save_project,
             export_font,
-            proof_font
+            proof_font,
+            alteration_impacts,
+            fork_alteration,
+            rejoin_alteration
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

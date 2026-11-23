@@ -1,6 +1,8 @@
 //! What the glyph editor reads and writes.
 
-use fidel_core::{Alteration, Contour, DrawingTarget, Metrics, ModelError, Order, Project, Verb};
+use fidel_core::{
+    Alteration, Change, Contour, DrawingTarget, Effect, Metrics, ModelError, Order, Project, StateKind, Verb,
+};
 use serde::Serialize;
 
 use crate::grid::Outline;
@@ -114,8 +116,13 @@ pub struct AlterationSummary {
     /// Only additive alterations have parts to draw.
     drawable: bool,
     drawn: bool,
-    /// Orders whose rule uses this alteration in any variant.
+    /// Orders with at least one fidel built from this alteration.
     orders: Vec<Order>,
+    /// How many fidel are built from it.
+    users: usize,
+    /// For a copy made by a scoped edit: the shared alteration it came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forked_from: Option<String>,
 }
 
 pub fn alteration_summaries(project: &Project) -> Vec<AlterationSummary> {
@@ -128,14 +135,56 @@ pub fn alteration_summaries(project: &Project) -> Vec<AlterationSummary> {
             verb: a.verb,
             drawable: a.verb.is_additive(),
             drawn: !a.contours.is_empty(),
-            orders: project
-                .order_rules
-                .values()
-                .filter(|r| r.variants.iter().any(|v| v.contains(&a.id)))
-                .map(|r| r.order)
-                .collect(),
+            orders: {
+                let users = project.users_of(&a.id);
+                let mut orders: Vec<Order> = users.iter().map(|(_, o)| *o).collect();
+                orders.sort();
+                orders.dedup();
+                if orders.is_empty() {
+                    // Not used yet: fall back to the rule that names it.
+                    orders = project
+                        .order_rules
+                        .values()
+                        .filter(|r| r.variants.iter().any(|v| v.contains(&a.id)))
+                        .map(|r| r.order)
+                        .collect();
+                }
+                orders
+            },
+            users: project.users_of(&a.id).len(),
+            forked_from: a.forked_from.clone(),
         })
         .collect()
+}
+
+/// One fidel an alteration edit reaches, for the "where this applies" panel.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImpactView {
+    family: String,
+    family_name: String,
+    order: Order,
+    codepoint: Option<char>,
+    state: StateKind,
+    effect: Effect,
+}
+
+/// In Unicode order, which is the traditional fidel order.
+pub fn alteration_impacts(project: &Project, id: &str) -> Vec<ImpactView> {
+    let mut out: Vec<ImpactView> = project
+        .impacts(&Change::Alteration(id.to_string()))
+        .into_iter()
+        .map(|i| ImpactView {
+            family_name: project.families.get(&i.family).map(|f| f.name.clone()).unwrap_or_default(),
+            codepoint: project.fidel(&i.family, i.order).ok().and_then(|f| f.codepoint),
+            family: i.family,
+            order: i.order,
+            state: i.state,
+            effect: i.effect,
+        })
+        .collect();
+    out.sort_by_key(|i| (i.codepoint, i.order));
+    out
 }
 
 /// One family resolved across its orders, for the editor's live preview strip.

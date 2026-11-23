@@ -1246,6 +1246,22 @@ button.mini {
   background: var(--orange);
 }
 
+.mini.effect-untouched {
+  opacity: 0.45;
+}
+
+.scope-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .side-box {
   display: flex;
   flex-wrap: wrap;

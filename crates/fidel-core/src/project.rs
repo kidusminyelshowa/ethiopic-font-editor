@@ -48,6 +48,10 @@ pub enum ModelError {
     UnknownBase(BaseId),
     #[error("no alteration `{0}`")]
     UnknownAlteration(AlterationId),
+    #[error("no fidel in that scope uses `{0}`")]
+    NotUsedInScope(AlterationId),
+    #[error("`{0}` is the shared alteration, not a copy")]
+    NotAFork(AlterationId),
     #[error("contour {contour}: {problem:?}")]
     InvalidContour { contour: u32, problem: ContourProblem },
     #[error("two contours share the id {0}")]
@@ -143,7 +147,7 @@ impl Project {
             .ok_or_else(|| ModelError::UnknownFidel(family.into(), order))
     }
 
-    fn fidel_mut(&mut self, family: &str, order: Order) -> Result<&mut Fidel, ModelError> {
+    pub(crate) fn fidel_mut(&mut self, family: &str, order: Order) -> Result<&mut Fidel, ModelError> {
         self.families
             .get_mut(family)
             .ok_or_else(|| ModelError::UnknownFamily(family.into()))?
@@ -159,10 +163,18 @@ impl Project {
         if let FidelState::Irregular { form: IrregularForm::Recipe { alterations, .. }, .. } = &fidel.state {
             return Ok(alterations.clone());
         }
-        Ok(self.rule_alterations(family, order))
+        let mut alts = self.rule_alterations(family, order);
+        for a in &mut alts {
+            if let Some(own) = fidel.alteration_overrides.get(a) {
+                a.clone_from(own);
+            }
+        }
+        Ok(alts)
     }
 
-    fn rule_alterations(&self, family: &str, order: Order) -> Vec<AlterationId> {
+    /// The order rule's alterations for this fidel, before its own copies
+    /// (see [`crate::scope`]) are swapped in.
+    pub(crate) fn rule_alterations(&self, family: &str, order: Order) -> Vec<AlterationId> {
         let variant =
             self.families.get(family).and_then(|f| f.rule_variants.get(&order).copied()).unwrap_or(0);
         self.order_rules
