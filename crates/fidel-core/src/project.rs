@@ -7,8 +7,10 @@ use thiserror::Error;
 
 use crate::alteration::{Alteration, AlterationId};
 use crate::base::{Base, BaseId};
-use crate::charset::CharSet;
-use crate::fidel::{merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, StateKind};
+use crate::charset::{CharSet, Language};
+use crate::fidel::{
+    merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, Source, StateKind,
+};
 use crate::geometry::{Contour, ContourProblem, Vec2};
 use crate::order::{Order, OrderRule};
 use crate::resolve::{self, ResolvedFidel};
@@ -28,8 +30,32 @@ impl Default for Metrics {
     }
 }
 
+/// Names written into the exported font.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FontInfo {
+    /// Empty means "use the project's file name".
+    pub family_name: String,
+    pub style_name: String,
+    pub version: f64,
+    pub designer: String,
+}
+
+impl Default for FontInfo {
+    fn default() -> Self {
+        FontInfo {
+            family_name: String::new(),
+            style_name: "Regular".into(),
+            version: 1.0,
+            designer: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Project {
+    #[serde(default)]
+    pub info: FontInfo,
     pub metrics: Metrics,
     pub bases: BTreeMap<BaseId, Base>,
     pub alterations: BTreeMap<AlterationId, Alteration>,
@@ -40,6 +66,9 @@ pub struct Project {
     /// Empty means Ge'ez only.
     #[serde(default)]
     pub charsets: BTreeSet<CharSet>,
+    /// Language presets the project covers, on top of `charsets`.
+    #[serde(default)]
+    pub languages: BTreeSet<Language>,
     /// Standalone glyphs: punctuation, numerals, combining marks.
     #[serde(default)]
     pub symbols: BTreeMap<SymbolId, Symbol>,
@@ -69,6 +98,10 @@ pub enum ModelError {
     NotGenerated(StateKind),
     #[error("no base `{0}`")]
     UnknownBase(BaseId),
+    #[error("{0}/{1:?} is generated; detach it to edit its outline")]
+    NotDrawnByHand(FamilyId, Order),
+    #[error("`{0}` is not a fidel reference (family/order)")]
+    BadFidelRef(String),
     #[error("no symbol `{0}`")]
     UnknownSymbol(SymbolId),
     #[error("no alteration `{0}`")]
@@ -85,13 +118,34 @@ pub enum ModelError {
     DuplicateContourId(u32),
 }
 
-/// A drawing the glyph editor can open: a base, an alteration or a symbol.
+/// A drawing the glyph editor can open: a base, an alteration, a symbol, or
+/// a fidel drawn by hand (Detached or Irregular drawn), as `family/order`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "kind", content = "id")]
 pub enum DrawingTarget {
     Base(BaseId),
     Alteration(AlterationId),
     Symbol(SymbolId),
+    Fidel(String),
+}
+
+impl DrawingTarget {
+    pub fn fidel(family: &str, order: Order) -> Self {
+        DrawingTarget::Fidel(format!("{family}/{}", serde_plain_order(order)))
+    }
+
+    /// The family and order of a `Fidel` target.
+    pub fn fidel_ref(id: &str) -> Result<(FamilyId, Order), ModelError> {
+        let bad = || ModelError::BadFidelRef(id.into());
+        let (family, order) = id.rsplit_once('/').ok_or_else(bad)?;
+        let order: Order =
+            serde_json::from_value(serde_json::Value::String(order.into())).map_err(|_| bad())?;
+        Ok((family.into(), order))
+    }
+}
+
+fn serde_plain_order(order: Order) -> String {
+    serde_json::to_value(order).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()
 }
 
 /// Something upstream that is about to change.
@@ -142,6 +196,14 @@ impl Project {
                 .get(id)
                 .map(|s| s.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                match &self.fidel(&family, order)?.state {
+                    FidelState::Detached { contours }
+                    | FidelState::Irregular { form: IrregularForm::Drawn { contours }, .. } => Ok(contours),
+                    _ => Err(ModelError::NotDrawnByHand(family, order)),
+                }
+            }
         }
     }
 
@@ -168,6 +230,14 @@ impl Project {
             }
             DrawingTarget::Symbol(id) => {
                 &mut self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.contours
+            }
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                match &mut self.fidel_mut(&family, order)?.state {
+                    FidelState::Detached { contours }
+                    | FidelState::Irregular { form: IrregularForm::Drawn { contours }, .. } => contours,
+                    _ => return Err(ModelError::NotDrawnByHand(family, order)),
+                }
             }
         };
         *slot = contours;
@@ -267,11 +337,24 @@ impl Project {
     /// Bake the current outline into a hand-drawn copy that no longer updates.
     pub fn detach(&mut self, family: &str, order: Order) -> Result<(), ModelError> {
         let resolved = self.resolve(family, order)?;
+        // Each contour keeps a name saying where it came from, so the order
+        // mark is still recognisable as its own layer.
         let contours: Vec<Contour> = resolved
             .contours
             .into_iter()
             .enumerate()
-            .map(|(i, rc)| Contour { id: i as u32, ..rc.contour })
+            .map(|(i, rc)| {
+                let name = rc.contour.name.clone().or_else(|| match &rc.source {
+                    Source::Base => {
+                        Some(rc.contour.part.map_or("Base".to_string(), |p| capitalise(&format!("{p:?}"))))
+                    }
+                    Source::Alteration(id) => {
+                        Some(self.alterations.get(id).map_or_else(|| id.clone(), |a| a.name.clone()))
+                    }
+                    Source::Own => None,
+                });
+                Contour { id: i as u32, name, ..rc.contour }
+            })
             .collect();
         self.fidel_mut(family, order)?.state = FidelState::Detached { contours };
         Ok(())
@@ -356,6 +439,49 @@ impl Project {
         Ok(())
     }
 
+    /// How far this family moves an alteration from its automatic attach
+    /// point. A copy made by a scoped edit follows its original's offset
+    /// unless it has one of its own.
+    pub fn attach_offset(&self, family: &str, alteration: &str) -> Vec2 {
+        let Some(fam) = self.families.get(family) else { return Vec2::ZERO };
+        fam.attach_offsets
+            .get(alteration)
+            .or_else(|| {
+                let original = self.alterations.get(alteration)?.forked_from.as_ref()?;
+                fam.attach_offsets.get(original)
+            })
+            .copied()
+            .unwrap_or(Vec2::ZERO)
+    }
+
+    /// The automatic attach point of `alteration` on this family's base,
+    /// before the family's own offset.
+    pub fn auto_attach_point(&self, family: &str, alteration: &str) -> Option<Vec2> {
+        let fam = self.families.get(family)?;
+        let base = self.bases.get(&fam.base)?;
+        Some(self.alterations.get(alteration)?.placement.attach_point(base)?.at)
+    }
+
+    /// Move where `alteration` attaches on every fidel of this family.
+    /// A zero offset goes back to the automatic point.
+    pub fn set_attach_offset(
+        &mut self,
+        family: &str,
+        alteration: &str,
+        offset: Vec2,
+    ) -> Result<(), ModelError> {
+        if !self.alterations.contains_key(alteration) {
+            return Err(ModelError::UnknownAlteration(alteration.into()));
+        }
+        let fam = self.families.get_mut(family).ok_or_else(|| ModelError::UnknownFamily(family.into()))?;
+        if offset == Vec2::ZERO {
+            fam.attach_offsets.remove(alteration);
+        } else {
+            fam.attach_offsets.insert(alteration.into(), offset);
+        }
+        Ok(())
+    }
+
     /// The fidel of this family built on `order`, directly.
     pub fn built_on_by(&self, family: &str, order: Order) -> Vec<Order> {
         self.families
@@ -363,4 +489,10 @@ impl Project {
             .map(|f| f.fidels.iter().filter(|(_, x)| x.built_on == Some(order)).map(|(o, _)| *o).collect())
             .unwrap_or_default()
     }
+}
+
+fn capitalise(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut c = lower.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }

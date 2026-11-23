@@ -95,11 +95,14 @@ pub struct Contour {
     pub points: Vec<Point>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part: Option<Part>,
+    /// A layer name, e.g. the alteration a detached contour came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Contour {
     pub fn new(id: ContourId, part: Option<Part>, points: Vec<Point>) -> Self {
-        Contour { id, points, part }
+        Contour { id, points, part, name: None }
     }
 
     /// Axis-aligned rectangle with corners at `min` and `max`, drawn

@@ -8,16 +8,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::base::Base;
-use crate::charset::{self, CharSet, Entry, Slot};
+use crate::charset::{self, CharSet, Entry, Language, Slot};
 use crate::defaults;
 use crate::fidel::{Family, Fidel, FidelState};
 use crate::order::Order;
 use crate::project::{Project, Symbol};
 
 impl Project {
-    /// The sets this project covers. An empty list means Ge'ez only.
+    /// The sets this project covers. With no set and no language, Ge'ez only.
     pub fn charsets(&self) -> BTreeSet<CharSet> {
-        if self.charsets.is_empty() {
+        if self.charsets.is_empty() && self.languages.is_empty() {
             BTreeSet::from([CharSet::Geez])
         } else {
             self.charsets.clone()
@@ -28,7 +28,7 @@ impl Project {
     /// outside the Ethiopic table always count as covered.
     pub fn in_charset(&self, c: char) -> bool {
         match charset::set_of(c) {
-            Some(set) => self.charsets().contains(&set),
+            Some(set) => self.charsets().contains(&set) || self.languages.iter().any(|l| l.contains(c)),
             None => true,
         }
     }
@@ -38,10 +38,24 @@ impl Project {
         self.fidel(family, order).ok().and_then(|f| f.codepoint).is_none_or(|c| self.in_charset(c))
     }
 
-    /// Cover exactly these sets. Creates what is missing; never deletes.
+    /// Cover exactly these sets, keeping the chosen languages.
     pub fn set_charsets(&mut self, sets: impl IntoIterator<Item = CharSet>) {
+        let languages = self.languages.clone();
+        self.set_coverage(sets, languages);
+    }
+
+    /// Cover exactly these sets and languages. Creates what is missing;
+    /// never deletes.
+    pub fn set_coverage(
+        &mut self,
+        sets: impl IntoIterator<Item = CharSet>,
+        languages: impl IntoIterator<Item = Language>,
+    ) {
         let sets: BTreeSet<CharSet> = sets.into_iter().collect();
-        let wanted: Vec<&Entry> = charset::entries().filter(|e| sets.contains(&e.set)).collect();
+        let languages: BTreeSet<Language> = languages.into_iter().collect();
+        let wanted: Vec<&Entry> = charset::entries()
+            .filter(|e| sets.contains(&e.set) || languages.iter().any(|l| l.contains(e.cp)))
+            .collect();
         if wanted.iter().any(|e| matches!(e.slot, Slot::Fidel { order, .. } if !order.is_main())) {
             self.ensure_extra_rules();
         }
@@ -70,6 +84,7 @@ impl Project {
             }
         }
         self.charsets = sets;
+        self.languages = languages;
     }
 
     fn ensure_extra_rules(&mut self) {
@@ -103,6 +118,7 @@ impl Project {
                     base,
                     group,
                     rule_variants: BTreeMap::new(),
+                    attach_offsets: BTreeMap::new(),
                     fidels: BTreeMap::new(),
                 },
             );

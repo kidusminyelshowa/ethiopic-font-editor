@@ -1188,3 +1188,127 @@ textarea {
 .symbol-open {
   margin-top: 12px;
 }
+
+/* ---------- Editor tools ---------- */
+
+.canvas[data-tool="rect"],
+.canvas[data-tool="ellipse"] {
+  cursor: crosshair;
+}
+
+.canvas .snap-line {
+  stroke: var(--orange);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.canvas .sel-box {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.canvas .sel-corner {
+  fill: var(--card);
+  stroke: var(--orange);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.canvas .shape-preview {
+  fill: rgba(194, 68, 42, 0.12);
+  stroke: var(--orange);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.canvas .attach {
+  cursor: move;
+}
+
+.canvas .attach circle {
+  fill: var(--card);
+  stroke: var(--orange);
+  stroke-width: 1.5;
+}
+
+.canvas .attach line {
+  stroke: var(--orange);
+  stroke-width: 1.2;
+}
+
+.canvas .attach.moved circle {
+  fill: var(--orange);
+}
+
+/* ---------- Editor: layers in the left panel ---------- */
+
+body.editing .side-tabs,
+body.editing .search {
+  display: none;
+}
+
+body.editing .side-list {
+  padding-top: 6px;
+}
+
+.layers-head {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.layer-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1.5px solid var(--part, var(--ink-faint));
+  background: color-mix(in srgb, var(--part, transparent) 35%, transparent);
+}
+
+.layer-rename {
+  width: 100%;
+  font: inherit;
+  padding: 1px 4px;
+  border: 1px solid var(--orange);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+.tree-label.glyph-label {
+  font-family: var(--ethiopic);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+/* Rows show the base letter only; the name is a tooltip. */
+.fidel-grid tbody th[scope="row"] {
+  width: 44px;
+  text-align: center;
+  cursor: default;
+}
+
+.fidel-grid tbody th[scope="row"] .family-glyph {
+  font-size: 20px;
+}
+
+.font-props .field input {
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.font-props .field input::placeholder {
+  color: var(--ink-faint);
+}
+
+.font-props .field {
+  margin-top: 4px;
+}
+
+.canvas-wrap {
+  user-select: none;
+  -webkit-user-select: none;
+}

@@ -41,11 +41,19 @@ pub struct ExportOptions {
     /// Creation time in seconds since 1970. Changing it between test exports
     /// helps operating systems notice a reinstalled font.
     pub timestamp: i64,
+    /// Written as the font's designer (name ID 9) when not empty.
+    pub designer: String,
 }
 
 impl ExportOptions {
     pub fn new(family_name: impl Into<String>) -> Self {
-        Self { family_name: family_name.into(), style_name: "Regular".into(), version: 1.0, timestamp: 0 }
+        Self {
+            family_name: family_name.into(),
+            style_name: "Regular".into(),
+            version: 1.0,
+            timestamp: 0,
+            designer: String::new(),
+        }
     }
 }
 
@@ -303,6 +311,9 @@ fn build(
         (5, version),
         (6, ps_name),
     ];
+    if !options.designer.trim().is_empty() {
+        records.push((9, options.designer.trim().to_string()));
+    }
     records.sort_by_key(|(id, _)| *id);
     let name = Name::new(
         records

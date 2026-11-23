@@ -75,6 +75,30 @@ export interface CharSetInfo {
   enabled: boolean;
 }
 
+export type LanguageId = "amharic" | "tigrinya" | "gurage";
+
+export interface LanguageInfo {
+  id: LanguageId;
+  name: string;
+  count: number;
+  enabled: boolean;
+}
+
+export interface FontInfo {
+  family_name: string;
+  style_name: string;
+  version: number;
+  designer: string;
+}
+
+export interface FontProperties {
+  info: FontInfo;
+  metrics: Metrics;
+  defaultFamilyName: string;
+  glyphs: number;
+  drawn: number;
+}
+
 export interface SymbolCell {
   id: string;
   codepoint: string;
@@ -88,6 +112,7 @@ export interface FidelGrid {
   rows: GridRow[];
   symbols: SymbolCell[];
   charsets: CharSetInfo[];
+  languages: LanguageInfo[];
 }
 
 export interface RecipeStep {
@@ -113,6 +138,8 @@ export interface FidelDetail {
   builtOn: OrderRef | null;
   builtOnBy: OrderRef[];
   builtOnChoices: OrderRef[];
+  /** Detached or drawn Irregular: opens as its own outline. */
+  drawnByHand: boolean;
 }
 
 export interface OrderRef {
@@ -121,7 +148,7 @@ export interface OrderRef {
   codepoint: string | null;
 }
 
-export type DrawingKind = "base" | "alteration" | "symbol";
+export type DrawingKind = "base" | "alteration" | "symbol" | "fidel";
 export type DrawingTarget = { kind: DrawingKind; id: string };
 
 export interface DrawingView {
@@ -131,7 +158,16 @@ export interface DrawingView {
   contours: Contour[];
   advanceWidth: number | null;
   metrics: Metrics;
-  context?: { family: string; familyName: string; d: string };
+  context?: {
+    family: string;
+    familyName: string;
+    d: string;
+    advanceWidth: number;
+    /** Where the alteration attaches on this family; its contours are relative to it. */
+    origin: { x: number; y: number };
+    /** The automatic attach point, before the family's offset. */
+    autoOrigin: { x: number; y: number };
+  };
 }
 
 export interface AlterationSummary {
@@ -206,7 +242,13 @@ export const api = {
     invoke<DrawingView>("get_drawing", { target, contextFamily: contextFamily ?? null }),
   setDrawing: (target: DrawingTarget, contours: Contour[]) => invoke<void>("set_drawing", { target, contours }),
   setAdvance: (target: DrawingTarget, advanceWidth: number) => invoke<void>("set_advance", { target, advanceWidth }),
-  setCharsets: (sets: CharSetId[]) => invoke<FidelGrid>("set_charsets", { sets }),
+  setCoverage: (sets: CharSetId[], languages: LanguageId[]) =>
+    invoke<FidelGrid>("set_coverage", { sets, languages }),
+  setAttachOffset: (family: string, alteration: string, offset: { x: number; y: number }) =>
+    invoke<void>("set_attach_offset", { family, alteration, offset }),
+  fontProperties: () => invoke<FontProperties>("font_properties"),
+  setFontProperties: (info: FontInfo, paTop: number, paBottom: number) =>
+    invoke<void>("set_font_properties", { info, paTop, paBottom }),
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
 };
 

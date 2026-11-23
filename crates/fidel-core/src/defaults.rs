@@ -123,6 +123,14 @@ pub fn hornus_order_rules() -> Vec<OrderRule> {
     ]
 }
 
+/// What File > New makes: the Ge'ez families plus everything Amharic is
+/// written with.
+pub fn starter_project(metrics: Metrics) -> Project {
+    let mut p = geez_project(metrics);
+    p.set_coverage([], [crate::charset::Language::Amharic]);
+    p
+}
+
 /// A new project with the 26 Ge'ez families, empty bases, Hornus's rules and
 /// the built-in irregular flags and "built on" links. Every fidel starts
 /// Linked unless pre-flagged.
@@ -143,6 +151,7 @@ pub fn geez_project(metrics: Metrics) -> Project {
             base: f.id.into(),
             group: Some(f.group),
             rule_variants: BTreeMap::new(),
+            attach_offsets: BTreeMap::new(),
             fidels: BTreeMap::new(),
         };
         for order in Order::ALL {

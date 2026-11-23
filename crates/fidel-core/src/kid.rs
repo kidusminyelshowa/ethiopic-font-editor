@@ -28,7 +28,7 @@ use thiserror::Error;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
-use crate::charset::CharSet;
+use crate::charset::{CharSet, Language};
 use crate::order::{Order, OrderRule};
 use crate::project::{Metrics, Project};
 
@@ -62,6 +62,10 @@ struct Manifest {
     order_rules: BTreeMap<Order, OrderRule>,
     #[serde(default = "geez_only")]
     charsets: BTreeSet<CharSet>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    languages: BTreeSet<Language>,
+    #[serde(default)]
+    info: crate::project::FontInfo,
 }
 
 fn geez_only() -> BTreeSet<CharSet> {
@@ -76,7 +80,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
         version: VERSION,
         metrics: project.metrics.clone(),
         order_rules: project.order_rules.clone(),
-        charsets: project.charsets(),
+        charsets: project.charsets.clone(),
+        languages: project.languages.clone(),
+        info: project.info.clone(),
     };
     entries.insert("project.json".into(), to_json("project.json", &manifest)?);
     for (id, base) in &project.bases {
@@ -128,6 +134,8 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
         metrics: manifest.metrics,
         order_rules: manifest.order_rules,
         charsets: manifest.charsets,
+        languages: manifest.languages,
+        info: manifest.info,
         ..Default::default()
     };
     let names: Vec<String> = zip.file_names().map(|n| n.map(|s| s.into_owned())).collect::<Result<_, _>>()?;

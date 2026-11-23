@@ -1,7 +1,8 @@
 //! What the glyph editor reads and writes.
 
 use fidel_core::{
-    Alteration, Change, Contour, DrawingTarget, Effect, Metrics, ModelError, Order, Project, StateKind, Verb,
+    Alteration, Change, Contour, DrawingTarget, Effect, Metrics, ModelError, Order, Project, StateKind, Vec2,
+    Verb,
 };
 use serde::Serialize;
 
@@ -18,8 +19,8 @@ pub struct DrawingView {
     /// Set for bases. Alterations have no advance of their own.
     advance_width: Option<f64>,
     metrics: Metrics,
-    /// For an alteration: a base drawn behind it, moved so that its attach
-    /// point sits on the origin, so the part can be drawn in context.
+    /// For an alteration: a base drawn behind it in its own coordinates, so
+    /// the part is drawn in the same space as the base.
     #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<ContextGhost>,
 }
@@ -30,6 +31,14 @@ pub struct ContextGhost {
     family: String,
     family_name: String,
     d: String,
+    /// The base's advance, so the canvas frames it like the base itself.
+    advance_width: f64,
+    /// Where the alteration attaches on this family: the automatic point
+    /// plus the family's offset. The alteration's contours are shown and
+    /// edited relative to it.
+    origin: Vec2,
+    /// The automatic point alone; the family's offset is origin minus this.
+    auto_origin: Vec2,
 }
 
 impl DrawingView {
@@ -65,9 +74,25 @@ impl DrawingView {
                 let alt = &project.alterations[id];
                 DrawingView {
                     title: alt.name.clone(),
-                    subtitle: "Alteration · drawn around its attach point".into(),
+                    subtitle: "Alteration".into(),
                     advance_width: None,
                     context: context_ghost(project, alt, context_family),
+                    target,
+                    contours,
+                    metrics,
+                }
+            }
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                let r = project.resolve(&family, order)?;
+                let fam = &project.families[&family];
+                DrawingView {
+                    title: format!("{} {}", fam.name, r.codepoint.map(String::from).unwrap_or_default())
+                        .trim()
+                        .to_string(),
+                    subtitle: format!("{} · drawn by hand", order.name()),
+                    advance_width: None,
+                    context: None,
                     target,
                     contours,
                     metrics,
@@ -89,8 +114,8 @@ impl DrawingView {
     }
 }
 
-/// The base of `family` (or the first family with a drawn base) moved so the
-/// alteration's attach point is at the origin.
+/// The base of `family` (or the first family with a drawn base), with where
+/// the alteration attaches on it.
 fn context_ghost(project: &Project, alt: &Alteration, family: Option<&str>) -> Option<ContextGhost> {
     let mut families: Vec<_> = project.families.values().collect();
     families.sort_by_key(|f| f.fidels.get(&Order::Giiz).and_then(|g| g.codepoint));
@@ -101,20 +126,14 @@ fn context_ghost(project: &Project, alt: &Alteration, family: Option<&str>) -> O
         }
     };
     let base = project.bases.get(&fam.base)?;
-    let at = alt.placement.attach_point(base)?.at;
-    let moved: Vec<Contour> = base
-        .contours
-        .iter()
-        .map(|c| {
-            let mut c = c.clone();
-            c.translate(fidel_core::Vec2::new(-at.x, -at.y));
-            c
-        })
-        .collect();
+    let auto_origin = alt.placement.attach_point(base)?.at;
     Some(ContextGhost {
         family: fam.id.clone(),
         family_name: fam.name.clone(),
-        d: fidel_core::svg_path(&moved),
+        d: fidel_core::svg_path(&base.contours),
+        advance_width: base.advance_width,
+        origin: auto_origin + project.attach_offset(&fam.id, &alt.id),
+        auto_origin,
     })
 }
 
@@ -267,14 +286,22 @@ mod tests {
     }
 
     #[test]
-    fn alteration_opens_with_a_context_base_at_the_origin() {
-        let p = drawn_project();
+    fn alteration_opens_in_the_base_space() {
+        let mut p = drawn_project();
         let v = DrawingView::open(&p, DrawingTarget::Alteration("loop.bottom-right".into()), None).unwrap();
         let ghost = v.context.expect("context base");
         assert_eq!(ghost.family, "la");
-        // The leg's bottom middle (430, 0) is moved to the origin.
-        assert!(ghost.d.contains("M-30 0L30 0"), "{}", ghost.d);
+        // The base is not moved; the leg's bottom middle is the attach point.
+        assert!(ghost.d.contains("M400 0L460 0"), "{}", ghost.d);
+        assert_eq!(ghost.origin, Vec2::new(430.0, 0.0));
         assert_eq!(v.advance_width, None);
+
+        p.set_attach_offset("la", "loop.bottom-right", Vec2::new(10.0, -20.0)).unwrap();
+        let v =
+            DrawingView::open(&p, DrawingTarget::Alteration("loop.bottom-right".into()), Some("la")).unwrap();
+        let ghost = v.context.unwrap();
+        assert_eq!(ghost.origin, Vec2::new(440.0, -20.0));
+        assert_eq!(ghost.auto_origin, Vec2::new(430.0, 0.0));
     }
 
     #[test]

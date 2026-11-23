@@ -1,8 +1,8 @@
 //! The Fidel Grid as the UI sees it: families as rows, orders as columns.
 
 use fidel_core::{
-    charset, svg_path, Badge, CharSet, FidelState, IrregularForm, Metrics, ModelError, Order, Project,
-    ShapeGroup, StateKind,
+    charset, svg_path, Badge, CharSet, FidelState, IrregularForm, Language, Metrics, ModelError, Order,
+    Project, ShapeGroup, StateKind,
 };
 use serde::Serialize;
 
@@ -106,6 +106,24 @@ pub struct FidelGrid {
     rows: Vec<GridRow>,
     symbols: Vec<SymbolCell>,
     charsets: Vec<CharSetInfo>,
+    languages: Vec<LanguageInfo>,
+}
+
+/// A language preset in the character set picker.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageInfo {
+    id: Language,
+    name: &'static str,
+    count: usize,
+    enabled: bool,
+}
+
+impl FidelGrid {
+    /// Fidel and symbols in the covered sets.
+    pub fn glyph_count(&self) -> usize {
+        self.rows.iter().map(|r| r.cells.len()).sum::<usize>() + self.symbols.len()
+    }
 }
 
 impl FidelGrid {
@@ -192,7 +210,23 @@ impl FidelGrid {
         let mut symbols = symbols;
         symbols.sort_by_key(|s| s.codepoint);
 
-        FidelGrid { metrics: project.metrics.clone(), orders, rows, symbols, charsets: charset_list(project) }
+        let languages = Language::ALL
+            .iter()
+            .map(|&id| LanguageInfo {
+                id,
+                name: id.name(),
+                count: id.count(),
+                enabled: project.languages.contains(&id),
+            })
+            .collect();
+        FidelGrid {
+            metrics: project.metrics.clone(),
+            orders,
+            rows,
+            symbols,
+            charsets: charset_list(project),
+            languages,
+        }
     }
 }
 
@@ -220,6 +254,8 @@ pub struct FidelDetail {
     built_on_by: Vec<OrderRef>,
     /// Orders this fidel could be built on; empty when it is drawn by hand.
     built_on_choices: Vec<OrderRef>,
+    /// Detached or drawn Irregular: the editor opens its own outline.
+    drawn_by_hand: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,6 +320,7 @@ impl FidelDetail {
             } else {
                 Vec::new()
             },
+            drawn_by_hand: !generated,
             family: fam.id.clone(),
             family_name: fam.name.clone(),
             base_glyph: fam.fidels.get(&Order::Giiz).and_then(|f| f.codepoint),
@@ -316,7 +353,9 @@ mod tests {
         assert!(first.starts_with("ሀለሐመሠረሰቀበ"), "{first}");
         let mu = &grid.rows[3].cells[1];
         assert_eq!(mu.codepoint, Some('ሙ'));
-        assert_eq!(mu.badge, Badge::Outlined);
+        assert_eq!(mu.badge, Badge::None, "ሙ is መ with the 2nd-order mark");
+        let ru = &grid.rows[5].cells[1];
+        assert_eq!(ru.badge, Badge::Outlined);
     }
 
     #[test]

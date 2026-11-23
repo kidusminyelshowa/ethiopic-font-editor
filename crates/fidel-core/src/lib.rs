@@ -35,7 +35,7 @@ pub mod scope;
 
 pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};
-pub use charset::CharSet;
+pub use charset::{CharSet, Language};
 pub use ethiopic::{GeezFamily, ShapeGroup, GEEZ_FAMILIES};
 pub use fidel::{
     Badge, Family, FamilyId, Fidel, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind,
@@ -43,6 +43,7 @@ pub use fidel::{
 pub use geometry::{svg_path, Contour, ContourId, ContourProblem, Point, PointId, PointKind, Rect, Vec2};
 pub use order::{Order, OrderRule};
 pub use parts::Part;
+pub use project::FontInfo;
 pub use project::{Change, DrawingTarget, Effect, Impact, Metrics, ModelError, Project, Symbol, SymbolId};
 pub use resolve::{Diagnostic, ResolvedContour, ResolvedFidel};
 pub use scope::Scope;

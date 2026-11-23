@@ -73,6 +73,95 @@ impl CharSet {
     }
 }
 
+/// A language preset: the letters, labialized forms and punctuation a
+/// language is written with, drawn from several Unicode sets at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Language {
+    Amharic,
+    Tigrinya,
+    Gurage,
+}
+
+/// The rows of the main Ethiopic block used for Amharic: the 26 Ge'ez rows
+/// and ሸ ቨ ቸ ኘ ኸ ዠ ጀ ጨ.
+const AMHARIC_ROWS: &[&str] = &[
+    "ha",
+    "la",
+    "hha",
+    "ma",
+    "sza",
+    "ra",
+    "sa",
+    "sha",
+    "qa",
+    "ba",
+    "va",
+    "ta",
+    "ca",
+    "xa",
+    "na",
+    "nya",
+    "glottal-a",
+    "ka",
+    "kxa",
+    "wa",
+    "pharyngeal-a",
+    "za",
+    "zha",
+    "ya",
+    "da",
+    "ja",
+    "ga",
+    "tha",
+    "cha",
+    "pha",
+    "tsa",
+    "tza",
+    "fa",
+    "pa",
+];
+
+impl Language {
+    pub const ALL: [Language; 3] = [Language::Amharic, Language::Tigrinya, Language::Gurage];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Language::Amharic => "Amharic",
+            Language::Tigrinya => "Tigrinya",
+            Language::Gurage => "Gurage",
+        }
+    }
+
+    /// Whether the language uses this character.
+    pub fn contains(self, c: char) -> bool {
+        let Some(e) = entry(c) else { return false };
+        let main_block = (c as u32) < 0x1380;
+        match (self, e.slot) {
+            (_, Slot::Symbol { .. }) if e.set == CharSet::EthiopicMarks => {
+                // Punctuation and numerals; the combining marks are for Gurage.
+                self == Language::Gurage || (c as u32) >= 0x1360
+            }
+            (Language::Gurage, _)
+                if matches!(e.set, CharSet::Supplement | CharSet::Extended | CharSet::ExtendedB) =>
+            {
+                true
+            }
+            (_, Slot::Symbol { .. }) => false,
+            (lang, Slot::Fidel { family, order, .. }) => {
+                let row = AMHARIC_ROWS.contains(&family)
+                    || (lang == Language::Tigrinya && family == "qha")
+                    || (lang == Language::Gurage && family == "gga");
+                main_block && row && order != Order::Oa
+            }
+        }
+    }
+
+    pub fn count(self) -> usize {
+        entries().filter(|e| self.contains(e.cp)).count()
+    }
+}
+
 /// One character of the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
