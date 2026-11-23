@@ -22,6 +22,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
 import { checkForUpdate } from "./updater";
+import { setupChrome } from "./chrome";
+
+setupChrome();
 import { isOn } from "./geometry";
 
 const STATES: StateKind[] = ["linked", "adjusted", "irregular", "detached"];
