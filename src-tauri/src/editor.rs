@@ -436,7 +436,8 @@ mod tests {
         assert_eq!(prev.len(), 7);
         assert!(prev[0].outline.is_some());
         assert!(prev[4].issues.iter().any(|i| i.contains("loop.bottom-right not drawn")));
-        assert!(prev[5].issues.iter().any(|i| i == "crick not applied yet"));
+        // The crick is applied now, so ሳድስ has nothing to report.
+        assert!(prev[5].issues.is_empty(), "{:?}", prev[5].issues);
     }
 
     #[test]
