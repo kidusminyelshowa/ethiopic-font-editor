@@ -1,11 +1,16 @@
 ; Installer hooks for the Windows (NSIS) bundle.
 
+!define OLD_NAME "Ethiopic Font Editor"
+
 !macro NSIS_HOOK_POSTINSTALL
-  ; Hohe used to be called "Ethiopic Font Editor", which installed into its own
-  ; folder with its own shortcut and uninstall entry. Remove that copy so only
-  ; Hohe is left. App data is keyed by the bundle identifier, which did not
-  ; change, and the silent uninstaller leaves it alone.
-  IfFileExists "$LOCALAPPDATA\Ethiopic Font Editor\uninstall.exe" 0 +3
-    ExecWait '"$LOCALAPPDATA\Ethiopic Font Editor\uninstall.exe" /S _?=$LOCALAPPDATA\Ethiopic Font Editor'
-    RMDir /r "$LOCALAPPDATA\Ethiopic Font Editor"
+  ; Hohe used to be called "Ethiopic Font Editor". Tidy away what that name
+  ; left behind: its Start menu and desktop shortcuts and its entry in
+  ; Installed apps.
+  ;
+  ; Never run the old uninstaller or delete the old folder: an update can
+  ; install Hohe into the old app's folder, and removing that folder removes
+  ; Hohe itself (this happened with 0.1.9).
+  Delete "$SMPROGRAMS\${OLD_NAME}.lnk"
+  Delete "$DESKTOP\${OLD_NAME}.lnk"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${OLD_NAME}"
 !macroend
