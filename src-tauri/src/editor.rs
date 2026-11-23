@@ -483,8 +483,8 @@ mod tests {
         assert_eq!(prev.len(), 7);
         assert!(prev[0].outline.is_some());
         assert!(prev[4].issues.iter().any(|i| i.contains("loop.bottom-right not drawn")));
-        // The crick is applied now, so ሳድስ has nothing to report.
-        assert!(prev[5].issues.is_empty(), "{:?}", prev[5].issues);
+        // ል takes the ring at the foot, which is not drawn yet.
+        assert_eq!(prev[5].issues, vec!["loop.bottom-left not drawn yet".to_string()]);
     }
 
     #[test]
