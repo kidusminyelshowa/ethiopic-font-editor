@@ -7,7 +7,10 @@ mod grid;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
-use fidel_core::{defaults::geez_project, kid, Contour, DrawingTarget, Metrics, Order, Project, Scope};
+use fidel_core::{
+    defaults::starter_project, kid, CharSet, Contour, DrawingTarget, FontInfo, Language, Metrics, Order,
+    Project, Scope, Vec2,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -28,7 +31,7 @@ struct OpenFile {
 
 impl Default for AppState {
     fn default() -> Self {
-        AppState { project: Mutex::new(geez_project(Metrics::default())), file: Mutex::default() }
+        AppState { project: Mutex::new(starter_project(Metrics::default())), file: Mutex::default() }
     }
 }
 
@@ -49,7 +52,7 @@ impl AppState {
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Untitled Ge'ez".into()),
+                .unwrap_or_else(|| "Untitled".into()),
             path: file.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
             dirty: file.dirty,
         }
@@ -134,24 +137,87 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
             DrawingTarget::Symbol(id) => {
                 project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
             }
-            DrawingTarget::Alteration(_) => return Err("alterations have no advance width".into()),
+            DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) => {
+                return Err("this drawing has no advance width of its own".into())
+            }
         }
     }
     state.mark_dirty();
     Ok(())
 }
 
-/// Cover these character sets. Creates the rows and symbols they need;
-/// turning a set off only hides it.
+/// Cover these character sets and languages. Creates the rows and symbols
+/// they need; turning one off only hides it.
 #[tauri::command]
-fn set_charsets(state: State<'_, AppState>, sets: Vec<fidel_core::CharSet>) -> FidelGrid {
+fn set_coverage(state: State<'_, AppState>, sets: Vec<CharSet>, languages: Vec<Language>) -> FidelGrid {
     let grid = {
         let mut project = state.project();
-        project.set_charsets(sets);
+        project.set_coverage(sets, languages);
         FidelGrid::from_project(&project)
     };
     state.mark_dirty();
     grid
+}
+
+/// Move where an alteration attaches on every fidel of one family.
+#[tauri::command]
+fn set_attach_offset(
+    state: State<'_, AppState>,
+    family: String,
+    alteration: String,
+    offset: Vec2,
+) -> CmdResult<()> {
+    state.project().set_attach_offset(&family, &alteration, offset).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// The font's names and vertical metrics, for the grid's properties panel.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontProperties {
+    info: FontInfo,
+    metrics: Metrics,
+    /// The name used when the family name is left empty.
+    default_family_name: String,
+    glyphs: usize,
+    drawn: usize,
+}
+
+#[tauri::command]
+fn font_properties(state: State<'_, AppState>) -> FontProperties {
+    let default_family_name = state.info().name;
+    let project = state.project();
+    let options = fidel_export::ExportOptions::new("Count");
+    let drawn = fidel_export::export(&project, &options).map(|f| f.exported.len()).unwrap_or(0);
+    let grid = FidelGrid::from_project(&project);
+    FontProperties {
+        info: project.info.clone(),
+        metrics: project.metrics.clone(),
+        default_family_name,
+        glyphs: grid.glyph_count(),
+        drawn,
+    }
+}
+
+#[tauri::command]
+fn set_font_properties(
+    state: State<'_, AppState>,
+    info: FontInfo,
+    pa_top: f64,
+    pa_bottom: f64,
+) -> CmdResult<()> {
+    if pa_top <= pa_bottom {
+        return Err("Pa-top must be above Pa-bottom".into());
+    }
+    {
+        let mut project = state.project();
+        project.info = info;
+        project.metrics.pa_top = pa_top;
+        project.metrics.pa_bottom = pa_bottom;
+    }
+    state.mark_dirty();
+    Ok(())
 }
 
 #[tauri::command]
@@ -162,7 +228,7 @@ fn project_info(state: State<'_, AppState>) -> ProjectInfo {
 /// Start over with an empty Ge'ez project.
 #[tauri::command]
 fn new_project(state: State<'_, AppState>) -> ProjectInfo {
-    *state.project() = geez_project(Metrics::default());
+    *state.project() = starter_project(Metrics::default());
     *state.file.lock().expect("file lock") = OpenFile::default();
     state.info()
 }
@@ -217,8 +283,19 @@ pub struct ExportSummary {
 /// The family name is the project's name.
 #[tauri::command]
 fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSummary> {
-    let family_name = state.info().name;
+    let (family_name, info) = {
+        let project = state.project();
+        let info = project.info.clone();
+        let name =
+            if info.family_name.trim().is_empty() { state.info().name } else { info.family_name.clone() };
+        (name, info)
+    };
     let mut options = fidel_export::ExportOptions::new(family_name.clone());
+    if !info.style_name.trim().is_empty() {
+        options.style_name = info.style_name.clone();
+    }
+    options.version = info.version;
+    options.designer = info.designer.clone();
     // A fresh timestamp each time helps Windows notice a reinstalled font.
     options.timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -324,7 +401,10 @@ pub fn run() {
             get_drawing,
             set_drawing,
             set_advance,
-            set_charsets,
+            set_coverage,
+            set_attach_offset,
+            font_properties,
+            set_font_properties,
             family_preview,
             project_info,
             new_project,

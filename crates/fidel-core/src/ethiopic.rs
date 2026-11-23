@@ -73,12 +73,11 @@ pub const GEEZ_FAMILIES: [GeezFamily; 26] = [
 ];
 
 /// Built-in irregular forms: fidel whose alteration cannot be deduced from the
-/// order rule. Starts with the forms the brief names (ሙ ሩ ፉ). Hornus notes
+/// order rule: ሩ and ፉ. ሙ is not one: it is መ with the 2nd-order mark. Hornus notes
 /// that many 4th and 7th orders "have to be considered individually"; those
 /// are left for the designer to flag, since the right list depends on the
 /// design.
 pub const DEFAULT_IRREGULARS: &[(char, &str)] = &[
-    ('ሙ', "2nd order does not follow the middle-right stroke rule"),
     ('ሩ', "2nd order does not follow the middle-right stroke rule"),
     ('ፉ', "2nd order does not follow the middle-right stroke rule"),
 ];

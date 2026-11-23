@@ -140,12 +140,12 @@ fn orphaned_nudges_are_kept_and_reported() {
 #[test]
 fn irregulars_are_preflagged_and_keep_their_recipe() {
     let p = project();
-    let mu = p.fidel("ma", Order::Kaib).unwrap();
-    assert_eq!(mu.codepoint, Some('ሙ'));
-    assert_eq!(mu.state.kind(), StateKind::Irregular);
+    let ru = p.fidel("ra", Order::Kaib).unwrap();
+    assert_eq!(ru.codepoint, Some('ሩ'));
+    assert_eq!(ru.state.kind(), StateKind::Irregular);
     assert_eq!(StateKind::Irregular.badge(), Badge::Outlined);
     // Changing the base still reaches it, since its recipe reuses the base.
-    let impacts = p.impacts(&Change::Base("ma".into()));
+    let impacts = p.impacts(&Change::Base("ra".into()));
     assert_eq!(impacts.len(), 7);
     assert!(impacts.iter().all(|i| i.effect == Effect::Regenerates));
 }

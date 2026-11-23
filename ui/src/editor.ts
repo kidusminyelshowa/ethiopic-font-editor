@@ -6,22 +6,32 @@
 import { api, PARTS, type DrawingTarget, type DrawingView, type Part } from "./api";
 import {
   clone,
+  constrain45,
   contourPath,
   contoursBounds,
+  ellipseContour,
   fromNodes,
   isOn,
   mirrorSmooth,
   nextContourId,
+  rebuilt,
+  rectContour,
   roundContours,
   toNodes,
+  translated,
   validate,
+  type Box,
   type Contour,
   type Node,
   type Vec2,
 } from "./geometry";
 import { importSvg, SvgImportError } from "./svgImport";
 
-type Tool = "select" | "pen" | "hand";
+/** Move selects and moves whole shapes; Direct selects points and handles. */
+export type Tool = "select" | "direct" | "pen" | "rect" | "ellipse" | "hand";
+
+/** Snap distance, in screen pixels. */
+const SNAP_PX = 6;
 
 interface View {
   scale: number;
@@ -40,7 +50,9 @@ interface Sketch {
 }
 
 type Gesture =
-  | { kind: "move"; start: Vec2; base: Contour[]; moved: boolean }
+  | { kind: "move"; start: Vec2; base: Contour[]; moved: boolean; lead: Vec2 | null; box: Box | null }
+  | { kind: "attach"; start: Vec2; origin: Vec2; base: Contour[]; moved: boolean }
+  | { kind: "shape"; shape: "rect" | "ellipse"; start: Vec2; now: Vec2 }
   | { kind: "marquee"; start: Vec2; now: Vec2; additive: boolean }
   | { kind: "pan"; startScreen: Vec2; view: View }
   | { kind: "pen-drag"; node: Node }
@@ -81,6 +93,13 @@ export class GlyphEditor {
   sketches = new Map<string, Sketch>();
 
   private view: View = { scale: 0.5, tx: 100, ty: 500 };
+  /** For an alteration: its attach point on the context base. Contours are
+   * shown and edited at origin + stored position, so the part sits where it
+   * lands on the base and the canvas keeps the base's frame. */
+  origin: Vec2 = { x: 0, y: 0 };
+  private contextKey = "";
+  /** Guides shown while a drag snaps. */
+  private snapLines: { x?: number; y?: number } = {};
   private gesture: Gesture | null = null;
   private pen: Node[] | null = null;
   private cursor: Vec2 | null = null;
@@ -125,9 +144,13 @@ export class GlyphEditor {
   async open(target: DrawingTarget, contextFamily?: string): Promise<void> {
     const sameDrawing = this.target && this.target.kind === target.kind && this.target.id === target.id;
     this.drawing = await api.getDrawing(target, contextFamily);
-    this.contours = clone(this.drawing.contours);
+    const contextKey = this.drawing.context?.family ?? "";
+    const sameFrame = sameDrawing && contextKey === this.contextKey;
+    this.contextKey = contextKey;
+    this.origin = this.drawing.context ? { ...this.drawing.context.origin } : { x: 0, y: 0 };
+    this.contours = translated(this.drawing.contours, this.origin);
     this.committed = JSON.stringify(this.contours);
-    if (!sameDrawing) {
+    if (!sameFrame) {
       this.undoStack = [];
       this.redoStack = [];
       this.selection.clear();
@@ -149,6 +172,8 @@ export class GlyphEditor {
     this.undoStack = [];
     this.redoStack = [];
     this.committed = "[]";
+    this.origin = { x: 0, y: 0 };
+    this.contextKey = "";
     this.sketches.clear();
     this.svg.innerHTML = "";
   }
@@ -173,10 +198,13 @@ export class GlyphEditor {
     const w = r.width || 800;
     const h = r.height || 600;
     const m = this.drawing.metrics;
+    // Frame the drawing like its base: same advance, same Pa band, so moving
+    // between a base and its alterations never shifts the design space.
+    const frame = this.frameWidth;
     const b = contoursBounds(this.contours);
-    const adv = this.drawing.advanceWidth ?? 0;
-    const minX = Math.min(b?.minX ?? 0, this.drawing.advanceWidth === null ? -300 : 0);
-    const maxX = Math.max(b?.maxX ?? 0, adv, this.drawing.advanceWidth === null ? 300 : 0);
+    const loose = frame === null;
+    const minX = Math.min(b?.minX ?? 0, loose ? this.origin.x - 300 : 0);
+    const maxX = Math.max(b?.maxX ?? 0, frame ?? 0, loose ? this.origin.x + 300 : 0);
     const minY = Math.min(b?.minY ?? 0, m.pa_bottom - 150);
     const maxY = Math.max(b?.maxY ?? 0, m.pa_top + 150);
     const scale = Math.min((w - 160) / (maxX - minX || 1), (h - 180) / (maxY - minY || 1));
@@ -186,6 +214,11 @@ export class GlyphEditor {
       ty: (h - 60 - (maxY - minY) * scale) / 2 + maxY * scale,
     };
     this.render();
+  }
+
+  /** The advance the canvas is framed on: the drawing's own, or its context base's. */
+  get frameWidth(): number | null {
+    return this.drawing?.advanceWidth ?? this.drawing?.context?.advanceWidth ?? null;
   }
 
   zoom(factor: number, around?: Vec2): void {
@@ -263,38 +296,54 @@ export class GlyphEditor {
     }
 
     if (this.tool === "pen") {
-      this.penDown(font, screen);
+      this.penDown(this.penTarget(font, e), screen);
       return;
     }
 
-    const hit = this.hitPoint(screen);
+    if (this.tool === "rect" || this.tool === "ellipse") {
+      const at = this.snapped(font, e).pos;
+      this.gesture = { kind: "shape", shape: this.tool, start: at, now: at };
+      return;
+    }
+
+    // The attach point of an alteration can be dragged with either selection tool.
+    if (this.hitAttach(screen)) {
+      this.gesture = { kind: "attach", start: font, origin: { ...this.origin }, base: clone(this.contours), moved: false };
+      return;
+    }
+
+    const direct = this.tool === "direct";
+    const hit = direct ? this.hitPoint(screen) : null;
     if (hit) {
       const k = key(...hit);
       if (e.shiftKey) {
         if (this.selection.has(k)) {
           this.selection.delete(k);
-          this.render();
-          this.host.renderSide(this);
+          this.changedSelection();
           return;
         }
         this.selection.add(k);
       } else if (!this.selection.has(k)) {
         this.selection = new Set([k]);
       }
-      this.gesture = { kind: "move", start: font, base: clone(this.contours), moved: false };
-      this.render();
-      this.host.renderSide(this);
+      const lead = { ...this.contours[hit[0]].points[hit[1]].pos };
+      this.gesture = { kind: "move", start: font, base: clone(this.contours), moved: false, lead, box: null };
+      this.changedSelection();
       return;
     }
 
     const shape = (e.target as Element).closest<SVGElement>("[data-ci]");
-    if (shape) {
-      const ci = Number(shape.dataset.ci);
-      if (!e.shiftKey) this.selection.clear();
-      this.contours[ci].points.forEach((_, pi) => this.selection.add(key(ci, pi)));
-      this.gesture = { kind: "move", start: font, base: clone(this.contours), moved: false };
-      this.render();
-      this.host.renderSide(this);
+    const inBox = !direct && this.selectionBoxHit(font);
+    if (shape || inBox) {
+      if (shape) {
+        const ci = Number(shape.dataset.ci);
+        const already = this.contours[ci].points.every((_, pi) => this.selection.has(key(ci, pi)));
+        if (!already && !e.shiftKey) this.selection.clear();
+        this.selectContour(ci);
+      }
+      const box = contoursBounds(this.selectedContours().map((ci) => this.contours[ci]));
+      this.gesture = { kind: "move", start: font, base: clone(this.contours), moved: false, lead: null, box };
+      this.changedSelection();
       return;
     }
 
@@ -305,8 +354,7 @@ export class GlyphEditor {
 
     if (!e.shiftKey) this.selection.clear();
     this.gesture = { kind: "marquee", start: font, now: font, additive: e.shiftKey };
-    this.render();
-    this.host.renderSide(this);
+    this.changedSelection();
   }
 
   private onMove(e: PointerEvent): void {
@@ -315,9 +363,13 @@ export class GlyphEditor {
     this.coords.textContent = `${Math.round(font.x)}, ${Math.round(font.y)}`;
     const g = this.gesture;
     if (!g) {
-      if (this.pen) this.render();
+      if (this.pen) {
+        this.cursor = this.penTarget(font, e);
+        this.render();
+      }
       return;
     }
+    this.snapLines = {};
     switch (g.kind) {
       case "pan": {
         const s = this.screenOf(e);
@@ -329,21 +381,61 @@ export class GlyphEditor {
         break;
       }
       case "move": {
-        let dx = font.x - g.start.x;
-        let dy = font.y - g.start.y;
-        if (e.shiftKey) {
-          if (Math.abs(dx) > Math.abs(dy)) dy = 0;
-          else dx = 0;
+        let to = font;
+        if (e.shiftKey) to = constrain45(g.start, to);
+        let dx = to.x - g.start.x;
+        let dy = to.y - g.start.y;
+        if (!e.altKey) {
+          if (g.lead) {
+            // Direct selection: the grabbed point snaps.
+            const want = { x: g.lead.x + dx, y: g.lead.y + dy };
+            const s = this.snapped(want, e, true);
+            if (!e.shiftKey || s.lines.x !== undefined || s.lines.y !== undefined) {
+              dx = s.pos.x - g.lead.x;
+              dy = s.pos.y - g.lead.y;
+            }
+            this.snapLines = s.lines;
+          } else if (g.box) {
+            const s = this.snapBox(g.box, dx, dy, !e.shiftKey || Math.abs(dx) > Math.abs(dy), !e.shiftKey || Math.abs(dy) >= Math.abs(dx));
+            dx = s.dx;
+            dy = s.dy;
+            this.snapLines = s.lines;
+          }
         }
         g.moved ||= Math.hypot(dx, dy) * this.view.scale > 1;
         this.contours = this.moved(g.base, dx, dy);
+        break;
+      }
+      case "attach": {
+        const to = e.shiftKey ? constrain45(g.start, font) : font;
+        let d = { x: to.x - g.start.x, y: to.y - g.start.y };
+        if (!e.altKey) {
+          const s = this.snapped({ x: g.origin.x + d.x, y: g.origin.y + d.y }, e, false);
+          d = { x: s.pos.x - g.origin.x, y: s.pos.y - g.origin.y };
+          this.snapLines = s.lines;
+        }
+        d = { x: Math.round(d.x), y: Math.round(d.y) };
+        g.moved ||= Math.hypot(d.x, d.y) > 0;
+        this.origin = { x: g.origin.x + d.x, y: g.origin.y + d.y };
+        this.contours = translated(g.base, d);
+        break;
+      }
+      case "shape": {
+        let to = this.snapped(font, e).pos;
+        if (e.shiftKey) {
+          const side = Math.max(Math.abs(to.x - g.start.x), Math.abs(to.y - g.start.y));
+          to = { x: g.start.x + Math.sign(to.x - g.start.x || 1) * side, y: g.start.y + Math.sign(to.y - g.start.y || 1) * side };
+        }
+        g.now = to;
         break;
       }
       case "marquee":
         g.now = font;
         break;
       case "pen-drag": {
-        const d = { x: font.x - g.node.pos.x, y: font.y - g.node.pos.y };
+        let h = font;
+        if (e.shiftKey) h = constrain45(g.node.pos, h);
+        const d = { x: h.x - g.node.pos.x, y: h.y - g.node.pos.y };
         if (Math.hypot(d.x, d.y) * this.view.scale > 3) {
           g.node.out = { id: -1, pos: { x: g.node.pos.x + d.x, y: g.node.pos.y + d.y } };
           g.node.in = { id: -1, pos: { x: g.node.pos.x - d.x, y: g.node.pos.y - d.y } };
@@ -366,20 +458,41 @@ export class GlyphEditor {
   private onUp(e: PointerEvent): void {
     const g = this.gesture;
     this.gesture = null;
+    this.snapLines = {};
     if (!g) return;
     if (g.kind === "move" && g.moved) {
       roundContours(this.contours);
       this.commit();
+    } else if (g.kind === "attach" && g.moved) {
+      void this.saveAttach();
+    } else if (g.kind === "shape") {
+      const w = Math.abs(g.now.x - g.start.x);
+      const h = Math.abs(g.now.y - g.start.y);
+      if (w * this.view.scale > 2 && h * this.view.scale > 2) {
+        const id = nextContourId(this.contours);
+        const c = g.shape === "rect" ? rectContour(id, g.start, g.now) : ellipseContour(id, g.start, g.now);
+        c.name = g.shape === "rect" ? "Rectangle" : "Ellipse";
+        const ci = this.contours.length;
+        this.contours.push(c);
+        this.selection = new Set(c.points.map((_, pi) => key(ci, pi)));
+        this.commit();
+        this.host.renderSide(this);
+      }
     } else if (g.kind === "marquee") {
       const x0 = Math.min(g.start.x, g.now.x);
       const x1 = Math.max(g.start.x, g.now.x);
       const y0 = Math.min(g.start.y, g.now.y);
       const y1 = Math.max(g.start.y, g.now.y);
-      this.contours.forEach((c, ci) =>
-        c.points.forEach((p, pi) => {
-          if (p.pos.x >= x0 && p.pos.x <= x1 && p.pos.y >= y0 && p.pos.y <= y1) this.selection.add(key(ci, pi));
-        }),
-      );
+      this.contours.forEach((c, ci) => {
+        const inside = c.points.filter((p) => p.pos.x >= x0 && p.pos.x <= x1 && p.pos.y >= y0 && p.pos.y <= y1);
+        if (!inside.length) return;
+        // Move selects whole shapes; Direct selects only the points inside.
+        if (this.tool === "direct") {
+          c.points.forEach((p, pi) => {
+            if (p.pos.x >= x0 && p.pos.x <= x1 && p.pos.y >= y0 && p.pos.y <= y1) this.selection.add(key(ci, pi));
+          });
+        } else this.selectContour(ci);
+      });
       this.host.renderSide(this);
     }
     if (this.svg.hasPointerCapture(e.pointerId)) this.svg.releasePointerCapture(e.pointerId);
@@ -387,12 +500,181 @@ export class GlyphEditor {
   }
 
   private onDoubleClick(e: MouseEvent): void {
-    if (this.tool !== "select") return;
-    const hit = this.hitPoint(this.screenOf(e));
+    if (this.hitAttach(this.screenOf(e))) {
+      this.resetAttach();
+      return;
+    }
+    const screen = this.screenOf(e);
+    if (this.tool === "select") {
+      // Double-clicking a shape goes into its points, like Figma.
+      const shape = (e.target as Element).closest<SVGElement>("[data-ci]");
+      if (shape) this.setTool("direct");
+      return;
+    }
+    if (this.tool !== "direct") return;
+    const hit = this.hitPoint(screen);
     if (!hit) return;
     const p = this.contours[hit[0]].points[hit[1]];
     if (!isOn(p)) return;
     this.setSmooth(!p.smooth);
+  }
+
+  private changedSelection(): void {
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Add every point of one contour to the selection. */
+  selectContour(ci: number, only = false): void {
+    if (only) this.selection.clear();
+    this.contours[ci]?.points.forEach((_, pi) => this.selection.add(key(ci, pi)));
+  }
+
+  /** Select one layer, from the layers panel. */
+  selectLayer(ci: number, additive: boolean): void {
+    if (this.tool !== "select" && this.tool !== "direct") this.setTool("select");
+    this.selectContour(ci, !additive);
+    this.changedSelection();
+  }
+
+  renameLayer(ci: number, name: string): void {
+    const c = this.contours[ci];
+    if (!c) return;
+    c.name = name.trim() || null;
+    this.commit();
+    this.changedSelection();
+  }
+
+  private selectionBoxHit(font: Vec2): boolean {
+    if (!this.selection.size) return false;
+    const b = contoursBounds(this.selectedContours().map((ci) => this.contours[ci]));
+    return !!b && font.x >= b.minX && font.x <= b.maxX && font.y >= b.minY && font.y <= b.maxY;
+  }
+
+  private hitAttach(screen: Vec2): boolean {
+    if (!this.drawing?.context) return false;
+    const s = this.toScreen(this.origin);
+    return Math.hypot(s.x - screen.x, s.y - screen.y) < HIT_PX + 4;
+  }
+
+  // ---------- Snapping ----------
+
+  /** Lines a point can snap to: other on-curve points, the Pa lines, the sidebearings. */
+  private snapTargets(skipSelected: boolean): { xs: number[]; ys: number[] } {
+    const m = this.drawing!.metrics;
+    const xs = [0];
+    const ys = [m.pa_top, m.pa_bottom, 0];
+    const frame = this.frameWidth;
+    if (frame !== null) xs.push(frame);
+    if (this.drawing?.context) {
+      xs.push(this.origin.x);
+      ys.push(this.origin.y);
+    }
+    this.contours.forEach((c, ci) =>
+      c.points.forEach((p, pi) => {
+        if (!isOn(p) || (skipSelected && this.selection.has(key(ci, pi)))) return;
+        xs.push(p.pos.x);
+        ys.push(p.pos.y);
+      }),
+    );
+    return { xs, ys };
+  }
+
+  private snapped(p: Vec2, e: { altKey: boolean }, skipSelected = false): { pos: Vec2; lines: { x?: number; y?: number } } {
+    if (e.altKey || !this.drawing) return { pos: p, lines: {} };
+    const { xs, ys } = this.snapTargets(skipSelected);
+    const tol = SNAP_PX / this.view.scale;
+    const near = (v: number, list: number[]) => {
+      let best: number | undefined;
+      for (const t of list) if (Math.abs(t - v) <= tol && (best === undefined || Math.abs(t - v) < Math.abs(best - v))) best = t;
+      return best;
+    };
+    const x = near(p.x, xs);
+    const y = near(p.y, ys);
+    return { pos: { x: x ?? p.x, y: y ?? p.y }, lines: { x, y } };
+  }
+
+  /** Snap a moving bounding box by its edges. */
+  private snapBox(b: Box, dx: number, dy: number, allowX: boolean, allowY: boolean) {
+    const { xs, ys } = this.snapTargets(true);
+    const tol = SNAP_PX / this.view.scale;
+    const lines: { x?: number; y?: number } = {};
+    const fit = (edges: number[], list: number[]) => {
+      let best: { shift: number; line: number } | null = null;
+      for (const edge of edges)
+        for (const t of list) {
+          const shift = t - edge;
+          if (Math.abs(shift) <= tol && (!best || Math.abs(shift) < Math.abs(best.shift))) best = { shift, line: t };
+        }
+      return best;
+    };
+    if (allowX) {
+      const f = fit([b.minX + dx, b.maxX + dx], xs);
+      if (f) {
+        dx += f.shift;
+        lines.x = f.line;
+      }
+    } else dx = 0;
+    if (allowY) {
+      const f = fit([b.minY + dy, b.maxY + dy], ys);
+      if (f) {
+        dy += f.shift;
+        lines.y = f.line;
+      }
+    } else dy = 0;
+    return { dx, dy, lines };
+  }
+
+  /** Where the pen would put its next point: Shift keeps 0/45/90° from the last one, then it snaps. */
+  private penTarget(font: Vec2, e: { shiftKey: boolean; altKey: boolean }): Vec2 {
+    const last = this.pen?.[this.pen.length - 1];
+    let p = font;
+    if (e.shiftKey && last) p = constrain45(last.pos, p);
+    const s = this.snapped(p, e);
+    // Keep the angle when only one axis snapped.
+    if (e.shiftKey && last) {
+      this.snapLines = {};
+      return p;
+    }
+    this.snapLines = s.lines;
+    return s.pos;
+  }
+
+  // ---------- Attach point ----------
+
+  private async saveAttach(): Promise<void> {
+    const ctx = this.drawing?.context;
+    const target = this.target;
+    if (!ctx || target?.kind !== "alteration") return;
+    const offset = { x: Math.round(this.origin.x - ctx.autoOrigin.x), y: Math.round(this.origin.y - ctx.autoOrigin.y) };
+    try {
+      await api.setAttachOffset(ctx.family, target.id, offset);
+      ctx.origin = { ...this.origin };
+      // The stored part did not change, only where it sits; history in
+      // canvas coordinates no longer lines up.
+      this.committed = JSON.stringify(this.contours);
+      this.undoStack = [];
+      this.redoStack = [];
+      this.host.changed(target);
+      this.host.renderSide(this);
+    } catch (err) {
+      this.host.toast(`Could not move the attach point: ${err}`, "error");
+    }
+  }
+
+  /** Put the attach point at (x, y) for the context family. */
+  setAttachOrigin(x: number, y: number): void {
+    if (!this.drawing?.context) return;
+    const d = { x: Math.round(x) - this.origin.x, y: Math.round(y) - this.origin.y };
+    this.origin = { x: this.origin.x + d.x, y: this.origin.y + d.y };
+    this.contours = translated(this.contours, d);
+    this.render();
+    void this.saveAttach();
+  }
+
+  resetAttach(): void {
+    const ctx = this.drawing?.context;
+    if (ctx) this.setAttachOrigin(ctx.autoOrigin.x, ctx.autoOrigin.y);
   }
 
   /** Points of `base` with the selection moved by (dx, dy). Handles follow their point. */
@@ -509,7 +791,7 @@ export class GlyphEditor {
         if (nd.in && gone.has(nd.in.id)) delete nd.in;
         if (nd.out && gone.has(nd.out.id)) delete nd.out;
       }
-      if (nodes.length >= 2) next.push(fromNodes(nodes, c.id, c.part, free));
+      if (nodes.length >= 2) next.push(rebuilt(c, nodes, free));
     });
     this.contours = next;
     this.selection.clear();
@@ -567,14 +849,15 @@ export class GlyphEditor {
       const pa = m.pa_top - m.pa_bottom;
       // A base fills the Pa-height. An alteration is a small part: it is
       // scaled to a quarter of that and hung just below its attach point.
-      const isBase = this.drawing.advanceWidth !== null;
-      const imported = importSvg(text, {
+      const isBase = this.drawing.target.kind !== "alteration";
+      const raw = importSvg(text, {
         height: isBase ? pa : Math.round(pa / 4),
         bottom: isBase ? m.pa_bottom : -Math.round(pa / 4),
         left: isBase ? 50 : 0,
         centerX: !isBase,
         firstContourId: nextContourId(this.contours),
       });
+      const imported = isBase ? raw : translated(raw, this.origin);
       const start = this.contours.length;
       this.contours.push(...imported);
       this.selection = new Set(
@@ -685,20 +968,13 @@ export class GlyphEditor {
   private persist(): void {
     const target = this.target;
     if (!target) return;
-    const contours = JSON.parse(this.committed) as Contour[];
-    this.updateHistoryButtons();
+    // Alterations are stored relative to their attach point.
+    const contours = translated(JSON.parse(this.committed) as Contour[], { x: -this.origin.x, y: -this.origin.y });
     // Keep writes in order.
     this.saving = this.saving
       .then(() => api.setDrawing(target, contours))
       .then(() => this.host.changed(target))
       .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
-  }
-
-  private updateHistoryButtons(): void {
-    const u = this.root.querySelector<HTMLButtonElement>("[data-action=undo]");
-    const r = this.root.querySelector<HTMLButtonElement>("[data-action=redo]");
-    if (u) u.disabled = !this.canUndo;
-    if (r) r.disabled = !this.canRedo;
   }
 
   // ---------- Chrome: tool palette, bottom bar, keys, paste ----------
@@ -712,17 +988,20 @@ export class GlyphEditor {
     on("zoom-in", () => this.zoom(1.25));
     on("zoom-out", () => this.zoom(0.8));
     on("fit", () => this.fit());
-    on("undo", () => this.undo());
-    on("redo", () => this.redo());
     on("import-svg", () => this.root.querySelector<HTMLInputElement>(".svg-file")!.click());
+    on("import-image", () => this.root.querySelector<HTMLInputElement>(".image-file")!.click());
+    this.root.querySelector<HTMLInputElement>(".image-file")!.addEventListener("change", (e) => {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (file) this.loadSketch(file);
+      input.value = "";
+    });
     this.root.querySelector<HTMLInputElement>(".svg-file")!.addEventListener("change", async (e) => {
       const input = e.target as HTMLInputElement;
       const file = input.files?.[0];
       if (file) this.pasteSvg(await file.text());
       input.value = "";
     });
-    this.updateHistoryButtons();
-
     window.addEventListener("paste", (e) => {
       if (!this.isActive() || isTyping(e.target)) return;
       const text = e.clipboardData?.getData("image/svg+xml") || e.clipboardData?.getData("text/plain") || "";
@@ -749,7 +1028,10 @@ export class GlyphEditor {
       } else if (mod) {
         return;
       } else if (k === "v") this.setTool("select");
+      else if (k === "a") this.setTool("direct");
       else if (k === "p") this.setTool("pen");
+      else if (k === "r") this.setTool("rect");
+      else if (k === "e") this.setTool("ellipse");
       else if (k === "h") this.setTool("hand");
       else if (k === "0" || k === "f") this.fit();
       else if (k === "=" || k === "+") this.zoom(1.25);
@@ -811,19 +1093,12 @@ export class GlyphEditor {
     parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
     if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
 
-    if (this.drawing.advanceWidth !== null) {
-      for (const x of [0, this.drawing.advanceWidth]) {
+    const frame = this.frameWidth;
+    if (frame !== null) {
+      for (const x of [0, frame]) {
         parts.push(`<line class="guide guide-v" x1="${sx(x)}" x2="${sx(x)}" y1="0" y2="${H}"/>`);
       }
-      parts.push(
-        `<text class="guide-label" x="${sx(this.drawing.advanceWidth) + 6}" y="${H - 64}">${this.drawing.advanceWidth}</text>`,
-      );
-    } else {
-      parts.push(
-        `<line class="origin" x1="${sx(0) - 14}" x2="${sx(0) + 14}" y1="${sy(0)}" y2="${sy(0)}"/>`,
-        `<line class="origin" x1="${sx(0)}" x2="${sx(0)}" y1="${sy(0) - 14}" y2="${sy(0) + 14}"/>`,
-        `<text class="guide-label origin-label" x="${sx(0) + 10}" y="${sy(0) + 22}">attach point</text>`,
-      );
+      parts.push(`<text class="guide-label" x="${sx(frame) + 6}" y="${H - 64}">${Math.round(frame)}</text>`);
     }
 
     const xf = `matrix(${scale} 0 0 ${-scale} ${tx} ${ty})`;
@@ -838,6 +1113,14 @@ export class GlyphEditor {
 
     if (this.drawing.context) {
       parts.push(`<path class="ghost" transform="${xf}" d="${this.drawing.context.d}"/>`);
+    }
+
+    // Snap guides.
+    if (this.snapLines.x !== undefined) {
+      parts.push(`<line class="snap-line" x1="${sx(this.snapLines.x)}" x2="${sx(this.snapLines.x)}" y1="0" y2="${H}"/>`);
+    }
+    if (this.snapLines.y !== undefined) {
+      parts.push(`<line class="snap-line" x1="0" x2="${W}" y1="${sy(this.snapLines.y)}" y2="${sy(this.snapLines.y)}"/>`);
     }
 
     // Filled outline (all contours together, so counters cut out), then each
@@ -880,8 +1163,22 @@ export class GlyphEditor {
       parts.push(`<circle class="pen-start" cx="${sx(first.pos.x)}" cy="${sy(first.pos.y)}" r="8"/>`);
     }
 
-    // Handles and points.
-    if (this.tool !== "hand") {
+    // Move tool: a box around the selected shapes. Direct and pen: points and handles.
+    const showPoints = this.tool === "direct" || this.tool === "pen";
+    if (!showPoints && this.selection.size) {
+      const b = contoursBounds(this.selectedContours().map((ci) => this.contours[ci]));
+      if (b) {
+        const x0 = sx(b.minX);
+        const y0 = sy(b.maxY);
+        const w = (b.maxX - b.minX) * scale;
+        const h = (b.maxY - b.minY) * scale;
+        parts.push(`<rect class="sel-box" x="${x0}" y="${y0}" width="${w}" height="${h}"/>`);
+        for (const [cx, cy] of [[x0, y0], [x0 + w, y0], [x0, y0 + h], [x0 + w, y0 + h]]) {
+          parts.push(`<rect class="sel-corner" x="${cx - 3}" y="${cy - 3}" width="6" height="6"/>`);
+        }
+      }
+    }
+    if (showPoints) {
       this.contours.forEach((c, ci) => {
         const n = c.points.length;
         c.points.forEach((p, pi) => {
@@ -904,7 +1201,29 @@ export class GlyphEditor {
       });
     }
 
+    // The attach point of an alteration, draggable.
+    if (this.drawing.context) {
+      const o = this.toScreen(this.origin);
+      const moved = this.origin.x !== this.drawing.context.autoOrigin.x || this.origin.y !== this.drawing.context.autoOrigin.y;
+      parts.push(
+        `<g class="attach${moved ? " moved" : ""}"><circle cx="${o.x}" cy="${o.y}" r="7"/><line x1="${o.x - 12}" x2="${o.x + 12}" y1="${o.y}" y2="${o.y}"/><line x1="${o.x}" x2="${o.x}" y1="${o.y - 12}" y2="${o.y + 12}"/></g>`,
+      );
+    }
+
     const g = this.gesture;
+    if (g?.kind === "shape") {
+      const a = { x: sx(g.start.x), y: sy(g.start.y) };
+      const b = { x: sx(g.now.x), y: sy(g.now.y) };
+      const x = Math.min(a.x, b.x);
+      const y = Math.min(a.y, b.y);
+      const w = Math.abs(a.x - b.x);
+      const h = Math.abs(a.y - b.y);
+      parts.push(
+        g.shape === "rect"
+          ? `<rect class="shape-preview" x="${x}" y="${y}" width="${w}" height="${h}"/>`
+          : `<ellipse class="shape-preview" cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}"/>`,
+      );
+    }
     if (g?.kind === "marquee") {
       const a = { x: sx(g.start.x), y: sy(g.start.y) };
       const b = { x: sx(g.now.x), y: sy(g.now.y) };

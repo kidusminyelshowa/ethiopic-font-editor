@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { contourPath, fromNodes, mirrorSmooth, toNodes, validate, type Contour } from "./geometry";
+import {
+  constrain45,
+  contourPath,
+  ellipseContour,
+  fromNodes,
+  mirrorSmooth,
+  rectContour,
+  toNodes,
+  validate,
+  type Contour,
+} from "./geometry";
 
 const circle: Contour = {
   id: 0,
@@ -61,5 +71,29 @@ describe("geometry", () => {
     const a = Math.atan2(100 - 50, 200 - 180);
     const b = Math.atan2(c.points[4].pos.y - 100, c.points[4].pos.x - 200);
     expect(a).toBeCloseTo(b);
+  });
+});
+
+describe("shapes and constraints", () => {
+  it("snaps a drag to 0, 45 and 90 degrees", () => {
+    expect(constrain45({ x: 0, y: 0 }, { x: 100, y: 7 })).toEqual({ x: 100, y: 0 });
+    expect(constrain45({ x: 0, y: 0 }, { x: 4, y: -90 })).toEqual({ x: 0, y: -90 });
+    const d = constrain45({ x: 0, y: 0 }, { x: 50, y: 55 });
+    expect(Math.abs(d.x - d.y)).toBeLessThan(1e-9);
+  });
+
+  it("makes valid rectangles and ellipses", () => {
+    const r = rectContour(3, { x: 10, y: 50 }, { x: -20, y: 0 });
+    expect(validate(r)).toBeNull();
+    expect(r.points.map((p) => p.pos)).toEqual([
+      { x: -20, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 50 },
+      { x: -20, y: 50 },
+    ]);
+    const e = ellipseContour(4, { x: 0, y: 0 }, { x: 200, y: 100 });
+    expect(validate(e)).toBeNull();
+    expect(e.points.filter((p) => p.kind === "curve")).toHaveLength(4);
+    expect(e.points).toHaveLength(12);
   });
 });

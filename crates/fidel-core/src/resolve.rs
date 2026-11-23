@@ -181,7 +181,7 @@ fn resolve_in_chain(
         if let Some(reason) = attach.fallback {
             out.diagnostics.push(Diagnostic::PlacedByFallback { alteration: alt_id.clone(), reason });
         }
-        let shift = attach.at + placement_nudge(nudges, alt_id);
+        let shift = attach.at + project.attach_offset(family_id, alt_id) + placement_nudge(nudges, alt_id);
         for c in &alt.contours {
             let mut c = c.clone();
             c.translate(shift);

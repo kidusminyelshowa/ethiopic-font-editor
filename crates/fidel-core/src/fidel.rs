@@ -24,6 +24,11 @@ pub struct Family {
     /// (variant 0).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rule_variants: BTreeMap<Order, usize>,
+    /// Where this family's order marks sit, relative to the automatic attach
+    /// point: alteration id -> offset. A loop that should hang lower on one
+    /// family than on the others is moved here, once for the whole row.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attach_offsets: BTreeMap<AlterationId, Vec2>,
     pub fidels: BTreeMap<Order, Fidel>,
 }
 

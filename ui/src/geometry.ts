@@ -23,6 +23,8 @@ export interface Contour {
   id: number;
   points: Point[];
   part?: Part | null;
+  /** Layer name, e.g. the alteration a detached contour came from. */
+  name?: string | null;
 }
 
 /** An on-curve point with its handles: easier to edit than the flat list. */
@@ -96,6 +98,13 @@ export function fromNodes(nodes: Node[], id: number, part?: Part | null, firstFr
   }
   if (curve[0]) points.push(...handles(nodes[n - 1], nodes[0]));
   return { id, points, part: part ?? null };
+}
+
+/** `fromNodes`, keeping the layer name of the contour it came from. */
+export function rebuilt(c: Contour, nodes: Node[], firstFreeId?: number): Contour {
+  const out = fromNodes(nodes, c.id, c.part, firstFreeId);
+  if (c.name) out.name = c.name;
+  return out;
 }
 
 function maxId(nodes: Node[]): number {
@@ -223,4 +232,60 @@ export function roundContours(contours: Contour[]): void {
       p.pos = { x: Math.round(p.pos.x), y: Math.round(p.pos.y) };
     }
   }
+}
+
+/** Move every point of every contour. */
+export function translated(contours: Contour[], d: Vec2): Contour[] {
+  const out = clone(contours);
+  for (const c of out) for (const p of c.points) p.pos = { x: p.pos.x + d.x, y: p.pos.y + d.y };
+  return out;
+}
+
+/** Snap a drag from `from` to `to` onto the nearest multiple of 45°, keeping its length along that ray. */
+export function constrain45(from: Vec2, to: Vec2): Vec2 {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return { ...to };
+  const step = Math.PI / 4;
+  const a = Math.round(Math.atan2(dy, dx) / step) * step;
+  // Project onto the ray so a drag along an axis keeps its exact length.
+  const ux = Math.cos(a);
+  const uy = Math.sin(a);
+  const t = dx * ux + dy * uy;
+  const clean = (v: number) => (Math.abs(v) < 1e-9 ? 0 : v);
+  return { x: from.x + clean(t * ux), y: from.y + clean(t * uy) };
+}
+
+/** An axis-aligned rectangle, counter-clockwise like the core's. */
+export function rectContour(id: number, a: Vec2, b: Vec2): Contour {
+  const x0 = Math.round(Math.min(a.x, b.x));
+  const x1 = Math.round(Math.max(a.x, b.x));
+  const y0 = Math.round(Math.min(a.y, b.y));
+  const y1 = Math.round(Math.max(a.y, b.y));
+  const corners: Vec2[] = [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ];
+  return { id, points: corners.map((pos, i) => ({ id: i, pos, kind: "line" as const })), part: null };
+}
+
+/** An ellipse inside the box a-b: four smooth points with cubic handles. */
+export function ellipseContour(id: number, a: Vec2, b: Vec2): Contour {
+  const cx = (a.x + b.x) / 2;
+  const cy = (a.y + b.y) / 2;
+  const rx = Math.abs(b.x - a.x) / 2;
+  const ry = Math.abs(b.y - a.y) / 2;
+  const k = 0.5523;
+  const r = (v: number) => Math.round(v);
+  // Counter-clockwise from the bottom.
+  const nodes: Node[] = [
+    { id: 0, pos: { x: r(cx), y: r(cy - ry) }, smooth: true, in: { id: 1, pos: { x: r(cx - rx * k), y: r(cy - ry) } }, out: { id: 2, pos: { x: r(cx + rx * k), y: r(cy - ry) } } },
+    { id: 3, pos: { x: r(cx + rx), y: r(cy) }, smooth: true, in: { id: 4, pos: { x: r(cx + rx), y: r(cy - ry * k) } }, out: { id: 5, pos: { x: r(cx + rx), y: r(cy + ry * k) } } },
+    { id: 6, pos: { x: r(cx), y: r(cy + ry) }, smooth: true, in: { id: 7, pos: { x: r(cx + rx * k), y: r(cy + ry) } }, out: { id: 8, pos: { x: r(cx - rx * k), y: r(cy + ry) } } },
+    { id: 9, pos: { x: r(cx - rx), y: r(cy) }, smooth: true, in: { id: 10, pos: { x: r(cx - rx), y: r(cy + ry * k) } }, out: { id: 11, pos: { x: r(cx - rx), y: r(cy - ry * k) } } },
+  ];
+  return fromNodes(nodes, id, null, 12);
 }

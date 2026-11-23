@@ -1396,7 +1396,8 @@ button.mini {
   color: var(--ink-faint);
 }
 
-.field input[type="number"] {
+.field input[type="number"],
+.field input[type="text"] {
   border: 0;
   background: transparent;
   font: inherit;

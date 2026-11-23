@@ -18,6 +18,10 @@ import {
   type ProjectInfo,
   type StateKind,
   type CharSetId,
+  type CharSetInfo,
+  type LanguageId,
+  type LanguageInfo,
+  type FontProperties,
   type DrawingKind,
   type SymbolCell,
 } from "./api";
@@ -184,7 +188,7 @@ function renderGrid(grid: FidelGrid) {
   const extras = grid.orders.filter((o) => o.extra).length;
   const table = el("table", { class: `fidel-grid${extras ? " has-extra" : ""}` });
   const head = table.createTHead().insertRow();
-  head.append(el("th", { scope: "col", class: "corner" }, "Family"));
+  head.append(el("th", { scope: "col", class: "corner" }));
   for (const [i, o] of grid.orders.entries()) {
     const first = o.extra && !grid.orders[i - 1]?.extra;
     head.append(
@@ -213,13 +217,8 @@ function renderGrid(grid: FidelGrid) {
     tr.append(
       el(
         "th",
-        { scope: "row" },
-        el(
-          "span",
-          { class: "family" },
-          el("span", { class: "family-glyph", lang: "gez" }, base),
-          el("span", { class: "family-name" }, row.name),
-        ),
+        { scope: "row", title: row.name },
+        el("span", { class: "family" }, el("span", { class: "family-glyph", lang: "gez" }, base)),
       ),
     );
     for (const [i, o] of grid.orders.entries()) {
@@ -235,7 +234,7 @@ function renderGrid(grid: FidelGrid) {
           "data-order": cell.order,
           "data-state": cell.state,
           "aria-label": `${cell.codepoint ?? ""}, ${row.name}, ${o.name}, ${STATE_LABEL[cell.state]}`,
-          title: cell.note ? `${STATE_LABEL[cell.state]}: ${cell.note}` : STATE_LABEL[cell.state],
+          title: `${row.name} · ${o.name}${cell.note ? `\n${STATE_LABEL[cell.state]}: ${cell.note}` : cell.state === "linked" ? "" : ` · ${STATE_LABEL[cell.state]}`}`,
         },
         glyphView(cell.outline, grid.metrics, cell.codepoint),
         el("span", { class: `badge badge-${cell.badge}`, "aria-hidden": "true" }),
@@ -333,8 +332,13 @@ async function select(family: string, order: string) {
 
 /** Double-click: the 1st order opens its base; other orders open their first drawable alteration. */
 async function editFromCell(family: string, order: string) {
+  const detail0 = await api.fidelDetail(family, order);
+  if (detail0.drawnByHand) {
+    await openDrawing({ kind: "fidel", id: `${family}/${order}` });
+    return;
+  }
   if (order !== "giiz") {
-    const detail = await api.fidelDetail(family, order);
+    const detail = detail0;
     const drawable = detail.recipe.find((s) => state.alterations.find((a) => a.id === s.id)?.drawable);
     if (drawable) {
       state.contextFamily = family;
@@ -490,16 +494,99 @@ async function changeFidel(run: () => Promise<FidelDetail>, d: FidelDetail) {
   }
 }
 
+/** With nothing selected, the inspector shows the font itself. */
 function renderEmptyInspector() {
+  const token = ++fontPropsToken;
+  void api
+    .fontProperties()
+    .then((p) => {
+      if (token === fontPropsToken && !state.selected && !state.selectedSymbol) renderFontProperties(p);
+    })
+    .catch(() => {
+      ui.inspector.replaceChildren(
+        el("div", { class: "inspector-body" }, el("h2", { class: "display inspector-title muted" }, "No selection")),
+      );
+    });
+}
+
+let fontPropsToken = 0;
+
+function renderFontProperties(p: FontProperties) {
+  const info = { ...p.info };
+  let paTop = p.metrics.pa_top;
+  let paBottom = p.metrics.pa_bottom;
+  const save = async () => {
+    try {
+      await api.setFontProperties(info, paTop, paBottom);
+      void refreshProjectInfo();
+      if (state.grid) {
+        state.grid.metrics.pa_top = paTop;
+        state.grid.metrics.pa_bottom = paBottom;
+      }
+    } catch (err) {
+      toast(String(err), "error");
+      renderEmptyInspector();
+    }
+  };
+  const text = (label: string, value: string, placeholder: string, set: (v: string) => void) => {
+    const input = el("input", { type: "text", value, placeholder, spellcheck: "false" }) as HTMLInputElement;
+    input.addEventListener("change", () => {
+      set(input.value);
+      void save();
+    });
+    return el("label", { class: "field" }, el("span", {}, label), input);
+  };
+  const num = (label: string, value: number, set: (v: number) => void, step = "1") => {
+    const input = el("input", { type: "number", value: String(value), step }) as HTMLInputElement;
+    input.addEventListener("change", () => {
+      const v = Number(input.value);
+      if (!Number.isFinite(v)) return;
+      set(v);
+      void save();
+    });
+    return el("label", { class: "field" }, el("span", {}, label), input);
+  };
   ui.inspector.replaceChildren(
-    el("div", { class: "preview preview-empty" }, el("span", { class: "preview-glyph", lang: "gez" }, "ሄ")),
     el(
       "div",
-      { class: "inspector-body" },
-      el("h2", { class: "display inspector-title muted" }, "No selection"),
+      { class: "inspector-body font-props" },
+      el("h2", { class: "display inspector-title" }, info.family_name || p.defaultFamilyName),
+      el("p", { class: "subtle" }, `${p.drawn} of ${p.glyphs} glyphs drawn`),
+      el("h3", { class: "section-label" }, "Font"),
+      text("Family name", info.family_name, p.defaultFamilyName, (v) => (info.family_name = v.trim())),
+      el(
+        "div",
+        { class: "field-row" },
+        text("Style", info.style_name, "Regular", (v) => (info.style_name = v.trim() || "Regular")),
+        num("Version", info.version, (v) => (info.version = Math.max(0, v)), "0.001"),
+      ),
+      text("Designer", info.designer, "", (v) => (info.designer = v.trim())),
+      el("h3", { class: "section-label" }, "Metrics"),
+      el(
+        "div",
+        { class: "field-row" },
+        num("Pa-top", paTop, (v) => (paTop = v)),
+        num("Pa-bottom", paBottom, (v) => (paBottom = v)),
+      ),
+      el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
     ),
   );
 }
+
+function deselect() {
+  if (!state.selected && !state.selectedSymbol) return;
+  state.selected = null;
+  state.selectedSymbol = null;
+  markSelected();
+  renderEmptyInspector();
+}
+
+// Clicking the board outside the cells shows the font's properties.
+document.getElementById("grid-view")!.addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest(".cell, button, input, select, label, .menu, .proof")) return;
+  deselect();
+});
 
 // ---------- Left sidebar: glyphs and parts ----------
 
@@ -531,12 +618,16 @@ function treeRow(opts: {
   expanded?: boolean;
   data?: Record<string, string>;
   dim?: boolean;
+  title?: string;
+  /** The label is Ethiopic text. */
+  glyphLabel?: boolean;
 }) {
   const row = el(
     "button",
     {
       class: `tree-row depth-${opts.depth}${opts.dim ? " dim" : ""}`,
       role: "treeitem",
+      ...(opts.title ? { title: opts.title } : {}),
       ...(opts.twisty ? { "aria-expanded": String(!!opts.expanded) } : {}),
       ...(opts.data ?? {}),
     },
@@ -557,14 +648,68 @@ function treeRow(opts: {
         : []),
     ),
     el("span", { class: "tree-glyph", lang: "gez" }, opts.glyph ?? ""),
-    el("span", { class: "tree-label" }, opts.label),
+    el("span", { class: `tree-label${opts.glyphLabel ? " glyph-label" : ""}`, ...(opts.glyphLabel ? { lang: "gez" } : {}) }, opts.label),
     el("span", { class: "tree-meta" }, opts.meta ?? ""),
     ...(opts.dot ? [el("span", { class: `badge badge-${opts.dot}`, "aria-hidden": "true" })] : []),
   );
   return row;
 }
 
+/** In the editor the left panel lists the open drawing's layers. */
+function renderLayers() {
+  const ed = editor;
+  const rows: HTMLElement[] = [];
+  const d = ed.drawing;
+  if (d) {
+    rows.push(el("div", { class: "tree-section layers-head" }, d.title));
+    const selected = new Set(ed.selectedContours());
+    // Top of the list is the last drawn, like Figma.
+    for (let ci = ed.contours.length - 1; ci >= 0; ci--) {
+      const c = ed.contours[ci];
+      const label = c.name || (c.part ? c.part[0].toUpperCase() + c.part.slice(1) : "Path");
+      const row = treeRow({ depth: 0, label, meta: `${c.points.filter((p) => p.kind !== "offcurve").length} pt`, data: { "data-layer": String(ci) } });
+      row.classList.add("layer-row");
+      if (selected.has(ci)) row.classList.add("selected");
+      const swatch = row.querySelector<HTMLElement>(".tree-glyph")!;
+      swatch.replaceChildren(el("span", { class: "layer-swatch", style: c.part ? `--part:${PART_COLORS[c.part]}` : "" }));
+      row.addEventListener("click", (e) => ed.selectLayer(ci, e.shiftKey));
+      row.addEventListener("dblclick", () => {
+        const labelEl = row.querySelector<HTMLElement>(".tree-label")!;
+        const input = el("input", { class: "layer-rename", type: "text", value: label, spellcheck: "false" }) as HTMLInputElement;
+        labelEl.replaceChildren(input);
+        input.focus();
+        input.select();
+        const done = (keep: boolean) => {
+          if (keep) ed.renameLayer(ci, input.value);
+          else renderLayers();
+        };
+        input.addEventListener("keydown", (e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") done(true);
+          if (e.key === "Escape") done(false);
+        });
+        input.addEventListener("blur", () => done(true), { once: true });
+        input.addEventListener("click", (e) => e.stopPropagation());
+      });
+      rows.push(row);
+    }
+    if (!ed.contours.length) rows.push(el("p", { class: "side-empty" }, "No layers"));
+    if (d.context) {
+      rows.push(
+        el("div", { class: "tree-section" }, "Context"),
+        treeRow({ depth: 0, glyph: "", label: `Base · ${d.context.familyName}`, meta: "", dim: true }),
+      );
+    }
+  }
+  side.list.replaceChildren(...rows);
+}
+
 function renderSidebar() {
+  document.body.classList.toggle("editing", state.view === "editor");
+  if (state.view === "editor") {
+    renderLayers();
+    return;
+  }
   const rows: HTMLElement[] = [];
   if (side.tab === "glyphs") {
     const multi = new Set((state.grid?.rows ?? []).map((r) => r.section)).size > 1 || !!state.grid?.symbols.length;
@@ -578,7 +723,8 @@ function renderSidebar() {
         rows.push(el("div", { class: "tree-section" }, setName(r.section)));
       }
       const expanded = side.open.has(r.family) || !!side.query.trim();
-      const fam = treeRow({ depth: 0, glyph: base, label: r.name, meta: String(r.cells.length), twisty: true, expanded, data: { "data-fam": r.family } });
+      const glyphs = r.cells.filter((c) => !state.grid?.orders.find((o) => o.order === c.order)?.extra).map((c) => c.codepoint ?? "").join(" ");
+      const fam = treeRow({ depth: 0, glyph: "", label: glyphs, glyphLabel: true, title: r.name, meta: String(r.cells.length), twisty: true, expanded, data: { "data-fam": r.family } });
       fam.addEventListener("click", () => {
         if (side.open.has(r.family)) side.open.delete(r.family);
         else side.open.add(r.family);
@@ -620,7 +766,7 @@ function renderSidebar() {
     const bases = baseRows().filter((r) => matches(r.name, r.family, r.cells[0]?.codepoint));
     if (bases.length) rows.push(head("Bases"));
     for (const r of bases) {
-      const item = treeRow({ depth: 0, glyph: r.cells[0]?.codepoint ?? "", label: r.name, meta: "base", data: { "data-target": `base:${r.base}` } });
+      const item = treeRow({ depth: 0, glyph: r.cells[0]?.codepoint ?? "", label: "Base", title: r.name, meta: "", data: { "data-target": `base:${r.base}` } });
       item.addEventListener("click", () => void openDrawing({ kind: "base", id: r.base }));
       rows.push(item);
     }
@@ -759,6 +905,7 @@ let previewToken = 0;
 
 function renderEditorSide(ed: GlyphEditor) {
   if (state.view !== "editor" || !ed.drawing) return;
+  renderSidebar();
   const d = ed.drawing;
   const metrics = d.metrics;
   const sections: Node[] = [];
@@ -767,10 +914,11 @@ function renderEditorSide(ed: GlyphEditor) {
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
-  if (d.target.kind !== "symbol") sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
+  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel";
+  if (!standalone) sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
   const token = ++previewToken;
-  if (d.target.kind === "symbol") {
-    // A symbol stands alone: nothing else is built from it.
+  if (standalone) {
+    // A symbol or a hand-drawn fidel stands alone: nothing else follows it.
   } else if (d.target.kind === "base") {
     void api.familyPreview(d.target.id).then((list) => {
       if (token === previewToken) strip.replaceChildren(...list.map((p) => previewCell(p, metrics)));
@@ -785,6 +933,23 @@ function renderEditorSide(ed: GlyphEditor) {
       renderScope(scopeBox, impacts, alt, d.context?.family);
     });
     sections.push(el("h3", { class: "section-label" }, "Where this applies"), scopeBox);
+    if (d.context) {
+      const ctx = d.context;
+      const moved = ed.origin.x !== ctx.autoOrigin.x || ed.origin.y !== ctx.autoOrigin.y;
+      const reset = el("button", { class: "pill small ghost", title: "Back to the automatic point (or double-click the point)" }, "Reset");
+      reset.disabled = !moved;
+      reset.addEventListener("click", () => ed.resetAttach());
+      sections.push(
+        el("h3", { class: "section-label", title: `Moves this mark on every ${ctx.familyName} fidel` }, `Attach point · ${ctx.familyName}`),
+        el(
+          "div",
+          { class: "field-row" },
+          numberField("X", ed.origin.x, (v) => ed.setAttachOrigin(v, ed.origin.y)),
+          numberField("Y", ed.origin.y, (v) => ed.setAttachOrigin(ed.origin.x, v)),
+          reset,
+        ),
+      );
+    }
   }
 
   // Selection.
@@ -1136,63 +1301,64 @@ const charsetMenu = document.getElementById("charset-menu")!;
 
 function renderCharsetMenu() {
   const sets = state.grid?.charsets ?? [];
-  const on = sets.filter((s) => s.enabled);
+  const langs = state.grid?.languages ?? [];
+  const onSets = sets.filter((s) => s.enabled);
+  const onLangs = langs.filter((l) => l.enabled);
+  const names = [...onLangs.map((l) => l.name), ...onSets.map((s) => s.name)];
   document.getElementById("charset-label")!.textContent =
-    on.length === 1 ? on[0].name : on.length === sets.length ? "Full Ethiopic" : `${on.length} sets`;
-  const item = (s: (typeof sets)[number]) => {
+    onSets.length === sets.length ? "Full Ethiopic" : names.length === 1 ? names[0] : `${names.length} sets`;
+  const item = (name: string, count: number, enabled: boolean, title: string, toggle: () => void) => {
     const b = el(
       "button",
-      {
-        class: "menu-item check",
-        role: "menuitemcheckbox",
-        "aria-checked": String(s.enabled),
-        title: s.range,
-      },
+      { class: "menu-item check", role: "menuitemcheckbox", "aria-checked": String(enabled), title },
       el("span", { class: "check-box", "aria-hidden": "true" }),
-      el("span", { class: "check-name" }, s.name),
-      el("span", { class: "check-count" }, String(s.count)),
+      el("span", { class: "check-name" }, name),
+      el("span", { class: "check-count" }, String(count)),
     );
-    b.addEventListener("click", () => void toggleCharset(s.id));
+    b.addEventListener("click", toggle);
     return b;
   };
-  const group = (label: string, ids: CharSetId[]) => [
-    el("div", { class: "menu-label" }, label),
-    ...sets.filter((s) => ids.includes(s.id)).map(item),
-  ];
+  const setItem = (s: CharSetInfo) =>
+    item(s.name, s.count, s.enabled, s.range, () => {
+      const next = sets.filter((x) => (x.id === s.id ? !x.enabled : x.enabled)).map((x) => x.id);
+      void applyCoverage(next, onLangs.map((l) => l.id));
+    });
+  const langItem = (l: LanguageInfo) =>
+    item(l.name, l.count, l.enabled, `Everything ${l.name} is written with`, () => {
+      const next = langs.filter((x) => (x.id === l.id ? !x.enabled : x.enabled)).map((x) => x.id);
+      void applyCoverage(onSets.map((s) => s.id), next);
+    });
+  const group = (ids: CharSetId[]) => sets.filter((s) => ids.includes(s.id)).map(setItem);
   const all = el("button", { class: "menu-item" }, "Full Ethiopic");
-  all.addEventListener("click", () => void applyCharsets(sets.map((s) => s.id)));
-  const geez = el("button", { class: "menu-item" }, "Ge'ez only");
-  geez.addEventListener("click", () => void applyCharsets(["geez"]));
+  all.addEventListener("click", () => void applyCoverage(sets.map((s) => s.id), []));
   charsetMenu.replaceChildren(
-    ...group("Ethiopic", ["geez", "ethiopic-letters", "ethiopic-labialized", "ethiopic-marks"]),
-    ...group("Supplements", ["supplement", "extended", "extended-a", "extended-b"]),
+    el("div", { class: "menu-label" }, "Languages"),
+    ...langs.map(langItem),
+    el("div", { class: "menu-label" }, "Ethiopic"),
+    ...group(["geez", "ethiopic-letters", "ethiopic-labialized", "ethiopic-marks"]),
+    el("div", { class: "menu-label" }, "Supplements"),
+    ...group(["supplement", "extended", "extended-a", "extended-b"]),
     el("div", { class: "menu-sep", role: "separator" }),
     all,
-    geez,
   );
 }
 
-async function toggleCharset(id: CharSetId) {
-  const sets = state.grid?.charsets ?? [];
-  const next = sets.filter((s) => (s.id === id ? !s.enabled : s.enabled)).map((s) => s.id);
-  if (!next.length) return;
-  await applyCharsets(next);
-}
-
-async function applyCharsets(ids: CharSetId[]) {
+async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
+  if (!sets.length && !languages.length) return;
   try {
-    state.grid = await api.setCharsets(ids);
-    if (state.selected && !state.grid.rows.some((r) => r.family === state.selected!.family && r.cells.some((c) => c.order === state.selected!.order))) {
+    const grid = await api.setCoverage(sets, languages);
+    state.grid = grid;
+    if (state.selected && !grid.rows.some((r) => r.family === state.selected!.family && r.cells.some((c) => c.order === state.selected!.order))) {
       state.selected = null;
       renderEmptyInspector();
     }
-    if (state.selectedSymbol && !state.grid.symbols.some((s) => s.id === state.selectedSymbol)) {
+    if (state.selectedSymbol && !grid.symbols.some((s) => s.id === state.selectedSymbol)) {
       state.selectedSymbol = null;
       renderEmptyInspector();
     }
-    ui.summary.textContent = gridSummary(state.grid);
-    renderFilters(state.grid);
-    renderGrid(state.grid);
+    ui.summary.textContent = gridSummary(grid);
+    renderFilters(grid);
+    renderGrid(grid);
     renderSidebar();
     renderCharsetMenu();
     fillDrawingSelect();

@@ -112,7 +112,7 @@
               lang="am"
               spellcheck="false"
               aria-label="Proof text"
-              value="ሰላም ለዓለም። ዛሬ ቤቴ ሄጄ ሻይ ጠጣሁ።"
+              value="በበግ ቤት በግ ገባ።"
             />
             <span id="proof-note" class="proof-note" title="System font until you draw"></span>
           </div>
@@ -134,25 +134,33 @@
             <svg class="canvas" data-tool="select" role="img" aria-label="Glyph canvas"></svg>
 
             <div class="dock" role="toolbar" aria-label="Tools">
-              <button class="tool active" data-tool="select" title="Move (V)">
+              <button class="tool active" data-tool="select" title="Move (V)" aria-label="Move">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M5 3l10 6.5-4.5 1L13 16l-2 1-2.5-5.5L5 15z" fill="currentColor"/></svg>
               </button>
-              <button class="tool" data-tool="pen" title="Pen (P)">
+              <button class="tool" data-tool="direct" title="Direct selection (A)" aria-label="Direct selection">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M5 3l10 6.5-4.5 1L13 16l-2 1-2.5-5.5L5 15z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool" data-tool="pen" title="Pen (P)" aria-label="Pen">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 2l5 8-3 6H8l-3-6zM10 2v7" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/></svg>
               </button>
-              <button class="tool" data-tool="hand" title="Hand (H, or hold Space)">
+              <button class="tool" data-tool="rect" title="Rectangle (R)" aria-label="Rectangle">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="3.5" y="4.5" width="13" height="11" rx="1" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+              </button>
+              <button class="tool" data-tool="ellipse" title="Ellipse (E)" aria-label="Ellipse">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><ellipse cx="10" cy="10" rx="6.5" ry="6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+              </button>
+              <button class="tool" data-tool="hand" title="Hand (H, or hold Space)" aria-label="Hand">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M7 10V4.5a1.2 1.2 0 012.4 0V9m0-5.5a1.2 1.2 0 012.4 0V9m0-4a1.2 1.2 0 012.4 0V10m0-3a1.2 1.2 0 012.4 0v5c0 3-2 5-5 5h-1c-2 0-3-1-4-2.5L3.5 11a1.2 1.2 0 012-1.3L7 11.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
               <span class="dock-sep"></span>
-              <button class="tool" data-action="undo" title="Undo (Ctrl+Z)">
-                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M8 5L4 9l4 4M4 9h7a5 5 0 010 10H9" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <button class="tool" data-action="import-svg" title="Import SVG (or paste with Ctrl+V)" aria-label="Import SVG">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 13v2.5h12V13" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 3.5v8.5M6.8 8.8L10 12l3.2-3.2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
-              <button class="tool" data-action="redo" title="Redo (Ctrl+Shift+Z)">
-                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M12 5l4 4-4 4M16 9H9a5 5 0 000 10h2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <button class="tool" data-action="import-image" title="Place a sketch image" aria-label="Place a sketch image">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="7.5" cy="8.3" r="1.4" fill="currentColor"/><path d="M4 14.5l4-4 3 3 2-2 3.5 3.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
               </button>
-              <span class="dock-sep"></span>
-              <button class="tool text" data-action="import-svg" title="Import an SVG file, or paste SVG with Ctrl+V">Import SVG</button>
               <input class="svg-file" type="file" accept=".svg,image/svg+xml" hidden />
+              <input class="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden />
             </div>
 
             <div class="zoom-box">
