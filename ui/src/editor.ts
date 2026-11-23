@@ -73,6 +73,16 @@ export interface EditorHost {
 }
 
 const key = (ci: number, pi: number) => `${ci}:${pi}`;
+
+/** Marks our own paths on the system clipboard, so a paste keeps them exact. */
+const CLIP_TAG = "ethiopic-font-editor/contours";
+
+/**
+ * Copied paths, in canvas units. Every drawing shares one design space, so a
+ * path pasted into another glyph lands where it was. Kept here as well as on
+ * the system clipboard in case the webview hides clipboard data.
+ */
+let clipboard: Contour[] | null = null;
 const HIT_PX = 8;
 
 export const PART_COLORS: Record<Part, string> = {
@@ -843,6 +853,60 @@ export class GlyphEditor {
     this.render();
   }
 
+  /** Whole contours with a selected point, the way Figma copies shapes. */
+  private copiedContours(): Contour[] {
+    return clone(this.selectedContours().map((ci) => this.contours[ci]));
+  }
+
+  /** Copy the selected paths. Returns the clipboard text, or null when nothing is selected. */
+  copy(): { json: string; svg: string } | null {
+    const picked = this.copiedContours();
+    if (!picked.length) return null;
+    clipboard = picked;
+    const b = contoursBounds(picked)!;
+    const d = picked.map(contourPath).join("");
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.minX} ${-b.maxY} ${b.maxX - b.minX} ${b.maxY - b.minY}">` +
+      `<path transform="scale(1 -1)" d="${d}"/></svg>`;
+    return { json: JSON.stringify({ [CLIP_TAG]: picked }), svg };
+  }
+
+  cut(): { json: string; svg: string } | null {
+    const out = this.copy();
+    if (!out) return null;
+    const gone = new Set(this.selectedContours());
+    this.contours = this.contours.filter((_, ci) => !gone.has(ci));
+    this.selection.clear();
+    this.commit();
+    this.render();
+    this.host.renderSide(this);
+    return out;
+  }
+
+  /** Paste copied paths in place, selected. `text` is the system clipboard, when we have it. */
+  pastePaths(text?: string): boolean {
+    let picked = clipboard;
+    if (text) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && Array.isArray(parsed[CLIP_TAG])) picked = parsed[CLIP_TAG];
+        else return false;
+      } catch {
+        return false;
+      }
+    }
+    if (!picked?.length || !this.drawing) return false;
+    const first = nextContourId(this.contours);
+    const pasted = clone(picked).map((c, k) => ({ ...c, id: first + k }));
+    const start = this.contours.length;
+    this.contours.push(...pasted);
+    this.selection = new Set(pasted.flatMap((c, k) => c.points.map((_, pi) => key(start + k, pi))));
+    this.commit();
+    this.render();
+    this.host.renderSide(this);
+    return true;
+  }
+
   deleteSelection(): void {
     if (!this.selection.size) return;
     const next: Contour[] = [];
@@ -1107,12 +1171,33 @@ export class GlyphEditor {
       if (file) this.pasteSvg(await file.text());
       input.value = "";
     });
+    const toClipboard = (e: ClipboardEvent, out: { json: string; svg: string } | null) => {
+      if (!out) return;
+      e.preventDefault();
+      e.clipboardData?.setData("text/plain", out.json);
+      e.clipboardData?.setData("image/svg+xml", out.svg);
+    };
+    window.addEventListener("copy", (e) => {
+      if (this.isActive() && !isTyping(e.target)) toClipboard(e, this.copy());
+    });
+    window.addEventListener("cut", (e) => {
+      if (this.isActive() && !isTyping(e.target)) toClipboard(e, this.cut());
+    });
     window.addEventListener("paste", (e) => {
       if (!this.isActive() || isTyping(e.target)) return;
-      const text = e.clipboardData?.getData("image/svg+xml") || e.clipboardData?.getData("text/plain") || "";
+      const plain = e.clipboardData?.getData("text/plain") ?? "";
+      // Our own paths first, exactly where they were copied from.
+      if (plain.includes(CLIP_TAG) && this.pastePaths(plain)) {
+        e.preventDefault();
+        return;
+      }
+      const text = e.clipboardData?.getData("image/svg+xml") || plain;
       if (text.trim()) {
         e.preventDefault();
         this.pasteSvg(text);
+      } else if (clipboard) {
+        e.preventDefault();
+        this.pastePaths();
       }
     });
 
