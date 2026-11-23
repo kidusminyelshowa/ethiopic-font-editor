@@ -29,6 +29,18 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
+import {
+  bindViewMenu,
+  historyRows,
+  issuesSection,
+  LAYER_ICONS,
+  metricsSection,
+  numberField,
+  onRefresh,
+  shapeSection,
+  showContextMenu,
+  transformSection,
+} from "./editorSide";
 import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
 
@@ -675,7 +687,27 @@ function renderLayers() {
       if (selected.has(ci)) row.classList.add("selected");
       const swatch = row.querySelector<HTMLElement>(".tree-glyph")!;
       swatch.replaceChildren(el("span", { class: "layer-swatch", style: c.part ? `--part:${PART_COLORS[c.part]}` : "" }));
-      row.addEventListener("click", (e) => ed.selectLayer(ci, e.shiftKey));
+      if (c.hidden) row.classList.add("layer-hidden");
+      if (c.locked) row.classList.add("layer-locked");
+      const flags = el("span", { class: "layer-flags" });
+      const flag = (name: "locked" | "hidden", on: boolean, iconOn: string, iconOff: string, title: string) => {
+        const b = el("button", { class: `layer-flag${on ? " on" : ""}`, title, "aria-label": title, "aria-pressed": String(on) });
+        b.append(LAYER_ICONS.icon(on ? iconOn : iconOff, 12));
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          ed.setLayerFlag(name, [ci]);
+        });
+        b.addEventListener("dblclick", (e) => e.stopPropagation());
+        return b;
+      };
+      flags.append(
+        flag("locked", !!c.locked, LAYER_ICONS.lock, LAYER_ICONS.unlock, c.locked ? "Unlock" : "Lock"),
+        flag("hidden", !!c.hidden, LAYER_ICONS.eyeOff, LAYER_ICONS.eye, c.hidden ? "Show" : "Hide"),
+      );
+      row.append(flags);
+      row.addEventListener("click", (e) => {
+        if (!c.locked && !c.hidden) ed.selectLayer(ci, e.shiftKey);
+      });
       row.addEventListener("dblclick", () => {
         const labelEl = row.querySelector<HTMLElement>(".tree-label")!;
         const input = el("input", { class: "layer-rename", type: "text", value: label, spellcheck: "false" }) as HTMLInputElement;
@@ -703,6 +735,7 @@ function renderLayers() {
         treeRow({ depth: 0, glyph: "", label: `Base · ${d.context.familyName}`, meta: "", dim: true }),
       );
     }
+    rows.push(...historyRows(ed));
   }
   side.list.replaceChildren(...rows);
 }
@@ -848,7 +881,10 @@ const editor = new GlyphEditor(ui.editorView, {
   },
   toast,
   renderSide: (ed) => renderEditorSide(ed),
+  contextMenu: (ed, at) => showContextMenu(ed, at),
 });
+onRefresh((ed) => renderEditorSide(ed));
+bindViewMenu(ui.editorView);
 
 async function openDrawing(target: DrawingTarget) {
   try {
@@ -981,27 +1017,43 @@ function renderEditorSide(ed: GlyphEditor) {
     // Point type of the selected on-curve points.
     const nodes = ed.selectedNodes();
     if (nodes.length && ed.tool !== "select") {
-      const allSmooth = nodes.every((n) => n.smooth);
-      const allCorner = nodes.every((n) => !n.smooth);
+      const types = new Set(nodes.map((n) => n.type));
+      const only = types.size === 1 ? [...types][0] : null;
       const seg = el("div", { class: "segmented", role: "group", "aria-label": "Point type" });
-      const corner = el("button", { class: allCorner ? "on" : "", title: "Handles move on their own (double-click a point to switch)" }, "Corner");
-      const smooth = el("button", { class: allSmooth ? "on" : "", title: "Handles stay in line; adds handles to a point without them" }, "Smooth");
-      corner.addEventListener("click", () => ed.setNodeType("corner"));
-      smooth.addEventListener("click", () => ed.setNodeType("smooth"));
-      seg.append(corner, smooth);
-      const retract = el("button", { class: "pill small ghost", title: "Remove the handles, so the segments next to the point go straight" }, "Retract handles");
+      const typeBtn = (t: "corner" | "smooth" | "tangent", label: string, title: string) => {
+        const b = el("button", { class: only === t ? "on" : "", title }, label);
+        b.addEventListener("click", () => ed.setNodeType(t));
+        seg.append(b);
+      };
+      typeBtn("corner", "Corner", "Handles move on their own (double-click a point to switch, Shift+C cycles)");
+      typeBtn("smooth", "Smooth", "Handles stay in line; adds handles to a point without them");
+      typeBtn("tangent", "Tangent", "Smooth between a straight segment and a curve");
+      const retract = el("button", { class: "pill small ghost", title: "Remove the handles, so the segments next to the point go straight" }, "Retract");
       retract.disabled = !nodes.some((n) => n.handles);
       retract.addEventListener("click", () => ed.setNodeType("retract"));
-      selBox.append(el("h3", { class: "section-label" }, nodes.length === 1 ? "Point" : `${nodes.length} points`), el("div", { class: "button-row" }, seg, retract));
+      const row = el("div", { class: "button-row" }, seg, retract);
+      const segs = ed.selectedSegments();
+      if (segs.lines || segs.curves) {
+        const toCurve = el("button", { class: "pill small ghost", title: "Give the segment between the selected points handles" }, "Make curve");
+        toCurve.disabled = !segs.lines;
+        toCurve.addEventListener("click", () => ed.setSegmentKind("curve"));
+        const toLine = el("button", { class: "pill small ghost", title: "Straighten the segment between the selected points" }, "Make line");
+        toLine.disabled = !segs.curves;
+        toLine.addEventListener("click", () => ed.setSegmentKind("line"));
+        row.append(toCurve, toLine);
+      }
+      selBox.append(el("h3", { class: "section-label" }, nodes.length === 1 ? "Point" : `${nodes.length} points`), row);
     }
     // Direction of the selected contours.
     const dirs = new Set(contours.map((ci) => isClockwise(ed.contours[ci])));
     const dirLabel = dirs.size > 1 ? "Mixed" : dirs.has(true) ? "↻ Clockwise" : "↺ Counter-clockwise";
     const reverse = el("button", { class: "pill small", title: "Reverse path direction (Ctrl+Shift+R)" }, "Reverse");
     reverse.addEventListener("click", () => ed.reverseDirection());
+    const correct = el("button", { class: "pill small ghost", title: "Outer paths counter-clockwise, counters clockwise, for the whole drawing" }, "Correct all");
+    correct.addEventListener("click", () => ed.correctDirection());
     selBox.append(
       el("h3", { class: "section-label", title: "Outer contours run counter-clockwise, counters clockwise" }, "Direction"),
-      el("div", { class: "button-row" }, el("span", { class: "side-note" }, dirLabel), reverse),
+      el("div", { class: "button-row" }, el("span", { class: "side-note" }, dirLabel), reverse, correct),
     );
     // Part tags for the selected contours.
     const current = new Set(contours.map((ci) => ed.contours[ci]?.part ?? null));
@@ -1020,19 +1072,12 @@ function renderEditorSide(ed: GlyphEditor) {
     selBox.append(el("h3", { class: "section-label" }, "Part"), tags);
   }
   sections.push(el("h3", { class: "section-label" }, "Selection"), selBox);
+  sections.push(...transformSection(ed));
+  sections.push(...shapeSection(ed));
 
-  // Metrics.
-  if (d.advanceWidth !== null) {
-    sections.push(
-      el("h3", { class: "section-label" }, "Metrics"),
-      el(
-        "div",
-        { class: "field-row" },
-        numberField("Advance", d.advanceWidth, (v) => void ed.setAdvance(v)),
-        el("div", { class: "field static" }, el("span", {}, "Pa-height"), el("strong", {}, `${metrics.pa_bottom}–${metrics.pa_top}`)),
-      ),
-    );
-  }
+  // Metrics: sidebearings and width, for bases and symbols.
+  sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
+  sections.push(...issuesSection(ed));
 
   // Sketch.
   const sk = ed.sketch;
@@ -1047,13 +1092,25 @@ function renderEditorSide(ed: GlyphEditor) {
   if (sk) {
     const remove = el("button", { class: "pill small ghost" }, "Remove");
     remove.addEventListener("click", () => ed.removeSketch());
+    const lock = el("button", { class: `pill small ghost${sk.unlocked ? " on" : ""}`, title: sk.unlocked ? "Lock the sketch in place" : "Unlock to drag the sketch on the canvas" }, sk.unlocked ? "Lock" : "Unlock");
+    lock.addEventListener("click", () => {
+      ed.updateSketch({ unlocked: !sk.unlocked });
+      renderEditorSide(ed);
+    });
     sketchBox.append(
       remove,
+      lock,
+      el(
+        "div",
+        { class: "field-row" },
+        numberField("X", sk.x, (v) => ed.updateSketch({ x: v })),
+        numberField("Y", sk.y, (v) => ed.updateSketch({ y: v })),
+      ),
       rangeField("Opacity", sk.opacity, 0.05, 1, (v) => ed.updateSketch({ opacity: v })),
       rangeField("Size", sk.h / (metrics.pa_top - metrics.pa_bottom), 0.3, 2, (v) => ed.updateSketch({ scale: v })),
     );
   }
-  sections.push(el("h3", { class: "section-label", title: "Alt-drag on the canvas to move the sketch. Kept for this session only." }, "Sketch"), sketchBox);
+  sections.push(el("h3", { class: "section-label", title: "Unlock it to drag it on the canvas. Kept for this session only." }, "Sketch"), sketchBox);
 
   ui.inspector.replaceChildren(el("div", { class: "inspector-body editor-side" }, ...sections));
 }
@@ -1173,15 +1230,6 @@ function previewCell(p: FidelPreview, metrics: FidelGrid["metrics"]): Node {
     el("span", { class: "mini-label" }, p.orderName),
     ...(issue ? [el("span", { class: "mini-issue", "aria-hidden": "true" })] : []),
   );
-}
-
-function numberField(label: string, value: number, onChange: (v: number) => void): HTMLElement {
-  const input = el("input", { type: "number", value: String(Math.round(value)), step: "1" }) as HTMLInputElement;
-  input.addEventListener("change", () => {
-    const v = Number(input.value);
-    if (Number.isFinite(v)) onChange(v);
-  });
-  return el("label", { class: "field" }, el("span", {}, label), input);
 }
 
 function rangeField(label: string, value: number, min: number, max: number, onInput: (v: number) => void): HTMLElement {

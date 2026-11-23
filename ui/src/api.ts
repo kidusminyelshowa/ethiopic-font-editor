@@ -151,8 +151,19 @@ export interface OrderRef {
 export type DrawingKind = "base" | "alteration" | "symbol" | "fidel";
 export type DrawingTarget = { kind: DrawingKind; id: string };
 
+/** A Pa-height zone: a band above or below a Pa line where round and pointed shapes overshoot. */
+export interface Zone {
+  name: string;
+  /** The line it belongs to, in font units. */
+  position: number;
+  /** Positive above the line, negative below. */
+  size: number;
+}
+
 export interface DrawingView {
   target: DrawingTarget;
+  /** Pa-height zones for snapping and display. */
+  zones?: Zone[];
   title: string;
   subtitle: string;
   contours: Contour[];

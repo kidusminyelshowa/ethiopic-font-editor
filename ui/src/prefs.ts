@@ -1,0 +1,82 @@
+// Canvas preferences: snapping, grid, nudge steps, shape options and what
+// the canvas shows. Kept per user in local storage, not in the project.
+
+export interface CanvasPrefs {
+  snapPoints: boolean;
+  snapMetrics: boolean;
+  snapGrid: boolean;
+  /** Snap to the Pa-height zones (M2). */
+  snapZones: boolean;
+  showGrid: boolean;
+  /** Grid spacing in font units, and how many parts each step is cut into for snapping. */
+  gridSize: number;
+  gridSub: number;
+  /** Arrow key steps: plain, Shift, Ctrl. */
+  nudge: [number, number, number];
+  showArrows: boolean;
+  showPartLabels: boolean;
+  showWarnings: boolean;
+  showZones: boolean;
+  /** Filled outline, or outline only. */
+  fill: boolean;
+  /** Shape tool options. */
+  cornerRadius: number;
+  polygonSides: number;
+  starPoints: number;
+  starInner: number;
+}
+
+export const DEFAULT_PREFS: CanvasPrefs = {
+  snapPoints: true,
+  snapMetrics: true,
+  snapGrid: false,
+  snapZones: true,
+  showGrid: false,
+  gridSize: 50,
+  gridSub: 5,
+  nudge: [1, 10, 100],
+  showArrows: true,
+  showPartLabels: true,
+  showWarnings: true,
+  showZones: true,
+  fill: true,
+  cornerRadius: 40,
+  polygonSides: 6,
+  starPoints: 5,
+  starInner: 0.45,
+};
+
+const KEY = "efe.canvas-prefs";
+
+function load(): CanvasPrefs {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
+  } catch {
+    // Private mode or bad data: defaults.
+  }
+  return { ...DEFAULT_PREFS };
+}
+
+export const prefs: CanvasPrefs = load();
+
+const listeners = new Set<() => void>();
+
+export function setPref<K extends keyof CanvasPrefs>(key: K, value: CanvasPrefs[K]): void {
+  prefs[key] = value;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(prefs));
+  } catch {
+    // Not saved; still applies for this session.
+  }
+  for (const fn of listeners) fn();
+}
+
+export function onPrefs(fn: () => void): void {
+  listeners.add(fn);
+}
+
+/** The step snapping lands on: grid size over subdivisions. */
+export function gridStep(): number {
+  return Math.max(1, prefs.gridSize / Math.max(1, prefs.gridSub));
+}
