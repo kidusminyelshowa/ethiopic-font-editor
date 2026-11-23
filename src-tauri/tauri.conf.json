@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Ethiopic Font Editor",
+  "productName": "Hohe",
   "version": "0.1.0",
   "identifier": "com.kidus.ethiopic-font-editor",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Ethiopic Font Editor",
+        "title": "Hohe",
         "width": 1280,
         "height": 820,
         "minWidth": 900,
@@ -36,7 +36,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
