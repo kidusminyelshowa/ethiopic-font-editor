@@ -335,11 +335,18 @@ impl Project {
                 .get(id)
                 .map(|s| s.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
-            DrawingTarget::Component(id) => self
-                .components
-                .get(id)
-                .map(|c| c.contours.as_slice())
-                .ok_or_else(|| ModelError::UnknownComponent(id.clone())),
+            DrawingTarget::Component(id) => {
+                let (comp, state) = crate::parametric::state_ref(id);
+                let c = self.components.get(comp).ok_or_else(|| ModelError::UnknownComponent(id.clone()))?;
+                match state {
+                    None => Ok(&c.contours),
+                    Some(i) => c
+                        .states
+                        .get(i)
+                        .map(|s| s.contours.as_slice())
+                        .ok_or_else(|| ModelError::UnknownComponent(id.clone())),
+                }
+            }
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
                 match &self.fidel(&family, order)?.state {
@@ -390,11 +397,19 @@ impl Project {
                 &mut self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.contours
             }
             DrawingTarget::Component(id) => {
-                &mut self
-                    .components
-                    .get_mut(id)
-                    .ok_or_else(|| ModelError::UnknownComponent(id.clone()))?
-                    .contours
+                let (comp, state) = crate::parametric::state_ref(id);
+                let c =
+                    self.components.get_mut(comp).ok_or_else(|| ModelError::UnknownComponent(id.clone()))?;
+                match state {
+                    None => &mut c.contours,
+                    Some(i) => {
+                        &mut c
+                            .states
+                            .get_mut(i)
+                            .ok_or_else(|| ModelError::UnknownComponent(id.clone()))?
+                            .contours
+                    }
+                }
             }
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
@@ -953,7 +968,7 @@ impl Project {
         let mut out = s.contours.clone();
         for r in &s.components {
             if let Some(comp) = self.components.get(&r.component) {
-                out.extend(r.place(comp));
+                out.extend(r.place_in(comp, &self.design.font_location()));
             }
         }
         out

@@ -3274,3 +3274,13 @@ body.kerning .side-list {
 .slant-input { display: flex; gap: 6px; align-items: center; }
 .slant-input input { flex: 1; min-width: 0; }
 .slant-input .slant-btn { flex: none; }
+
+/* ETH-25: parametric parts */
+.field-row.three { grid-template-columns: 1fr 1fr 1fr; }
+.part-axis { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); margin-bottom: 8px; }
+.part-axis-name { flex: 1; min-width: 0; font: inherit; font-size: 13px; font-weight: 500; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; color: var(--ink); }
+.part-axis-name:hover, .part-axis-name:focus { border-color: var(--hairline); outline: none; }
+.part-range > span { display: flex; justify-content: space-between; }
+.part-value { font-variant-numeric: tabular-nums; color: var(--ink); }
+.placement-head.warn { color: var(--orange); }
+.side-note.warn { color: var(--orange); }

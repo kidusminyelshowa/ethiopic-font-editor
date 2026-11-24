@@ -139,6 +139,10 @@ pub struct Designspace {
     /// Which master's drawings are in the project now.
     #[serde(default)]
     pub active: usize,
+    /// For an instance: where it sits, normalized per axis. Parts that
+    /// follow a font axis read it.
+    #[serde(skip)]
+    pub at: Option<Vec<f64>>,
 }
 
 impl Designspace {
@@ -164,6 +168,17 @@ impl Designspace {
             .collect()
     }
 
+    /// Where the project's drawings sit now, normalized, by axis tag: the
+    /// instance's location, or the active master's.
+    pub fn font_location(&self) -> Vec<(String, f64)> {
+        let loc = self
+            .at
+            .clone()
+            .or_else(|| self.masters.get(self.active).map(|m| self.master_location(m)))
+            .unwrap_or_else(|| vec![0.0; self.axes.len()]);
+        self.axes.iter().map(|a| a.tag.clone()).zip(loc).collect()
+    }
+
     /// The master at the default location, if there is one.
     pub fn default_master(&self) -> Option<usize> {
         self.masters.iter().position(|m| self.master_location(m).iter().all(|v| v.abs() < 1e-9))
@@ -181,6 +196,9 @@ pub struct MasterLayer {
     pub symbols: BTreeMap<String, SymbolLayer>,
     #[serde(default)]
     pub components: BTreeMap<String, Vec<Contour>>,
+    /// Each parametric part's states, in order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub part_states: BTreeMap<String, Vec<Vec<Contour>>>,
     #[serde(default)]
     pub families: BTreeMap<FamilyId, FamilyLayer>,
     #[serde(default)]
@@ -250,6 +268,12 @@ impl MasterLayer {
                 })
                 .collect(),
             components: p.components.iter().map(|(id, c)| (id.clone(), c.contours.clone())).collect(),
+            part_states: p
+                .components
+                .iter()
+                .filter(|(_, c)| !c.states.is_empty())
+                .map(|(id, c)| (id.clone(), c.states.iter().map(|s| s.contours.clone()).collect()))
+                .collect(),
             families: p
                 .families
                 .iter()
@@ -293,6 +317,13 @@ impl MasterLayer {
         for (id, c) in &self.components {
             if let Some(comp) = p.components.get_mut(id) {
                 comp.contours = c.clone();
+            }
+        }
+        for (id, states) in &self.part_states {
+            if let Some(comp) = p.components.get_mut(id) {
+                for (s, c) in comp.states.iter_mut().zip(states) {
+                    s.contours = c.clone();
+                }
             }
         }
         for (id, l) in &self.families {
@@ -704,7 +735,10 @@ impl Project {
             shear(&mut s.contours);
             s.components.iter_mut().for_each(|r| pt(&mut r.at));
         }
-        self.components.values_mut().for_each(|c| shear(&mut c.contours));
+        for c in self.components.values_mut() {
+            shear(&mut c.contours);
+            c.states.iter_mut().for_each(|s| shear(&mut s.contours));
+        }
         for f in self.families.values_mut() {
             f.attach_offsets.values_mut().for_each(pt);
             for fi in f.fidels.values_mut() {
@@ -829,7 +863,9 @@ impl Project {
     /// interpolated, the default master's wherever they do not match.
     pub fn instance_at(&self, user: &BTreeMap<String, f64>) -> Result<Project, DesignError> {
         if self.design.masters.len() < 2 {
-            return Ok(self.clone());
+            let mut p = self.clone();
+            p.design.at = Some(self.design.user_location(user));
+            return Ok(p);
         }
         let (model, _) = self.model()?;
         let loc = self.design.user_location(user);
@@ -844,6 +880,7 @@ impl Project {
         let layer: MasterLayer = serde_json::from_value(blended).unwrap_or_else(|_| layers[def].clone());
         let mut p = self.clone();
         layer.apply(&mut p);
+        p.design.at = Some(loc);
         p.after_edit();
         Ok(p)
     }

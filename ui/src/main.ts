@@ -59,6 +59,7 @@ import { initProof, setProofFont } from "./proof";
 import { KernView } from "./kernView";
 import { resolve as resolveKern } from "./kerning";
 import { designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
+import { partSection, stateRef } from "./partAxes";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -1506,9 +1507,13 @@ function renderEditorSide(ed: GlyphEditor) {
   if (d.target.kind === "base" && d.derived) sections.unshift(...derivedSection(ed, d));
   if (d.target.kind === "base" || d.target.kind === "symbol") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
   if (d.target.kind === "component") {
-    const id = d.target.id;
+    const id = stateRef(d.target.id).part;
     const kind = state.components.find((c) => c.id === id)?.kind;
-    if (kind) sections.unshift(...componentRuleSection(ed, d, kind));
+    const parts = partSection(ed, d.target.id, {
+      open: (to) => void openDrawing({ kind: "component", id: to }),
+      changed: () => void loadParts(),
+    });
+    sections.unshift(...(kind ? componentRuleSection(ed, d, kind) : []), ...parts);
   }
   sections.push(...issuesSection(ed));
   sections.push(...backgroundSection(ed));

@@ -40,8 +40,59 @@ impl CornerSide {
     }
 }
 
+/// A part's settings, by axis name.
+pub type PartValues = BTreeMap<String, f64>;
+
+/// One way a part can vary inside a master, such as a leaf's size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartAxis {
+    pub name: String,
+    pub min: f64,
+    pub default: f64,
+    pub max: f64,
+    /// The tag of a font axis this one follows: the part sits as far along
+    /// its own range as the font sits along that axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
+}
+
+impl PartAxis {
+    /// -1 at min, 0 at the default, 1 at max.
+    pub fn normalize(&self, v: f64) -> f64 {
+        let v = v.clamp(self.min.min(self.max), self.max.max(self.min));
+        if v > self.default && self.max > self.default {
+            (v - self.default) / (self.max - self.default)
+        } else if v < self.default && self.default > self.min {
+            (v - self.default) / (self.default - self.min)
+        } else {
+            0.0
+        }
+    }
+
+    /// The value at a normalized position.
+    pub fn denormalize(&self, n: f64) -> f64 {
+        let n = n.clamp(-1.0, 1.0);
+        if n >= 0.0 {
+            self.default + n * (self.max - self.default)
+        } else {
+            self.default + n * (self.default - self.min)
+        }
+    }
+}
+
+/// The part drawn at another setting of its axes. Its contours must match
+/// the main drawing point for point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartState {
+    /// Axis values; axes left out sit at their default.
+    #[serde(default)]
+    pub location: PartValues,
+    #[serde(default)]
+    pub contours: Vec<Contour>,
+}
+
 /// An adjustment to one rule placement: nudged, scaled or flipped.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tweak {
     #[serde(default)]
     pub dx: f64,
@@ -51,11 +102,14 @@ pub struct Tweak {
     pub scale: f64,
     #[serde(default)]
     pub flip: bool,
+    /// Settings of the part's own axes here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: PartValues,
 }
 
 impl Default for Tweak {
     fn default() -> Self {
-        Tweak { dx: 0.0, dy: 0.0, scale: 1.0, flip: false }
+        Tweak { dx: 0.0, dy: 0.0, scale: 1.0, flip: false, values: PartValues::new() }
     }
 }
 
@@ -102,6 +156,13 @@ pub struct Component {
     /// Per-placement adjustments, by the same keys as `off`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tweaks: BTreeMap<String, Tweak>,
+    /// Ways the part varies inside one master. The main drawing is the
+    /// part with every axis at its default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub axes: Vec<PartAxis>,
+    /// The part drawn at other settings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<PartState>,
 }
 
 impl Component {
@@ -118,7 +179,71 @@ impl Component {
             off: BTreeSet::new(),
             corners: CornerSide::Outer,
             tweaks: BTreeMap::new(),
+            axes: Vec::new(),
+            states: Vec::new(),
         }
+    }
+
+    /// The setting of every axis: an axis that follows a font axis takes
+    /// the font's position (`font` holds normalized positions by tag), the
+    /// others the given value or their default.
+    pub fn values_at(&self, given: &PartValues, font: &[(String, f64)]) -> PartValues {
+        self.axes
+            .iter()
+            .map(|a| {
+                let tied = a
+                    .follows
+                    .as_ref()
+                    .and_then(|t| font.iter().find(|(f, _)| f == t))
+                    .map(|(_, n)| a.denormalize(*n));
+                (a.name.clone(), tied.or_else(|| given.get(&a.name).copied()).unwrap_or(a.default))
+            })
+            .collect()
+    }
+
+    /// Why a state cannot interpolate with the main drawing.
+    pub fn state_problem(&self, index: usize) -> Option<String> {
+        let s = self.states.get(index)?;
+        crate::compat::difference(&self.contours, &s.contours)
+    }
+
+    /// The part at these settings, interpolated between its states. States
+    /// that do not match the main drawing are left out.
+    pub fn shape(&self, values: &PartValues) -> Vec<Contour> {
+        if self.axes.is_empty() || self.states.is_empty() {
+            return self.contours.clone();
+        }
+        let loc = |l: &PartValues| -> Vec<f64> {
+            self.axes.iter().map(|a| a.normalize(l.get(&a.name).copied().unwrap_or(a.default))).collect()
+        };
+        let mut locs = vec![vec![0.0; self.axes.len()]];
+        let mut vals = vec![flat(&self.contours)];
+        for (i, s) in self.states.iter().enumerate() {
+            let l = loc(&s.location);
+            let taken = locs.iter().any(|m| m.iter().zip(&l).all(|(a, b)| (a - b).abs() < 1e-9));
+            if taken || self.state_problem(i).is_some() {
+                continue;
+            }
+            locs.push(l);
+            vals.push(flat(&s.contours));
+        }
+        if locs.len() == 1 {
+            return self.contours.clone();
+        }
+        let Ok(model) = crate::designspace::Model::new(&locs) else {
+            return self.contours.clone();
+        };
+        let out = model.interpolate(&vals, &loc(values));
+        let mut contours = self.contours.clone();
+        let mut it = out.chunks(2);
+        for c in &mut contours {
+            for p in &mut c.points {
+                if let Some(&[x, y]) = it.next() {
+                    p.pos = Vec2::new(x, y);
+                }
+            }
+        }
+        contours
     }
 
     /// Where this component lands by rule on a stroke `owner/contour`, the
@@ -192,6 +317,7 @@ impl Component {
                     if t.flip {
                         r.flip_x = !r.flip_x;
                     }
+                    r.values = t.values.clone();
                 }
                 End { on: !self.off.contains(&key), key, label, placement: r }
             })
@@ -283,6 +409,13 @@ pub struct ComponentRef {
     /// contour (a shortened leg, a crick), the component moves with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on: Option<ContourId>,
+    /// Settings of the part's own axes here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: PartValues,
+}
+
+fn flat(cs: &[Contour]) -> Vec<f64> {
+    cs.iter().flat_map(|c| c.points.iter().flat_map(|p| [p.pos.x, p.pos.y])).collect()
 }
 
 fn one() -> f64 {
@@ -306,6 +439,7 @@ impl ComponentRef {
             flip_x: false,
             flip_y: false,
             on: None,
+            values: PartValues::new(),
         }
     }
 
@@ -321,12 +455,17 @@ impl ComponentRef {
     /// The component's contours, placed. Mirrored placements are reversed so
     /// path direction stays right.
     pub fn place(&self, component: &Component) -> Vec<Contour> {
+        self.place_in(component, &[])
+    }
+
+    /// Placed, with part axes that follow font axes set from `font`
+    /// (normalized positions by tag).
+    pub fn place_in(&self, component: &Component, font: &[(String, f64)]) -> Vec<Contour> {
         let mirrored = self.flip_x != self.flip_y;
         component
-            .contours
-            .iter()
-            .map(|c| {
-                let mut c = c.clone();
+            .shape(&component.values_at(&self.values, font))
+            .into_iter()
+            .map(|mut c| {
                 for p in &mut c.points {
                     p.pos = self.apply(p.pos);
                 }
@@ -420,7 +559,7 @@ mod tests {
         comp.off.insert("ta/3:l".into());
         assert_eq!(comp.ends("ta", &bar).len(), 1);
         // A tweak nudges and scales one end.
-        comp.tweaks.insert("ta/3:r".into(), Tweak { dx: 5.0, dy: -2.0, scale: 2.0, flip: false });
+        comp.tweaks.insert("ta/3:r".into(), Tweak { dx: 5.0, dy: -2.0, scale: 2.0, ..Tweak::default() });
         let r = &comp.ends("ta", &bar)[0].1;
         assert_eq!((r.at, r.scale), (Vec2::new(465.0, 698.0), 2.0));
     }

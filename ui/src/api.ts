@@ -184,6 +184,32 @@ export interface ComponentRef {
   flip_y?: boolean;
   /** The base contour it sits on; deforms of that contour carry it along. */
   on?: number | null;
+  /** Settings of the part's own axes here. */
+  values?: Record<string, number>;
+}
+
+/** One way a part varies inside a master, such as a leaf's size. */
+export interface PartAxis {
+  name: string;
+  min: number;
+  default: number;
+  max: number;
+  /** Tag of a font axis it follows. */
+  follows?: string | null;
+}
+
+export interface PartStateView {
+  location: Record<string, number>;
+  /** Why it does not interpolate with the main drawing. */
+  problem: string | null;
+}
+
+export interface PartView {
+  id: string;
+  axes: PartAxis[];
+  states: PartStateView[];
+  /** Tag and name of each font axis. */
+  fontAxes: [string, string][];
 }
 
 export interface PlacedComponent {
@@ -209,6 +235,7 @@ export interface Tweak {
   dy: number;
   scale: number;
   flip: boolean;
+  values?: Record<string, number>;
 }
 
 /** One place a component lands by rule on a base. */
@@ -231,6 +258,7 @@ export interface ComponentSummary {
   kind: ComponentKind;
   drawn: boolean;
   uses: number;
+  axes: PartAxis[];
 }
 
 export interface DrawingView {
@@ -466,6 +494,12 @@ export const api = {
     invoke<void>("set_component_rule", { id, landsOn, corners }),
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
+  getPart: (id: string) => invoke<PartView>("get_part", { id }),
+  setPartAxes: (id: string, axes: PartAxis[]) => invoke<PartView>("set_part_axes", { id, axes }),
+  addPartState: (id: string, location: Record<string, number>) => invoke<PartView>("add_part_state", { id, location }),
+  setPartState: (id: string, index: number, location: Record<string, number>) =>
+    invoke<PartView>("set_part_state", { id, index, location }),
+  removePartState: (id: string, index: number) => invoke<PartView>("remove_part_state", { id, index }),
   ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
   setMetricKeys: (target: DrawingTarget, keys: MetricKeys) => invoke<void>("set_metric_keys", { target, keys }),
   setBaseFollows: (base: string, follows: boolean) => invoke<void>("set_base_follows", { base, follows }),

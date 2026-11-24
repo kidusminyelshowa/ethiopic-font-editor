@@ -17,6 +17,7 @@ import { el } from "./dom";
 import { PART_COLORS, type GlyphEditor } from "./editor";
 import { contoursBounds } from "./geometry";
 import { iconButton, numberField } from "./editorSide";
+import { partValueFields, stateRef } from "./partAxes";
 
 const ORDERS = ["giiz", "kaib", "salis", "rabi", "hamis", "sadis", "sabi"];
 
@@ -229,6 +230,7 @@ export function componentsSection(
           remove,
         ),
         el("label", { class: "field", title: "Swap it for another component" }, el("span", {}, "Component"), swap),
+        ...partValueFields(components.find((c) => c.id === r.component)?.axes ?? [], r.values, (values) => update(r.id, (x) => (x.values = values))),
         el("div", { class: "button-row" }, edit, decompose),
       );
     }
@@ -252,8 +254,8 @@ export function componentsSection(
         const toggle = el("button", { class: `pill small ghost${r.on ? "" : " on"}`, title: r.on ? "Leave this one out" : "Put it back" }, r.on ? "Switch off" : "Switch on");
         toggle.addEventListener("click", () => set({}, !r.on));
         const reset = el("button", { class: "pill small ghost", title: "Back to where the rule puts it" }, "Reset");
-        reset.disabled = t.dx === 0 && t.dy === 0 && t.scale === 1 && !t.flip;
-        reset.addEventListener("click", () => set({ dx: 0, dy: 0, scale: 1, flip: false }));
+        reset.disabled = t.dx === 0 && t.dy === 0 && t.scale === 1 && !t.flip && !Object.keys(t.values ?? {}).length;
+        reset.addEventListener("click", () => set({ dx: 0, dy: 0, scale: 1, flip: false, values: {} }));
         row.append(
           el("div", { class: "field-row" }, numberField("Nudge X", t.dx, (v) => set({ dx: v })), numberField("Nudge Y", t.dy, (v) => set({ dy: v }))),
           el(
@@ -262,6 +264,7 @@ export function componentsSection(
             numberField("Scale %", Math.round(t.scale * 1000) / 10, (v) => set({ scale: v / 100 })),
             el("div", { class: "button-row" }, iconButton("flipH", "Flip", () => set({ flip: !t.flip }), `icon-btn${t.flip ? " on" : ""}`)),
           ),
+          ...partValueFields(components.find((c) => c.id === r.component)?.axes ?? [], t.values, (values) => set({ values })),
           el("div", { class: "button-row" }, toggle, reset),
         );
       }
@@ -286,7 +289,7 @@ export function componentsSection(
 export function componentRuleSection(ed: GlyphEditor, d: DrawingView, kind: ComponentKind): Node[] {
   const rule = d.rule;
   if (!rule || d.target.kind !== "component") return [];
-  const id = d.target.id;
+  const id = stateRef(d.target.id).part;
   const box = el("div", { class: "side-box" });
   const save = async (landsOn: Part[], corners: CornerSide) => {
     try {

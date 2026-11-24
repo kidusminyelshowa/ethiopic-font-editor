@@ -177,7 +177,7 @@ fn resolve_in_chain(
             for r in &base.components {
                 match project.components.get(&r.component) {
                     Some(comp) => out.contours.extend(
-                        r.place(comp)
+                        r.place_in(comp, &project.design.font_location())
                             .into_iter()
                             .map(|contour| ResolvedContour { source: Source::Component(r.id), contour }),
                     ),
@@ -363,7 +363,7 @@ fn place_leaves(project: &Project, base_id: &str, out: &mut ResolvedFidel) {
             for (key, r) in comp.ends(owner, &rc.contour) {
                 let source = Source::Leaf(format!("{}@{key}", comp.id));
                 placed.extend(
-                    r.place(comp)
+                    r.place_in(comp, &project.design.font_location())
                         .into_iter()
                         .map(|contour| ResolvedContour { source: source.clone(), contour }),
                 );

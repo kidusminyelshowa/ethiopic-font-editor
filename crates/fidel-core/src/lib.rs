@@ -38,6 +38,7 @@ pub mod kid;
 pub mod metric_keys;
 pub mod order;
 pub mod organize;
+pub mod parametric;
 pub mod parts;
 pub mod pathops;
 pub mod project;
@@ -47,7 +48,10 @@ pub mod scope;
 pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};
 pub use charset::{CharSet, Language};
-pub use component::{Component, ComponentId, ComponentKind, ComponentRef, CornerSide, End, Tweak};
+pub use component::{
+    Component, ComponentId, ComponentKind, ComponentRef, CornerSide, End, PartAxis, PartState, PartValues,
+    Tweak,
+};
 pub use ethiopic::{Form, GeezFamily, ShapeGroup, GEEZ_FAMILIES};
 pub use fidel::{Badge, Family, FamilyId, Fidel, FidelState, Nudge, NudgeTarget, Source, StateKind};
 pub use geometry::{svg_path, Contour, ContourId, ContourProblem, Point, PointId, PointKind, Rect, Vec2};

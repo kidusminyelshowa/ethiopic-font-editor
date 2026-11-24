@@ -337,6 +337,64 @@ fn set_component_end(
     Ok(())
 }
 
+/// A part's own axes and states.
+#[tauri::command]
+fn get_part(state: State<'_, AppState>, id: String) -> CmdResult<fidel_core::parametric::PartView> {
+    state.project().part_view(&id).map_err(err)
+}
+
+fn part_change(
+    state: &State<'_, AppState>,
+    id: &str,
+    f: impl FnOnce(&mut Project) -> Result<(), fidel_core::parametric::PartError>,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    let view = {
+        let mut project = state.project();
+        f(&mut project).map_err(|e| e.to_string())?;
+        project.part_view(id).map_err(err)?
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+#[tauri::command]
+fn set_part_axes(
+    state: State<'_, AppState>,
+    id: String,
+    axes: Vec<fidel_core::PartAxis>,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.set_part_axes(&id, axes))
+}
+
+/// A new state, starting as a copy of the part's main drawing.
+#[tauri::command]
+fn add_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    location: fidel_core::PartValues,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.add_part_state(&id, location).map(|_| ()))
+}
+
+#[tauri::command]
+fn set_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+    location: fidel_core::PartValues,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.set_part_state(&id, index, location))
+}
+
+#[tauri::command]
+fn remove_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.remove_part_state(&id, index))
+}
+
 /// Every rule placement on a base, the ones switched off included.
 #[tauri::command]
 fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
@@ -944,6 +1002,11 @@ pub fn run() {
             set_component_rule,
             set_component_end,
             rule_ends,
+            get_part,
+            set_part_axes,
+            add_part_state,
+            set_part_state,
+            remove_part_state,
             get_design,
             master_drawings,
             match_masters,

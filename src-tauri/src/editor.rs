@@ -136,8 +136,8 @@ pub fn rule_ends(project: &Project, base: &str) -> Vec<RuleEnd> {
                 kind: comp.kind,
                 label: format!("{what} · {}", e.label),
                 on: e.on,
-                tweak: comp.tweaks.get(&e.key).copied().unwrap_or_default(),
-                d: fidel_core::svg_path(&e.placement.place(comp)),
+                tweak: comp.tweaks.get(&e.key).cloned().unwrap_or_default(),
+                d: fidel_core::svg_path(&e.placement.place_in(comp, &project.design.font_location())),
                 key: e.key,
             }
         })
@@ -195,7 +195,9 @@ fn placed_components(project: &Project, refs: &[ComponentRef]) -> Vec<PlacedComp
             PlacedComponent {
                 name: comp.map_or_else(|| r.component.clone(), |c| c.name.clone()),
                 kind: comp.map(|c| c.kind),
-                d: comp.map(|c| fidel_core::svg_path(&r.place(c))).unwrap_or_default(),
+                d: comp
+                    .map(|c| fidel_core::svg_path(&r.place_in(c, &project.design.font_location())))
+                    .unwrap_or_default(),
                 placement: r.clone(),
             }
         })
@@ -212,6 +214,8 @@ pub struct ComponentSummary {
     drawn: bool,
     /// How many bases place it.
     uses: usize,
+    /// Its own axes, for setting each placement.
+    axes: Vec<fidel_core::PartAxis>,
 }
 
 pub fn component_summaries(project: &Project) -> Vec<ComponentSummary> {
@@ -223,6 +227,7 @@ pub fn component_summaries(project: &Project) -> Vec<ComponentSummary> {
             name: c.name.clone(),
             kind: c.kind,
             drawn: !c.contours.is_empty(),
+            axes: c.axes.clone(),
             uses: project.bases.values().filter(|b| b.components.iter().any(|r| r.component == c.id)).count()
                 + project
                     .symbols
@@ -386,16 +391,23 @@ impl DrawingView {
                     metrics,
                 }
             }
-            DrawingTarget::Component(id) => {
+            DrawingTarget::Component(full) => {
+                let (id, state) = fidel_core::parametric::state_ref(full);
+                let id = &id.to_string();
                 let comp = &project.components[id];
                 let kind = match comp.kind {
                     ComponentKind::Leaf => "Leaf",
                     ComponentKind::Cap => "Cap",
                     ComponentKind::Corner => "Corner",
                 };
+                let subtitle = match state {
+                    None if comp.states.is_empty() => format!("{kind} component"),
+                    None => format!("{kind} component · Default state"),
+                    Some(i) => format!("{kind} component · State {}", i + 1),
+                };
                 DrawingView {
                     title: comp.name.clone(),
-                    subtitle: format!("{kind} component"),
+                    subtitle,
                     advance_width: None,
                     context: None,
                     components: None,
