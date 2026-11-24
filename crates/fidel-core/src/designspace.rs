@@ -187,6 +187,8 @@ pub struct MasterLayer {
     pub kern_pairs: Vec<crate::kerning::KernPair>,
     #[serde(default)]
     pub backgrounds: BTreeMap<String, Vec<Contour>>,
+    #[serde(default)]
+    pub italic_angle: f64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -261,6 +263,7 @@ impl MasterLayer {
                 .collect(),
             kern_pairs: p.kerning.pairs.clone(),
             backgrounds: p.backgrounds.clone(),
+            italic_angle: p.metrics.italic_angle,
         }
     }
 
@@ -316,6 +319,7 @@ impl MasterLayer {
             .cloned()
             .collect();
         p.backgrounds = self.backgrounds.clone();
+        p.metrics.italic_angle = self.italic_angle;
     }
 }
 
@@ -675,6 +679,45 @@ impl Project {
             layer: Some(MasterLayer::take(self)),
         });
         self.design.masters.len() - 1
+    }
+
+    /// Slant the drawings of the master being edited by `degrees` (positive
+    /// leans right), shearing about the baseline, and add it to the master's
+    /// italic angle. A starting point for an italic, to refine by hand.
+    pub fn slant_master(&mut self, degrees: f64) {
+        let t = degrees.to_radians().tan();
+        let pt = |v: &mut Vec2| v.x += v.y * t;
+        let shear = |cs: &mut Vec<Contour>| {
+            for c in cs {
+                for p in &mut c.points {
+                    p.pos.x += p.pos.y * t;
+                }
+            }
+        };
+        for b in self.bases.values_mut() {
+            shear(&mut b.contours);
+            b.anchors.values_mut().for_each(pt);
+            b.components.iter_mut().for_each(|r| pt(&mut r.at));
+        }
+        self.alterations.values_mut().for_each(|a| shear(&mut a.contours));
+        for s in self.symbols.values_mut() {
+            shear(&mut s.contours);
+            s.components.iter_mut().for_each(|r| pt(&mut r.at));
+        }
+        self.components.values_mut().for_each(|c| shear(&mut c.contours));
+        for f in self.families.values_mut() {
+            f.attach_offsets.values_mut().for_each(pt);
+            for fi in f.fidels.values_mut() {
+                match &mut fi.state {
+                    FidelState::Detached { contours } => shear(contours),
+                    FidelState::Adjusted { nudges } => nudges.iter_mut().for_each(|n| pt(&mut n.delta)),
+                    FidelState::Linked => {}
+                }
+            }
+        }
+        self.backgrounds.values_mut().for_each(shear);
+        self.metrics.italic_angle += degrees;
+        self.after_edit();
     }
 
     /// Rename or move a master.

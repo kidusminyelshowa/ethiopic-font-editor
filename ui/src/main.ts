@@ -562,9 +562,10 @@ function renderFontProperties(p: FontProperties) {
   const info = { ...p.info };
   let paTop = p.metrics.pa_top;
   let paBottom = p.metrics.pa_bottom;
+  let italicAngle = p.metrics.italic_angle ?? 0;
   const save = async () => {
     try {
-      await api.setFontProperties(info, paTop, paBottom);
+      await api.setFontProperties(info, paTop, paBottom, italicAngle);
       void refreshProjectInfo();
       if (state.grid) {
         state.grid.metrics.pa_top = paTop;
@@ -625,10 +626,43 @@ function renderFontProperties(p: FontProperties) {
         ),
         el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
       ),
+      slantRow(italicAngle, (v) => (italicAngle = v), save),
       ...designSections(),
     ),
   );
 }
+/** Italic angle, and a way to lean the drawings of the master being edited. */
+function slantRow(angle: number, set: (v: number) => void, save: () => Promise<void>) {
+  const angleInput = el("input", { type: "number", value: String(angle), step: "0.5", title: "Degrees the font leans, clockwise. Marks the font italic." }) as HTMLInputElement;
+  angleInput.addEventListener("change", () => {
+    const v = Number(angleInput.value);
+    if (!Number.isFinite(v) || Math.abs(v) >= 45) return;
+    set(v);
+    void save();
+  });
+  const by = el("input", { type: "number", value: "12", step: "0.5", title: "Degrees to lean every drawing in this master" }) as HTMLInputElement;
+  const go = el("button", { class: "pill small ghost slant-btn", title: "Shear every drawing in this master and add to its italic angle" }, "Slant");
+  go.addEventListener("click", async () => {
+    const v = Number(by.value);
+    if (!Number.isFinite(v) || v === 0 || Math.abs(v) >= 45) return;
+    try {
+      await api.slantMaster(v);
+      toast(`Slanted ${v}°`);
+      await refreshGrid();
+      void refreshProjectInfo();
+      renderEmptyInspector();
+    } catch (err) {
+      toast(String(err), "error");
+    }
+  });
+  return el(
+    "div",
+    { class: "field-row" },
+    el("label", { class: "field" }, el("span", {}, "Italic angle"), angleInput),
+    el("label", { class: "field slant-field" }, el("span", {}, "Slant drawings"), el("div", { class: "slant-input" }, by, go)),
+  );
+}
+
 // The masters sections redraw when the design space changes.
 onDesign(() => {
   if (state.view === "grid" && !state.selected && !state.selectedSymbol && ui.inspector.querySelector(".font-props")) renderEmptyInspector();

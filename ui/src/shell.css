@@ -3269,3 +3269,8 @@ body.kerning .side-list {
 .ds-note {
   margin: 6px 0;
 }
+
+/* ETH-26: italic angle and slanting a master */
+.slant-input { display: flex; gap: 6px; align-items: center; }
+.slant-input input { flex: 1; min-width: 0; }
+.slant-input .slant-btn { flex: none; }

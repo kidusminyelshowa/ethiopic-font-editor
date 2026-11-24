@@ -25,11 +25,19 @@ pub struct Metrics {
     /// here sit at their default height; see [`Metrics::zones`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<Zone>,
+    /// Degrees clockwise from upright, positive for a right-leaning italic.
+    /// Each master has its own.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub italic_angle: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        Metrics { units_per_em: 1000, pa_top: 700.0, pa_bottom: 0.0, zones: Vec::new() }
+        Metrics { units_per_em: 1000, pa_top: 700.0, pa_bottom: 0.0, zones: Vec::new(), italic_angle: 0.0 }
     }
 }
 

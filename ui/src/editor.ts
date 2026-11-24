@@ -3628,8 +3628,14 @@ export class GlyphEditor {
     if (frame !== null && (prefs.showMetrics || g?.kind === "metric")) {
       const own = this.drawing.advanceWidth !== null;
       const dragging = g?.kind === "metric" ? g.side : null;
+      // Leaning with the italic angle, through the baseline.
+      const lean = Math.tan(((m.italic_angle ?? 0) * Math.PI) / 180);
+      const fyTop = ty / scale;
+      const fyBottom = (ty - H) / scale;
       for (const [x, side] of [[0, "left"], [frame, "right"]] as const) {
-        parts.push(`<line class="guide guide-v${own ? " metric" : ""}${dragging === side ? " active" : ""}" x1="${sx(x)}" x2="${sx(x)}" y1="0" y2="${H}"/>`);
+        parts.push(
+          `<line class="guide guide-v${own ? " metric" : ""}${dragging === side ? " active" : ""}" x1="${sx(x + fyTop * lean)}" x2="${sx(x + fyBottom * lean)}" y1="0" y2="${H}"/>`,
+        );
       }
       parts.push(`<text class="guide-label" x="${sx(frame) + 6}" y="${H - 64}">${Math.round(frame)}</text>`);
       // Sidebearings while dragging a metric line.

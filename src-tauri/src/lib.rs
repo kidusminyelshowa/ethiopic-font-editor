@@ -429,6 +429,17 @@ fn remove_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::
     design_change(&state, |p| p.remove_master(index))
 }
 
+/// Lean every drawing of the master being edited by some degrees.
+#[tauri::command]
+fn slant_master(state: State<'_, AppState>, degrees: f64) -> CmdResult<()> {
+    if !degrees.is_finite() || degrees.abs() >= 45.0 {
+        return Err("Slant by less than 45°".into());
+    }
+    state.project().slant_master(degrees);
+    state.mark_dirty();
+    Ok(())
+}
+
 /// Edit another master: its drawings come into the editor.
 #[tauri::command]
 fn switch_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::DesignView> {
@@ -650,6 +661,7 @@ fn set_font_properties(
     info: FontInfo,
     pa_top: f64,
     pa_bottom: f64,
+    italic_angle: Option<f64>,
 ) -> CmdResult<()> {
     if pa_top <= pa_bottom {
         return Err("Pa-top must be above Pa-bottom".into());
@@ -659,6 +671,9 @@ fn set_font_properties(
         project.info = info;
         project.metrics.pa_top = pa_top;
         project.metrics.pa_bottom = pa_bottom;
+        if let Some(a) = italic_angle {
+            project.metrics.italic_angle = a;
+        }
     }
     state.mark_dirty();
     Ok(())
@@ -938,6 +953,7 @@ pub fn run() {
             set_master,
             remove_master,
             switch_master,
+            slant_master,
             set_instances,
             export_variable,
             export_instances,

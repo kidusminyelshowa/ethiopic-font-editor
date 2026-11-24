@@ -128,3 +128,20 @@ fn removing_masters_back_to_one() {
     assert!(p.design.masters.is_empty());
     assert_eq!(right_edge(&p), 130.0);
 }
+
+#[test]
+fn slanting_a_master_shears_its_drawings_only() {
+    let mut p = three_masters();
+    p.switch_master(1).unwrap();
+    p.slant_master(45.0);
+    // The top right corner of the stem moves right by its height.
+    let top_right =
+        p.bases["ha"].contours[0].points.iter().find(|q| q.pos.y == 700.0).map(|q| q.pos.x).unwrap();
+    assert!(top_right >= 760.0 - 1e-6);
+    assert_eq!(p.metrics.italic_angle, 45.0);
+    p.switch_master(0).unwrap();
+    assert_eq!(p.metrics.italic_angle, 0.0);
+    assert_eq!(right_edge(&p), 130.0);
+    // The angle interpolates with the masters.
+    assert!((p.instance_at(&loc(650.0)).unwrap().metrics.italic_angle - 22.5).abs() < 1e-9);
+}

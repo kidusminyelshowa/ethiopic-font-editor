@@ -222,6 +222,10 @@ fn build(
     let line_gap = (upm_f * 0.2).round() as i16;
     let pa_top = to_i16(metrics.pa_top);
 
+    // A slanted master leans the caret and marks the font italic.
+    let italic = metrics.italic_angle;
+    let (caret_rise, caret_run) =
+        if italic == 0.0 { (1, 0) } else { (upm as i16, (upm_f * italic.to_radians().tan()).round() as i16) };
     let time = LongDateTime::new(options.timestamp + EPOCH_1904_TO_1970);
     let head = Head::new(
         Fixed::from_f64(options.version),
@@ -234,7 +238,7 @@ fn build(
         font_box.y_min,
         font_box.x_max,
         font_box.y_max,
-        MacStyle::empty(),
+        if italic != 0.0 { MacStyle::ITALIC } else { MacStyle::empty() },
         8,
         match loca_format {
             LocaFormat::Short => 0,
@@ -250,8 +254,8 @@ fn build(
         FWord::new(if min_lsb == i16::MAX { 0 } else { min_lsb }),
         FWord::new(if min_rsb == i16::MAX { 0 } else { min_rsb }),
         FWord::new(if max_extent == i16::MIN { 0 } else { max_extent }),
-        1,
-        0,
+        caret_rise,
+        caret_run,
         0,
         num_glyphs,
     );
@@ -306,7 +310,11 @@ fn build(
         ul_unicode_range_1: 1,
         ul_unicode_range_3: 1 << (75 - 64),
         ach_vend_id: Tag::new(b"NONE"),
-        fs_selection: SelectionFlags::REGULAR | SelectionFlags::USE_TYPO_METRICS,
+        fs_selection: if italic != 0.0 {
+            SelectionFlags::ITALIC | SelectionFlags::USE_TYPO_METRICS
+        } else {
+            SelectionFlags::REGULAR | SelectionFlags::USE_TYPO_METRICS
+        },
         us_first_char_index: first_char.min(0xFFFF) as u16,
         us_last_char_index: last_char.min(0xFFFF) as u16,
         s_typo_ascender: ascender,
@@ -354,6 +362,7 @@ fn build(
     let mut post = Post::new_v2(glyphs.iter().map(|g| g.name.as_str()));
     post.underline_position = FWord::new(-(upm_f * 0.1).round() as i16);
     post.underline_thickness = FWord::new((upm_f * 0.05).round() as i16);
+    post.italic_angle = Fixed::from_f64(-italic);
 
     let mut font = FontBuilder::new();
     font.add_table(&head)

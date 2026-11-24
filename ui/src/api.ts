@@ -18,6 +18,8 @@ export interface Metrics {
   units_per_em: number;
   pa_top: number;
   pa_bottom: number;
+  /** Degrees, positive leaning right. Per master. */
+  italic_angle?: number;
 }
 
 export interface AppInfo {
@@ -438,8 +440,9 @@ export const api = {
   setAttachOffset: (family: string, alteration: string, offset: { x: number; y: number }) =>
     invoke<void>("set_attach_offset", { family, alteration, offset }),
   fontProperties: () => invoke<FontProperties>("font_properties"),
-  setFontProperties: (info: FontInfo, paTop: number, paBottom: number) =>
-    invoke<void>("set_font_properties", { info, paTop, paBottom }),
+  slantMaster: (degrees: number) => invoke<void>("slant_master", { degrees }),
+  setFontProperties: (info: FontInfo, paTop: number, paBottom: number, italicAngle?: number) =>
+    invoke<void>("set_font_properties", { info, paTop, paBottom, italicAngle: italicAngle ?? null }),
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
   setRuleVariant: (family: string, order: string, variant: number) =>
     invoke<FidelDetail>("set_rule_variant", { family, order, variant }),

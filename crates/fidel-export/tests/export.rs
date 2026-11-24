@@ -251,3 +251,14 @@ fn no_kerning_no_gpos() {
     let font = export(&project(), &ExportOptions::new("Test Geez")).unwrap();
     assert!(FontRef::new(&font.bytes).unwrap().gpos().is_err());
 }
+
+#[test]
+fn italic_angle_marks_the_font_italic() {
+    let mut p = project();
+    p.slant_master(12.0);
+    let font = export(&p, &ExportOptions::new("Test Geez")).unwrap();
+    let font = FontRef::new(&font.bytes).unwrap();
+    assert!((font.post().unwrap().italic_angle().to_f64() + 12.0).abs() < 1e-3);
+    assert!(font.os2().unwrap().fs_selection().contains(skrifa::raw::tables::os2::SelectionFlags::ITALIC));
+    assert!(font.hhea().unwrap().caret_slope_run() > 0);
+}
