@@ -245,6 +245,31 @@ fn set_zone(
     zones
 }
 
+/// The guides for a drawing: its own and the global ones.
+#[tauri::command]
+fn get_guides(state: State<'_, AppState>, drawing: String) -> GuidesView {
+    let project = state.project();
+    GuidesView { local: project.guides.local(&drawing), global: project.guides.global.clone() }
+}
+
+/// Replace a drawing's guides and the global ones.
+#[tauri::command]
+fn set_guides(
+    state: State<'_, AppState>,
+    drawing: String,
+    local: Vec<fidel_core::guides::Guide>,
+    global: Vec<fidel_core::guides::Guide>,
+) {
+    state.project().guides.set(&drawing, local, global);
+    state.mark_dirty();
+}
+
+#[derive(serde::Serialize)]
+struct GuidesView {
+    local: Vec<fidel_core::guides::Guide>,
+    global: Vec<fidel_core::guides::Guide>,
+}
+
 #[tauri::command]
 fn list_components(state: State<'_, AppState>) -> Vec<editor::ComponentSummary> {
     editor::component_summaries(&state.project.lock().expect("project lock"))
@@ -527,6 +552,8 @@ pub fn run() {
             path_op,
             set_deform,
             set_zone,
+            get_guides,
+            set_guides,
             list_components,
             add_component,
             remove_component,

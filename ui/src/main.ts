@@ -44,6 +44,7 @@ import {
   showContextMenu,
   showMenu,
   pathOpsSection,
+  guideSection,
   transformSection,
 } from "./editorSide";
 import { checkForUpdate } from "./updater";
@@ -1213,6 +1214,7 @@ function renderEditorSide(ed: GlyphEditor) {
     }
     selBox.append(el("h3", { class: "section-label" }, "Part"), tags);
   }
+  sections.push(...guideSection(ed));
   sections.push(el("h3", { class: "section-label" }, "Selection"), selBox);
   sections.push(...transformSection(ed));
   sections.push(...pathOpsSection(ed));

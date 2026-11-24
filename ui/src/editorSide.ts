@@ -433,6 +433,7 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Snap to points", "snapPoints"),
     check("Snap to metrics", "snapMetrics"),
     check("Snap to Pa-height zones", "snapZones"),
+    check("Snap to guides", "snapGuides"),
     check("Snap to grid", "snapGrid"),
     el("div", { class: "menu-sep", role: "separator" }),
     el("div", { class: "menu-label" }, "Grid"),
@@ -457,6 +458,8 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Path direction", "showArrows"),
     check("Part labels", "showPartLabels"),
     check("Pa-height zones", "showZones"),
+    check("Guides", "showGuides"),
+    check("Rulers", "showRulers"),
     check("Outline warnings", "showWarnings"),
     check("Tunni lines", "showTunni"),
     check("Curvature comb", "showComb"),
@@ -535,5 +538,57 @@ export function pathOpsSection(ed: GlyphEditor): Node[] {
   return [
     el("h3", { class: "section-label", title: "Works on the selected paths, or the whole drawing when nothing is selected" }, "Path operations"),
     el("div", { class: "side-box" }, bools, offset, stroke, join, ...(ed.tool === "direct" ? [round] : [])),
+  ];
+}
+
+const GUIDE_COLORS = ["#0f8a7e", "#8a4fb8", "#c2442a", "#2b6cb0", "#b7791f"];
+
+/** The guide picked on the canvas: where it is, its angle, name, colour, and whether it is global or locked. */
+export function guideSection(ed: GlyphEditor): Node[] {
+  const sel = ed.selectedGuide();
+  if (!sel) return [];
+  const { g, scope } = sel;
+  const toggle = (label: string, on: boolean, title: string, run: (v: boolean) => void) => {
+    const b = el("button", { class: `pill small${on ? "" : " ghost"}`, title, "aria-pressed": String(on) }, label);
+    b.addEventListener("click", () => run(!on));
+    return b;
+  };
+  const name = el("input", { type: "text", value: g.name ?? "", placeholder: "Name", "aria-label": "Guide name", spellcheck: "false" }) as HTMLInputElement;
+  name.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") name.blur();
+  });
+  name.addEventListener("change", () => ed.updateGuide({ name: name.value.trim() || undefined }));
+  const colors = el("div", { class: "guide-colors" });
+  for (const c of GUIDE_COLORS) {
+    const on = (g.color ?? null) === c;
+    const b = el("button", { class: `guide-color${on ? " on" : ""}`, style: `--c:${c}`, title: on ? "Default colour" : "Colour", "aria-label": "Guide colour" });
+    b.addEventListener("click", () => ed.updateGuide({ color: on ? null : c }));
+    colors.append(b);
+  }
+  const del = el("button", { class: "pill small ghost", title: "Remove this guide (Delete)" }, "Remove");
+  del.addEventListener("click", () => ed.deleteGuide());
+  return [
+    el("h3", { class: "section-label", title: "Drag it on the canvas, or back onto its ruler to remove it" }, "Guide"),
+    el(
+      "div",
+      { class: "side-box" },
+      el("label", { class: "field guide-name" }, name),
+      el(
+        "div",
+        { class: "field-row" },
+        numberField("X", g.x, (v) => ed.updateGuide({ x: v })),
+        numberField("Y", g.y, (v) => ed.updateGuide({ y: v })),
+        numberField("Angle", g.angle, (v) => ed.updateGuide({ angle: ((v % 180) + 180) % 180 }), "0 is horizontal, 90 vertical"),
+      ),
+      el(
+        "div",
+        { class: "button-row" },
+        toggle("Global", scope === "global", "Show this guide in every drawing", (v) => ed.updateGuide({ scope: v ? "global" : "local" })),
+        toggle("Locked", !!g.locked, "Stop it moving when you drag on the canvas", (v) => ed.updateGuide({ locked: v || undefined })),
+        del,
+      ),
+      colors,
+    ),
   ];
 }

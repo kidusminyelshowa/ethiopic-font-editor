@@ -33,6 +33,16 @@ fn sample() -> Project {
     p.draw_by_hand("ha", Order::Salis).unwrap();
     p.families.get_mut("ta").unwrap().rule_variants.insert(Order::Rabi, 1);
     p.metrics.pa_top = 720.0;
+    let guide = |id, angle| fidel_core::guides::Guide {
+        id,
+        x: 100.0,
+        y: 350.0,
+        angle,
+        name: "stem".into(),
+        locked: id == 2,
+        color: Some("#c2442a".into()),
+    };
+    p.guides.set("base:ha", vec![guide(1, 90.0)], vec![guide(2, 0.0)]);
     p
 }
 

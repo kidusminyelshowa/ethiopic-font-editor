@@ -159,6 +159,9 @@ pub struct Project {
     /// Leaves, caps and corners, drawn once and placed on bases.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<ComponentId, Component>,
+    /// Guides drawn in the editor, global and per drawing.
+    #[serde(default, skip_serializing_if = "crate::guides::Guides::is_empty")]
+    pub guides: crate::guides::Guides,
 }
 
 pub type SymbolId = String;

@@ -87,10 +87,11 @@ import {
   tunniPoint,
 } from "./curves";
 import { gridStep, onPrefs, prefs } from "./prefs";
+import { clipLine, crossings, distanceToGuide, fmt, guideDir, isHorizontal, isVertical, projectOnGuide, rulerTicks, type Guide } from "./guides";
 import { importSvg, SvgImportError } from "./svgImport";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
-export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | ShapeKind | "hand";
+export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
 export type ShapeKind = "rect" | "rounded" | "ellipse" | "polygon" | "star";
 export const SHAPES: ShapeKind[] = ["rect", "rounded", "ellipse", "polygon", "star"];
 export const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -160,10 +161,17 @@ type Gesture =
   | { kind: "pencil"; pts: Vec2[]; startScreen: Vec2 }
   | { kind: "knife"; start: Vec2; now: Vec2 }
   | { kind: "eraser"; pts: Vec2[] }
+  | { kind: "measure"; start: Vec2; now: Vec2 }
+  | { kind: "guide"; scope: GuideScope; id: number; start: Vec2; origin: Vec2; isNew: boolean; moved: boolean; offRuler: boolean }
   | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
+
+export type GuideScope = "local" | "global";
+
+/** Width of the rulers along the top and left of the canvas, in pixels. */
+const RULER_PX = 18;
 
 /** One step of a drawing's history. `before` is the state the step started from. */
 interface Step {
@@ -250,6 +258,12 @@ export class GlyphEditor {
   private contextKey = "";
   /** Where rotations and Alt-scaling turn around; the box centre when unset. */
   private pivot: Vec2 | null = null;
+  /** The drawing's own guides and the global ones. */
+  guides: { local: Guide[]; global: Guide[] } = { local: [], global: [] };
+  /** The guide picked on the canvas, shown in the side panel. */
+  guideSel: { scope: GuideScope; id: number } | null = null;
+  /** The measuring line, kept until Escape or another tool. */
+  private measureLine: { a: Vec2; b: Vec2 } | null = null;
   /** Guides shown while a drag snaps. */
   private snapLines: { x?: number; y?: number } = {};
   private gesture: Gesture | null = null;
@@ -320,10 +334,90 @@ export class GlyphEditor {
       this.selection.clear();
       this.pivot = null;
       this.pen = null;
+      this.guideSel = null;
+      this.measureLine = null;
       this.fit();
     }
+    if (!sameDrawing) void this.loadGuides();
     this.title.textContent = this.drawing.title;
     this.subtitle.textContent = this.drawing.subtitle;
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  // ---------- Guides ----------
+
+  private async loadGuides(): Promise<void> {
+    const k = this.targetKey;
+    try {
+      const g = await api.getGuides(k);
+      if (this.targetKey !== k) return;
+      this.guides = g;
+    } catch {
+      this.guides = { local: [], global: [] };
+    }
+    this.render();
+  }
+
+  private saveGuides(): void {
+    const { local, global } = this.guides;
+    api.setGuides(this.targetKey, local, global).catch((err) => this.host.toast(`Could not save the guides: ${err}`, "error"));
+  }
+
+  /** Every guide with its scope, for drawing, hit testing and snapping. */
+  private allGuides(): { g: Guide; scope: GuideScope }[] {
+    if (!prefs.showGuides) return [];
+    return [
+      ...this.guides.global.map((g) => ({ g, scope: "global" as const })),
+      ...this.guides.local.map((g) => ({ g, scope: "local" as const })),
+    ];
+  }
+
+  selectedGuide(): { g: Guide; scope: GuideScope } | null {
+    const s = this.guideSel;
+    if (!s) return null;
+    const g = this.guides[s.scope].find((x) => x.id === s.id);
+    return g ? { g, scope: s.scope } : null;
+  }
+
+  private nextGuideId(): number {
+    return Math.max(0, ...this.guides.local.map((g) => g.id), ...this.guides.global.map((g) => g.id)) + 1;
+  }
+
+  /** Change the selected guide: its position, angle, name, colour, lock, or whether it is global. */
+  updateGuide(change: Partial<Guide> & { scope?: GuideScope }): void {
+    const sel = this.selectedGuide();
+    if (!sel) return;
+    const { scope, ...rest } = change;
+    Object.assign(sel.g, rest);
+    if (scope && scope !== sel.scope) {
+      this.guides[sel.scope] = this.guides[sel.scope].filter((x) => x !== sel.g);
+      this.guides[scope].push(sel.g);
+      this.guideSel = { scope, id: sel.g.id };
+    }
+    this.saveGuides();
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  deleteGuide(): void {
+    const sel = this.selectedGuide();
+    if (!sel) return;
+    this.guides[sel.scope] = this.guides[sel.scope].filter((x) => x !== sel.g);
+    this.guideSel = null;
+    this.saveGuides();
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Add a guide through the selection's centre (or the origin), horizontal or vertical. */
+  addGuide(angle: number): void {
+    const b = contoursBounds(this.selectedContours().map((ci) => this.contours[ci]));
+    const at = b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };
+    const g: Guide = { id: this.nextGuideId(), x: Math.round(at.x), y: Math.round(at.y), angle };
+    this.guides.local.push(g);
+    this.guideSel = { scope: "local", id: g.id };
+    this.saveGuides();
     this.render();
     this.host.renderSide(this);
   }
@@ -833,6 +927,25 @@ export class GlyphEditor {
       return;
     }
 
+    // Drag out of a ruler to make a guide; Alt makes it global.
+    const ruler = prefs.showRulers ? (e.target as Element | null)?.closest?.("[data-ruler]")?.getAttribute("data-ruler") : null;
+    if (ruler) {
+      const scope: GuideScope = e.altKey ? "global" : "local";
+      const g: Guide = { id: this.nextGuideId(), x: Math.round(font.x), y: Math.round(font.y), angle: ruler === "top" ? 0 : 90 };
+      this.guides[scope].push(g);
+      this.guideSel = { scope, id: g.id };
+      this.gesture = { kind: "guide", scope, id: g.id, start: font, origin: { x: g.x, y: g.y }, isNew: true, moved: false, offRuler: false };
+      this.render();
+      return;
+    }
+
+    if (this.tool === "measure") {
+      const at = this.snapped(font, e).pos;
+      this.gesture = { kind: "measure", start: at, now: at };
+      this.measureLine = null;
+      return;
+    }
+
     if (this.tool === "pencil") {
       this.gesture = { kind: "pencil", pts: [font], startScreen: screen };
       return;
@@ -845,6 +958,26 @@ export class GlyphEditor {
       this.gesture = { kind: "eraser", pts: [font] };
       this.render();
       return;
+    }
+
+    // A guide under the pointer (and no point): pick it, and drag it unless locked.
+    const gid = (e.target as Element | null)?.closest?.("[data-guide]")?.getAttribute("data-guide");
+    if (gid && (this.tool === "select" || this.tool === "direct") && !this.hitPoint(screen)) {
+      const [scope, id] = gid.split(":") as [GuideScope, string];
+      const g = this.guides[scope].find((x) => x.id === Number(id));
+      if (g) {
+        this.guideSel = { scope, id: g.id };
+        this.selection.clear();
+        if (!g.locked) {
+          this.gesture = { kind: "guide", scope, id: g.id, start: font, origin: { x: g.x, y: g.y }, isNew: false, moved: false, offRuler: false };
+        }
+        this.changedSelection();
+        return;
+      }
+    }
+    if (this.guideSel) {
+      this.guideSel = null;
+      this.host.renderSide(this);
     }
 
     // A Tunni point: drag to change both handles of its curve.
@@ -1117,6 +1250,29 @@ export class GlyphEditor {
       case "eraser":
         g.pts.push(font);
         break;
+      case "measure": {
+        const to = e.shiftKey ? constrain45(g.start, font) : this.snapped(font, e).pos;
+        g.now = to;
+        break;
+      }
+      case "guide": {
+        const gd = this.guides[g.scope].find((x) => x.id === g.id);
+        if (!gd) break;
+        const want = { x: g.origin.x + font.x - g.start.x, y: g.origin.y + font.y - g.start.y };
+        const s = this.snapped(want, e, false, gd);
+        if (isHorizontal(gd)) gd.y = Math.round(s.pos.y);
+        else if (isVertical(gd)) gd.x = Math.round(s.pos.x);
+        else {
+          gd.x = Math.round(s.pos.x);
+          gd.y = Math.round(s.pos.y);
+        }
+        this.snapLines = isHorizontal(gd) ? { y: s.lines.y } : isVertical(gd) ? { x: s.lines.x } : s.lines;
+        g.moved ||= Math.hypot(font.x - g.start.x, font.y - g.start.y) * this.view.scale > 1;
+        const sc = this.screenOf(e);
+        // Dragged back onto its ruler: it will be removed.
+        g.offRuler = isHorizontal(gd) ? sc.y < RULER_PX : isVertical(gd) ? sc.x < RULER_PX : false;
+        break;
+      }
       case "pencil": {
         const last = g.pts[g.pts.length - 1];
         if (Math.hypot(font.x - last.x, font.y - last.y) * this.view.scale > 1.5) g.pts.push(font);
@@ -1298,6 +1454,18 @@ export class GlyphEditor {
       else this.render();
     } else if (g.kind === "eraser") {
       this.erase(g.pts);
+    } else if (g.kind === "measure") {
+      const far = Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 3;
+      this.measureLine = far ? { a: g.start, b: g.now } : null;
+      this.render();
+    } else if (g.kind === "guide") {
+      if (g.offRuler || (g.isNew && !g.moved)) {
+        this.guides[g.scope] = this.guides[g.scope].filter((x) => x.id !== g.id);
+        this.guideSel = null;
+      }
+      if (g.moved || g.isNew) this.saveGuides();
+      this.render();
+      this.host.renderSide(this);
     } else if (g.kind === "pencil") {
       this.finishPencil(g.pts, g.startScreen, this.screenOf(e));
     } else if (g.kind === "tunni") {
@@ -1552,10 +1720,17 @@ export class GlyphEditor {
   // ---------- Snapping ----------
 
   /** Lines a point can snap to: other on-curve points, the Pa lines, the sidebearings. */
-  private snapTargets(skipSelected: boolean): { xs: number[]; ys: number[] } {
+  private snapTargets(skipSelected: boolean, skipGuide?: Guide): { xs: number[]; ys: number[] } {
     const m = this.drawing!.metrics;
     const xs: number[] = [];
     const ys: number[] = [];
+    if (prefs.snapGuides) {
+      for (const { g } of this.allGuides()) {
+        if (g === skipGuide) continue;
+        if (isHorizontal(g)) ys.push(g.y);
+        else if (isVertical(g)) xs.push(g.x);
+      }
+    }
     if (prefs.snapMetrics) {
       xs.push(0);
       ys.push(m.pa_top, m.pa_bottom, 0);
@@ -1582,9 +1757,16 @@ export class GlyphEditor {
     return { xs, ys };
   }
 
-  private snapped(p: Vec2, e: { altKey: boolean }, skipSelected = false): { pos: Vec2; lines: { x?: number; y?: number } } {
+  private snapped(p: Vec2, e: { altKey: boolean }, skipSelected = false, skipGuide?: Guide): { pos: Vec2; lines: { x?: number; y?: number } } {
     if (e.altKey || !this.drawing) return { pos: p, lines: {} };
-    const { xs, ys } = this.snapTargets(skipSelected);
+    const { xs, ys } = this.snapTargets(skipSelected, skipGuide);
+    // Slanted guides pull the point onto themselves.
+    if (prefs.snapGuides) {
+      for (const { g } of this.allGuides()) {
+        if (g === skipGuide || isHorizontal(g) || isVertical(g)) continue;
+        if (distanceToGuide(g, p) * this.view.scale <= SNAP_PX) return { pos: projectOnGuide(g, p), lines: {} };
+      }
+    }
     const tol = SNAP_PX / this.view.scale;
     const near = (v: number, list: number[]) => {
       let best: number | undefined;
@@ -1794,6 +1976,7 @@ export class GlyphEditor {
   setTool(tool: Tool): void {
     if (this.pen && tool !== "pen") this.finishPen(false);
     if (isShape(tool)) this.shape = tool;
+    if (tool !== "measure") this.measureLine = null;
     this.tool = tool;
     this.root.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) => {
       const t = b.dataset.tool;
@@ -2713,6 +2896,7 @@ export class GlyphEditor {
       else if (k === "b") this.setTool("pencil");
       else if (k === "k") this.setTool("knife");
       else if (e.shiftKey && k === "e") this.setTool("eraser");
+      else if (k === "m") this.setTool("measure");
       else if (e.shiftKey && k === "j") this.joinSelection();
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
@@ -2737,7 +2921,12 @@ export class GlyphEditor {
         }
       } else if (k === "escape") {
         if (this.pen) this.finishPen(false);
-        else {
+        else if (this.measureLine || this.guideSel) {
+          this.measureLine = null;
+          this.guideSel = null;
+          this.render();
+          this.host.renderSide(this);
+        } else {
           this.selection.clear();
           this.pivot = null;
           this.render();
@@ -2746,7 +2935,8 @@ export class GlyphEditor {
       } else if (k === "enter" && this.pen) this.finishPen(false);
       else if (k === "delete" || k === "backspace") {
         e.preventDefault();
-        this.deleteSelection(!e.altKey);
+        if (this.guideSel && !this.selection.size) this.deleteGuide();
+        else this.deleteSelection(!e.altKey);
       }
     });
     window.addEventListener("blur", () => {
@@ -2901,7 +3091,7 @@ export class GlyphEditor {
       }
     }
     const guide = (y: number, label: string, cls = "guide") =>
-      `<line class="${cls}" x1="0" x2="${W}" y1="${sy(y)}" y2="${sy(y)}"/><text class="guide-label" x="12" y="${sy(y) - 6}">${label}</text>`;
+      `<line class="${cls}" x1="0" x2="${W}" y1="${sy(y)}" y2="${sy(y)}"/><text class="guide-label" x="${prefs.showRulers ? RULER_PX + 8 : 12}" y="${sy(y) - 6}">${label}</text>`;
     parts.push(guide(m.pa_top, `Pa-top ${m.pa_top}`));
     parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
     if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
@@ -2965,6 +3155,27 @@ export class GlyphEditor {
       }
     });
 
+    // Guides: over the outline, under the points. A wide clear line on top
+    // of each makes it easy to grab.
+    for (const { g, scope } of this.allGuides()) {
+      const d = guideDir(g);
+      const seg = clipLine({ x: sx(g.x), y: sy(g.y) }, { x: d.x, y: -d.y }, W, H);
+      if (!seg) continue;
+      const [a, b] = seg;
+      const picked = this.guideSel?.scope === scope && this.guideSel.id === g.id;
+      const cls = `user-guide ${scope}${picked ? " picked" : ""}${g.locked ? " locked" : ""}`;
+      const style = g.color ? ` style="--guide:${esc(g.color)}"` : "";
+      parts.push(
+        `<line class="${cls}"${style} x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`,
+        `<line class="guide-hit" data-guide="${scope}:${g.id}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`,
+      );
+      if (g.name || picked) {
+        const label = `${g.name ? esc(g.name) + " " : ""}${isVertical(g) ? fmt(g.x) : isHorizontal(g) ? fmt(g.y) : `${fmt(g.angle)}°`}`;
+        const pos = isVertical(g) ? { x: a.x + 4, y: H - 30 } : isHorizontal(g) ? { x: RULER_PX + 6, y: a.y - 5 } : { x: sx(g.x) + 6, y: sy(g.y) - 6 };
+        parts.push(`<text class="user-guide-label ${scope}"${style} x="${pos.x}" y="${pos.y}">${label}</text>`);
+      }
+    }
+
     // Ends of deformed strokes on a generated fidel.
     (this.drawing.handles ?? []).forEach((h, i) => {
       const g1 = this.gesture;
@@ -3023,6 +3234,36 @@ export class GlyphEditor {
     // Knife line in progress.
     if (g?.kind === "knife") {
       parts.push(`<line class="knife-line" x1="${sx(g.start.x)}" y1="${sy(g.start.y)}" x2="${sx(g.now.x)}" y2="${sy(g.now.y)}"/>`);
+    }
+
+    // Measuring line: every crossing with the outline, and the distances between them.
+    const ml = g?.kind === "measure" ? { a: g.start, b: g.now } : this.measureLine;
+    if (ml && (ml.a.x !== ml.b.x || ml.a.y !== ml.b.y)) {
+      const A = this.toScreen(ml.a);
+      const B = this.toScreen(ml.b);
+      parts.push(`<line class="measure-line" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}"/>`);
+      const hits = crossings(this.visibleContours(), ml.a, ml.b);
+      const len = Math.hypot(B.x - A.x, B.y - A.y);
+      const nx = -(B.y - A.y) / len;
+      const ny = (B.x - A.x) / len;
+      const stops = [ml.a, ...hits.map((h) => h.at), ml.b];
+      for (let i = 1; i < stops.length; i++) {
+        const p = stops[i - 1];
+        const q = stops[i];
+        const dist = Math.hypot(q.x - p.x, q.y - p.y);
+        if (dist * this.view.scale < 14) continue;
+        const m = this.toScreen({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+        // Inside the outline (between crossings 1-2, 3-4 …) reads as ink.
+        const ink = i >= 2 && i < stops.length - 1 && i % 2 === 0;
+        parts.push(`<text class="measure-label${ink ? " ink" : ""}" x="${m.x + nx * 12}" y="${m.y + ny * 12 + 4}" text-anchor="middle">${fmt(dist)}</text>`);
+      }
+      for (const h of hits) {
+        const c = this.toScreen(h.at);
+        parts.push(`<circle class="measure-hit" cx="${c.x}" cy="${c.y}" r="3"/>`);
+      }
+      const total = Math.hypot(ml.b.x - ml.a.x, ml.b.y - ml.a.y);
+      const ang = (Math.atan2(ml.b.y - ml.a.y, ml.b.x - ml.a.x) * 180) / Math.PI;
+      parts.push(`<text class="measure-total" x="${B.x + 10}" y="${B.y - 10}">${fmt(total)} · ${fmt(ang)}°</text>`);
     }
 
     // Freehand stroke in progress.
@@ -3140,6 +3381,22 @@ export class GlyphEditor {
       }
     }
 
+    // Dragging one handle: its length and angle.
+    if (g?.kind === "move" && g.moved && this.tool === "direct" && this.selection.size === 1) {
+      const [ci, pi] = parseKey([...this.selection][0]);
+      const c = this.contours[ci];
+      const p = c?.points[pi];
+      if (p && !isOn(p)) {
+        const n = c.points.length;
+        const prev = c.points[(pi - 1 + n) % n];
+        const anchor = isOn(prev) ? prev : c.points[(pi + 1) % n];
+        const dx = p.pos.x - anchor.pos.x;
+        const dy = p.pos.y - anchor.pos.y;
+        const at = this.toScreen(p.pos);
+        parts.push(`<text class="size-label" x="${at.x + 12}" y="${at.y - 12}">${fmt(Math.hypot(dx, dy))} · ${fmt((Math.atan2(dy, dx) * 180) / Math.PI)}°</text>`);
+      }
+    }
+
     // Transform box: corners and edges scale, just outside a corner rotates.
     const box = !this.pen && g?.kind !== "move" && g?.kind !== "marquee" && g?.kind !== "lasso" ? this.transformBox() : null;
     if (box) {
@@ -3196,6 +3453,37 @@ export class GlyphEditor {
     if (g?.kind === "lasso" && g.pts.length > 1) {
       const d = g.pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x)} ${sy(p.y)}`).join("") + "Z";
       parts.push(`<path class="marquee lasso" d="${d}"/>`);
+    }
+
+    // Rulers along the top and left edges, in font units; drag out of one for a guide.
+    if (prefs.showRulers) {
+      const R = RULER_PX;
+      const tx0 = (R - tx) / scale;
+      const tx1 = (W - tx) / scale;
+      const ty0 = (ty - H) / scale;
+      const ty1 = (ty - R) / scale;
+      const tt = rulerTicks(tx0, tx1, scale);
+      const lt = rulerTicks(ty0, ty1, scale);
+      let d = "";
+      let labels = "";
+      for (const v of tt.major) {
+        d += `M${sx(v)} 0V${R}`;
+        labels += `<text class="ruler-label" x="${sx(v) + 3}" y="9">${fmt(v)}</text>`;
+      }
+      for (const v of tt.minor) d += `M${sx(v)} ${R - 5}V${R}`;
+      for (const v of lt.major) {
+        d += `M0 ${sy(v)}H${R}`;
+        labels += `<text class="ruler-label" transform="translate(9 ${sy(v) - 3}) rotate(-90)">${fmt(v)}</text>`;
+      }
+      for (const v of lt.minor) d += `M${R - 5} ${sy(v)}H${R}`;
+      parts.push(
+        `<g class="rulers">`,
+        `<rect class="ruler" data-ruler="top" x="0" y="0" width="${W}" height="${R}"><title>Drag down for a guide. Alt makes it global.</title></rect>`,
+        `<rect class="ruler" data-ruler="left" x="0" y="0" width="${R}" height="${H}"><title>Drag right for a guide. Alt makes it global.</title></rect>`,
+        `<path class="ruler-ticks" d="${d}"/>${labels}`,
+        `<rect class="ruler-corner" x="0" y="0" width="${R}" height="${R}"/>`,
+        `</g>`,
+      );
     }
 
     this.svg.innerHTML = parts.join("");

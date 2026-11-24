@@ -7,6 +7,7 @@ export interface CanvasPrefs {
   snapGrid: boolean;
   /** Snap to the Pa-height zones (M2). */
   snapZones: boolean;
+  snapGuides: boolean;
   showGrid: boolean;
   /** Grid spacing in font units, and how many parts each step is cut into for snapping. */
   gridSize: number;
@@ -17,6 +18,8 @@ export interface CanvasPrefs {
   showPartLabels: boolean;
   showWarnings: boolean;
   showZones: boolean;
+  showGuides: boolean;
+  showRulers: boolean;
   /** Tunni lines on selected curves. */
   showTunni: boolean;
   /** Curvature combs on selected paths. */
@@ -35,6 +38,7 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   snapMetrics: true,
   snapGrid: false,
   snapZones: true,
+  snapGuides: true,
   showGrid: false,
   gridSize: 50,
   gridSub: 5,
@@ -43,6 +47,8 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   showPartLabels: true,
   showWarnings: true,
   showZones: true,
+  showGuides: true,
+  showRulers: true,
   showTunni: true,
   showComb: false,
   fill: true,

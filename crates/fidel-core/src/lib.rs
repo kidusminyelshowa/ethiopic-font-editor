@@ -30,6 +30,7 @@ pub mod deform;
 pub mod ethiopic;
 pub mod fidel;
 pub mod geometry;
+pub mod guides;
 pub mod kid;
 pub mod order;
 pub mod parts;

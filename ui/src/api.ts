@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Contour } from "./geometry";
+import type { Guide } from "./guides";
 
 export type StateKind = "linked" | "adjusted" | "detached";
 export type Badge = "none" | "dot" | "solid";
@@ -324,6 +325,9 @@ export const api = {
   setDeform: (id: string, zone: string | null, amount: number | null) => invoke<void>("set_deform", { id, zone, amount }),
   setZone: (id: string, position: number, name?: string) =>
     invoke<Zone[]>("set_zone", { id, name: name ?? null, position }),
+  /** A drawing's own guides and the global ones. */
+  getGuides: (drawing: string) => invoke<{ local: Guide[]; global: Guide[] }>("get_guides", { drawing }),
+  setGuides: (drawing: string, local: Guide[], global: Guide[]) => invoke<void>("set_guides", { drawing, local, global }),
   listComponents: () => invoke<ComponentSummary[]>("list_components"),
   addComponent: (name: string, kind: ComponentKind) => invoke<string>("add_component", { name, kind }),
   removeComponent: (id: string) => invoke<void>("remove_component", { id }),

@@ -990,7 +990,8 @@ textarea {
 
 /* Zoom sits top right, out of the dock's way, as in Figma. */
 .zoom-box {
-  top: 12px;
+  /* Clear of the ruler along the top. */
+  top: 30px;
   bottom: auto;
   right: 12px;
   padding: 2px;
@@ -2012,4 +2013,122 @@ body.editing .side-list {
 .deform-handle:hover,
 .deform-handle.active {
   fill: var(--orange, #c2442a);
+}
+
+/* ---------- Guides, rulers and the measuring line (ETH-12) ---------- */
+
+.canvas .user-guide {
+  --guide: #0f8a7e;
+  stroke: var(--guide);
+  stroke-opacity: 0.7;
+  stroke-width: 1;
+  pointer-events: none;
+}
+.canvas .user-guide.global {
+  --guide: #8a4fb8;
+  stroke-dasharray: 6 3;
+}
+.canvas .user-guide.picked {
+  stroke-opacity: 1;
+  stroke-width: 1.6;
+}
+.canvas .user-guide.locked {
+  stroke-opacity: 0.45;
+}
+.canvas .guide-hit {
+  stroke: transparent;
+  stroke-width: 8;
+  cursor: move;
+}
+.canvas .user-guide-label {
+  --guide: #0f8a7e;
+  fill: var(--guide);
+  font: 500 10px var(--sans);
+  pointer-events: none;
+}
+.canvas .user-guide-label.global {
+  --guide: #8a4fb8;
+}
+
+.canvas .rulers .ruler {
+  fill: var(--glass-strong);
+  cursor: default;
+}
+.canvas .rulers .ruler[data-ruler="top"] {
+  cursor: row-resize;
+}
+.canvas .rulers .ruler[data-ruler="left"] {
+  cursor: col-resize;
+}
+.canvas .ruler-ticks {
+  stroke: var(--ink-faint);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.canvas .ruler-label {
+  fill: var(--ink-soft);
+  font: 9px var(--sans);
+  pointer-events: none;
+}
+.canvas .ruler-corner {
+  fill: var(--glass-strong);
+  stroke: var(--hairline);
+  pointer-events: none;
+}
+
+.canvas[data-tool="measure"] {
+  cursor: crosshair;
+}
+.canvas .measure-line {
+  stroke: #0f8a7e;
+  stroke-width: 1.2;
+  pointer-events: none;
+}
+.canvas .measure-hit {
+  fill: #fff;
+  stroke: #0f8a7e;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.canvas .measure-label,
+.canvas .measure-total {
+  font: 600 10.5px var(--sans);
+  fill: #0f8a7e;
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.canvas .measure-label.ink {
+  fill: #fff;
+  stroke: #0f8a7e;
+}
+
+.guide-colors {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.guide-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--c);
+  padding: 0;
+  cursor: pointer;
+}
+.guide-color.on {
+  border-color: var(--card);
+  box-shadow: 0 0 0 1.5px var(--c);
+}
+.guide-name input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.side-box .pill[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--card);
 }

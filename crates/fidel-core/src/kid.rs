@@ -106,6 +106,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
         let name = entry("components", id)?;
         entries.insert(name.clone(), to_json(&name, comp)?);
     }
+    if !project.guides.is_empty() {
+        entries.insert("guides.json".into(), to_json("guides.json", &project.guides)?);
+    }
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -144,6 +147,9 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
         ..Default::default()
     };
     let names: Vec<String> = zip.file_names().map(|n| n.map(|s| s.into_owned())).collect::<Result<_, _>>()?;
+    if names.iter().any(|n| n == "guides.json") {
+        project.guides = read_entry(&mut zip, "guides.json")?;
+    }
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {
             continue;
