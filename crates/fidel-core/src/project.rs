@@ -166,6 +166,9 @@ pub struct Project {
     /// against, keyed like local guides (`base:la`). Not exported.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub backgrounds: BTreeMap<String, Vec<Contour>>,
+    /// Colour marks, tags, notes and saved filters. Not exported.
+    #[serde(default, skip_serializing_if = "crate::organize::Organize::is_empty")]
+    pub organize: crate::organize::Organize,
 }
 
 pub type SymbolId = String;

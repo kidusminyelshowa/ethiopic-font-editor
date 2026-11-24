@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Contour } from "./geometry";
 import type { Guide } from "./guides";
+import type { GlyphMark, OrganizeView, SmartFilter } from "./organize";
 
 export type StateKind = "linked" | "adjusted" | "detached";
 export type Badge = "none" | "dot" | "solid";
@@ -365,6 +366,9 @@ export const api = {
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
   ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
+  getOrganize: () => invoke<OrganizeView>("get_organize"),
+  setMark: (key: string, mark: GlyphMark) => invoke<OrganizeView>("set_mark", { key, mark }),
+  setSmartFilters: (filters: SmartFilter[]) => invoke<OrganizeView>("set_smart_filters", { filters }),
   setBaseComponents: (base: string, placements: ComponentRef[]) =>
     invoke<void>("set_base_components", { base, placements }),
 };

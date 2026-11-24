@@ -52,11 +52,12 @@ import {
 import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
 import { keysFor, onShortcuts, showKeys } from "./shortcuts";
+import { applyFind, find, initFind, loadOrganize, markSection } from "./findBar";
+import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
 
-const STATES: StateKind[] = ["linked", "adjusted", "detached"];
 
 const STATE_LABEL: Record<StateKind, string> = {
   linked: "Linked",
@@ -80,7 +81,6 @@ const GROUP_LABEL: Record<string, string> = {
 const ui = {
   status: document.getElementById("core-status")!,
   summary: document.getElementById("grid-summary")!,
-  filters: document.getElementById("filters")!,
   grid: document.getElementById("grid")!,
   inspector: document.getElementById("inspector")!,
   gridView: document.getElementById("grid-view")!,
@@ -98,7 +98,6 @@ const state = {
   grid: null as FidelGrid | null,
   alterations: [] as AlterationSummary[],
   components: [] as ComponentSummary[],
-  filter: "all" as StateKind | "all",
   selected: null as { family: string; order: string } | null,
   /** A selected punctuation mark or numeral, by symbol id. */
   selectedSymbol: null as string | null,
@@ -156,10 +155,10 @@ async function refreshGrid() {
   void refreshProof();
   state.grid = await api.fidelGrid();
   ui.summary.textContent = gridSummary(state.grid);
-  renderFilters(state.grid);
   renderGrid(state.grid);
   renderSidebar();
   renderCharsetMenu();
+  await loadOrganize();
 }
 
 function gridSummary(grid: FidelGrid): string {
@@ -179,37 +178,11 @@ function baseOf(family: string): string {
   return state.grid?.rows.find((r) => r.family === family)?.base ?? family;
 }
 
-function renderFilters(grid: FidelGrid) {
-  const counts: Record<string, number> = { all: 0 };
-  for (const row of grid.rows) {
-    for (const cell of row.cells) {
-      counts.all++;
-      counts[cell.state] = (counts[cell.state] ?? 0) + 1;
-    }
-  }
-  const options: (StateKind | "all")[] = ["all", ...STATES];
-  ui.filters.replaceChildren(
-    ...options.map((k) => {
-      const label = k === "all" ? "All" : STATE_LABEL[k];
-      const btn = el(
-        "button",
-        { class: `filter${state.filter === k ? " active" : ""}`, "aria-pressed": String(state.filter === k) },
-        el("span", { class: `swatch swatch-${k}`, "aria-hidden": "true" }),
-        label,
-        el("span", { class: "count" }, String(counts[k] ?? 0)),
-      );
-      btn.addEventListener("click", () => {
-        state.filter = k;
-        ui.grid.dataset.filter = k;
-        renderFilters(grid);
-      });
-      return btn;
-    }),
-  );
-  ui.grid.dataset.filter = state.filter;
-}
-
 function renderGrid(grid: FidelGrid) {
+  if (find.mode === "list") {
+    applyFind();
+    return;
+  }
   const extras = grid.orders.filter((o) => o.extra).length;
   const table = el("table", { class: `fidel-grid${extras ? " has-extra" : ""}` });
   const head = table.createTHead().insertRow();
@@ -279,6 +252,7 @@ function renderGrid(grid: FidelGrid) {
     nodes.push(wrap);
   }
   ui.grid.replaceChildren(...nodes);
+  applyFind();
   markSelected();
 }
 
@@ -326,7 +300,11 @@ function selectSymbol(id: string) {
         { class: "facts" },
         el("div", {}, el("dt", {}, "Kind"), el("dd", {}, "Symbol")),
         el("div", {}, el("dt", {}, "Outline"), el("dd", {}, s.outline ? "Drawn" : "Not drawn")),
+        el("div", {}, el("dt", {}, "Unicode"), el("dd", { class: "mono" }, unicodeOf(s.codepoint))),
+        el("div", {}, el("dt", {}, "Name"), el("dd", { class: "mono" }, glyphName(s.codepoint))),
+        el("div", {}, el("dt", {}, "Width"), el("dd", {}, s.outline ? String(Math.round(s.outline.advanceWidth)) : "—")),
       ),
+      ...markSection(`symbol:${s.id}`, null),
       edit,
     ),
   );
@@ -448,6 +426,13 @@ function renderInspector(d: FidelDetail) {
         el("div", {}, el("dt", {}, "Order"), el("dd", {}, d.orderNumber > 7 ? d.orderName : `${d.orderNumber} · ${d.orderName}`)),
         el("div", {}, el("dt", {}, "Group"), el("dd", {}, d.group ? (GROUP_LABEL[d.group] ?? d.group) : "—")),
         el("div", {}, el("dt", {}, "Nudges"), el("dd", {}, String(d.nudgeCount))),
+        ...(d.codepoint
+          ? [
+              el("div", {}, el("dt", {}, "Unicode"), el("dd", { class: "mono" }, unicodeOf(d.codepoint))),
+              el("div", {}, el("dt", {}, "Name"), el("dd", { class: "mono" }, glyphName(d.codepoint))),
+            ]
+          : []),
+        el("div", {}, el("dt", {}, "Width"), el("dd", {}, outline ? String(Math.round(outline.advanceWidth)) : "—")),
       ),
       ...(d.note ? [el("p", { class: "state-help" }, d.note)] : []),
       el("h3", { class: "section-label" }, "Recipe"),
@@ -464,6 +449,7 @@ function renderInspector(d: FidelDetail) {
             ),
           ]
         : []),
+      ...markSection(`fidel:${d.family}/${d.order}`, { key: `family:${d.family}`, name: d.familyName }),
       el("div", { class: "actions" }, open, ...stateActions(d)),
     ),
   );
@@ -1736,7 +1722,6 @@ async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
       renderEmptyInspector();
     }
     ui.summary.textContent = gridSummary(grid);
-    renderFilters(grid);
     renderGrid(grid);
     renderSidebar();
     renderCharsetMenu();
@@ -1768,6 +1753,54 @@ window.addEventListener("keydown", (e) => {
 function toggleSidebars() {
   document.body.classList.toggle("panels-hidden");
 }
+
+// ---------- Find and organize ----------
+
+initFind(
+  {
+    grid: () => state.grid,
+    gridEl: ui.grid,
+    selectItem: (it) => {
+      if (it.family && it.order) void select(it.family, it.order);
+      else selectSymbol(it.key.slice("symbol:".length));
+    },
+    openItem: (it) => {
+      if (it.family && it.order) void editFromCell(it.family, it.order);
+      else void openDrawing({ kind: "symbol", id: it.key.slice("symbol:".length) });
+    },
+    redrawn: () => {
+      if (state.grid) renderGrid(state.grid);
+    },
+    toast,
+    changed: () => {},
+  },
+  document.querySelector<HTMLElement>(".grid-view .stage-tools")!,
+);
+
+// Right-click a glyph to colour it.
+ui.grid.addEventListener("contextmenu", (e) => {
+  const cell = (e.target as HTMLElement).closest<HTMLElement>(".cell, .list-row");
+  if (!cell) return;
+  e.preventDefault();
+  const key = cell.dataset.key ?? (cell.dataset.symbol ? `symbol:${cell.dataset.symbol}` : `fidel:${cell.dataset.family}/${cell.dataset.order}`);
+  const mark: GlyphMark = find.organize.marks[key] ?? {};
+  const setColor = (color: GlyphMark["color"]) =>
+    void api.setMark(key, { ...mark, color }).then(
+      (o) => {
+        find.organize = o;
+        applyFind();
+      },
+      (err) => toast(`Could not mark it: ${err}`, "error"),
+    );
+  showMenu(
+    [
+      { heading: "Colour" },
+      ...MARK_COLORS.map((c) => ({ label: c[0].toUpperCase() + c.slice(1), checked: mark.color === c, run: () => setColor(c) })),
+      { label: "No colour", checked: !mark.color, run: () => setColor(null) },
+    ],
+    { x: e.clientX, y: e.clientY },
+  );
+});
 
 /** Tool tooltips show the keys each tool runs on now. */
 function refreshToolTitles(): void {

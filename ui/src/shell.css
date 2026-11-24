@@ -2426,3 +2426,319 @@ body.editing .side-list {
 .rule-uses {
   margin: 8px 0 0;
 }
+
+/* ---------- Find and organize glyphs (ETH-19) ---------- */
+
+:root {
+  --mark-red: #d64545;
+  --mark-orange: #e07b28;
+  --mark-yellow: #d9b21f;
+  --mark-green: #3f9a54;
+  --mark-blue: #2f74c0;
+  --mark-purple: #8452c4;
+  --mark-gray: #8a8a8a;
+}
+.mark-red { --mark: var(--mark-red); }
+.mark-orange { --mark: var(--mark-orange); }
+.mark-yellow { --mark: var(--mark-yellow); }
+.mark-green { --mark: var(--mark-green); }
+.mark-blue { --mark: var(--mark-blue); }
+.mark-purple { --mark: var(--mark-purple); }
+.mark-gray { --mark: var(--mark-gray); }
+
+.grid-search {
+  width: 160px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.grid-search:focus {
+  outline: none;
+  border-color: var(--select-strong);
+}
+.filter-wrap {
+  position: relative;
+}
+.filter-btn.active {
+  background: var(--select);
+  color: var(--ink);
+}
+.filter-menu {
+  left: auto;
+  right: 0;
+  min-width: 260px;
+  max-height: min(560px, calc(100vh - 140px));
+  overflow: auto;
+  z-index: 40;
+}
+.filter-menu .check-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.menu-note {
+  padding: 4px 8px 6px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.mark-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px 6px;
+}
+.mark-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--mark, transparent);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+.mark-swatch.mark-none {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--ink-faint) 45%, var(--ink-faint) 55%, transparent 55%),
+    var(--card);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.mark-swatch.on {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--ink);
+}
+.smart-filter-row {
+  display: flex;
+  align-items: center;
+}
+.smart-filter-row .menu-item {
+  flex: 1;
+  min-width: 0;
+}
+.smart-filter.active {
+  font-weight: 600;
+}
+.smart-filter-del {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 14px;
+  cursor: pointer;
+  visibility: hidden;
+}
+.smart-filter-row:hover .smart-filter-del {
+  visibility: visible;
+}
+.smart-filter-del:hover {
+  background: var(--panel-line);
+  color: var(--ink);
+}
+.smart-filter-save {
+  padding: 4px 6px;
+}
+.smart-filter-name {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+/* Matches and marks in the grid. */
+.grid-scroll.filtering .cell.no-match {
+  opacity: 0.14;
+}
+.cell[data-mark]::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--mark);
+}
+.cell[data-mark="red"], .list-row[data-mark="red"] { --mark: var(--mark-red); }
+.cell[data-mark="orange"], .list-row[data-mark="orange"] { --mark: var(--mark-orange); }
+.cell[data-mark="yellow"], .list-row[data-mark="yellow"] { --mark: var(--mark-yellow); }
+.cell[data-mark="green"], .list-row[data-mark="green"] { --mark: var(--mark-green); }
+.cell[data-mark="blue"], .list-row[data-mark="blue"] { --mark: var(--mark-blue); }
+.cell[data-mark="purple"], .list-row[data-mark="purple"] { --mark: var(--mark-purple); }
+.cell[data-mark="gray"], .list-row[data-mark="gray"] { --mark: var(--mark-gray); }
+.cell.has-note::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-bottom: 6px solid var(--ink-faint);
+}
+.find-empty {
+  padding: 32px;
+  text-align: center;
+}
+
+/* The list view. */
+.glyph-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.glyph-list th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  background: var(--paper, var(--card));
+  color: var(--ink-faint);
+  font-weight: 500;
+  text-align: left;
+  border-bottom: 1px solid var(--panel-line);
+}
+.glyph-list td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--panel-line);
+  vertical-align: middle;
+}
+.glyph-list .mono {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.glyph-list .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.list-row {
+  cursor: default;
+}
+.list-row:hover {
+  background: var(--panel-line);
+}
+.list-row.selected {
+  background: var(--select);
+}
+.list-glyph {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 52px;
+}
+.list-mark {
+  width: 3px;
+  height: 28px;
+  border-radius: 2px;
+  background: var(--mark, transparent);
+}
+.list-preview {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  font: 22px var(--ethiopic);
+}
+.list-preview svg {
+  width: 100%;
+  height: 100%;
+}
+.list-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.list-note {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+/* Colour, tags and notes in the inspector. */
+.mark-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mark-box .mark-swatches {
+  padding: 0;
+}
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 4px 0 8px;
+  border-radius: 10px;
+  background: var(--hairline);
+  font-size: 11.5px;
+  margin-right: 3px;
+}
+.glyph-list .tag-chip {
+  padding: 0 8px;
+}
+.tag-remove {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.tag-remove:hover {
+  background: var(--panel-line);
+  color: var(--ink);
+}
+.tag-input {
+  flex: 1 1 80px;
+  min-width: 80px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.tag-input:focus,
+.tag-input:hover {
+  border-color: var(--hairline);
+  outline: none;
+}
+.note-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.note-input:focus {
+  outline: none;
+  border-color: var(--select-strong);
+}

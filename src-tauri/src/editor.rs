@@ -572,3 +572,23 @@ mod tests {
         assert_eq!(list.iter().find(|a| a.id == "loop.bottom-right").unwrap().orders, vec![Order::Hamis]);
     }
 }
+
+/// Marks, tags, notes and saved filters for the grid, with which drawings
+/// have a background layer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizeView {
+    marks: std::collections::BTreeMap<String, fidel_core::organize::GlyphMark>,
+    filters: Vec<fidel_core::organize::SmartFilter>,
+    tags: Vec<String>,
+    backgrounds: Vec<String>,
+}
+
+pub fn organize_view(project: &Project) -> OrganizeView {
+    OrganizeView {
+        marks: project.organize.marks.clone(),
+        filters: project.organize.filters.clone(),
+        tags: project.organize.tags(),
+        backgrounds: project.backgrounds.keys().cloned().collect(),
+    }
+}

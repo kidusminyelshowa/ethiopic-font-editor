@@ -112,6 +112,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     if !project.backgrounds.is_empty() {
         entries.insert("backgrounds.json".into(), to_json("backgrounds.json", &project.backgrounds)?);
     }
+    if !project.organize.is_empty() {
+        entries.insert("organize.json".into(), to_json("organize.json", &project.organize)?);
+    }
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -155,6 +158,9 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
     }
     if names.iter().any(|n| n == "backgrounds.json") {
         project.backgrounds = read_entry(&mut zip, "backgrounds.json")?;
+    }
+    if names.iter().any(|n| n == "organize.json") {
+        project.organize = read_entry(&mut zip, "organize.json")?;
     }
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {

@@ -341,6 +341,42 @@ fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
     editor::rule_ends(&state.project(), &base)
 }
 
+/// Marks, tags, notes and saved filters.
+#[tauri::command]
+fn get_organize(state: State<'_, AppState>) -> editor::OrganizeView {
+    editor::organize_view(&state.project())
+}
+
+/// Set the colour, tags and note on a glyph (`fidel:ha/kaib`, `symbol:…`) or family (`family:ha`).
+#[tauri::command]
+fn set_mark(
+    state: State<'_, AppState>,
+    key: String,
+    mark: fidel_core::organize::GlyphMark,
+) -> editor::OrganizeView {
+    let view = {
+        let mut project = state.project();
+        project.organize.set_mark(&key, mark);
+        editor::organize_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
+#[tauri::command]
+fn set_smart_filters(
+    state: State<'_, AppState>,
+    filters: Vec<fidel_core::organize::SmartFilter>,
+) -> editor::OrganizeView {
+    let view = {
+        let mut project = state.project();
+        project.organize.set_filters(filters);
+        editor::organize_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
 /// Replace the components placed on a base.
 #[tauri::command]
 fn set_base_components(
@@ -621,7 +657,10 @@ pub fn run() {
             set_base_components,
             set_component_rule,
             set_component_end,
-            rule_ends
+            rule_ends,
+            get_organize,
+            set_mark,
+            set_smart_filters
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

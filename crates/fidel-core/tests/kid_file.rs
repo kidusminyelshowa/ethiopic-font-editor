@@ -45,6 +45,19 @@ fn sample() -> Project {
     p.guides.set("base:ha", vec![guide(1, 90.0)], vec![guide(2, 0.0)]);
     p.backgrounds
         .insert("base:ha".into(), vec![Contour::rect(0, None, Vec2::new(0.0, 0.0), Vec2::new(60.0, 700.0))]);
+    p.organize.set_mark(
+        "fidel:ha/kaib",
+        fidel_core::organize::GlyphMark {
+            color: Some(fidel_core::organize::MarkColor::Orange),
+            tags: vec!["review".into()],
+            note: "Loop too tight".into(),
+        },
+    );
+    p.organize.set_filters(vec![fidel_core::organize::SmartFilter {
+        name: "To review".into(),
+        query: String::new(),
+        rules: vec!["tag:review".into()],
+    }]);
     p
 }
 

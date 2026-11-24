@@ -33,6 +33,7 @@ pub mod geometry;
 pub mod guides;
 pub mod kid;
 pub mod order;
+pub mod organize;
 pub mod parts;
 pub mod pathops;
 pub mod project;
