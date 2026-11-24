@@ -656,6 +656,47 @@ mod tests {
     }
 }
 
+/// The design space as the masters panel shows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesignView {
+    axes: Vec<fidel_core::designspace::Axis>,
+    masters: Vec<MasterView>,
+    instances: Vec<fidel_core::designspace::Instance>,
+    /// Index of the master being edited.
+    active: usize,
+    /// Index of the master at the default location, if any.
+    default: Option<usize>,
+    /// Why the masters cannot interpolate, if they cannot.
+    problem: Option<String>,
+    incompatible: Vec<fidel_core::designspace::Incompatible>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MasterView {
+    id: String,
+    name: String,
+    location: std::collections::BTreeMap<String, f64>,
+}
+
+pub fn design_view(project: &Project) -> DesignView {
+    let d = &project.design;
+    let problem = if d.masters.len() > 1 { project.model().err().map(|e| e.to_string()) } else { None };
+    DesignView {
+        axes: d.axes.clone(),
+        masters: d
+            .masters
+            .iter()
+            .map(|m| MasterView { id: m.id.clone(), name: m.name.clone(), location: m.location.clone() })
+            .collect(),
+        instances: d.instances.clone(),
+        active: d.active,
+        default: d.default_master(),
+        problem,
+        incompatible: project.compatibility(),
+    }
+}
+
 /// Kerning classes and pairs, as the kerning view shows them.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

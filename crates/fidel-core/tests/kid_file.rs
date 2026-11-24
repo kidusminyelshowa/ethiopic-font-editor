@@ -60,6 +60,19 @@ fn sample() -> Project {
     }]);
     p.kerning.set_class(fidel_core::kerning::KernSide::Left, "ha", &['ሀ', 'ሁ'], None).unwrap();
     p.kerning.set_pair("@ha", "ለ", Some(-30)).unwrap();
+    p.set_axis(
+        None,
+        fidel_core::designspace::Axis {
+            tag: "wght".into(),
+            name: "Weight".into(),
+            min: 400.0,
+            default: 400.0,
+            max: 700.0,
+            map: vec![],
+        },
+    )
+    .unwrap();
+    p.add_master("Bold", std::collections::BTreeMap::from([("wght".to_string(), 700.0)]));
     p
 }
 

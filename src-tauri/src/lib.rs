@@ -363,6 +363,137 @@ fn set_metric_keys(
     Ok(())
 }
 
+/// Axes, masters, instances and what keeps them from interpolating.
+#[tauri::command]
+fn get_design(state: State<'_, AppState>) -> editor::DesignView {
+    editor::design_view(&state.project())
+}
+
+/// Run a change to the design space and return the new view.
+fn design_change(
+    state: &State<'_, AppState>,
+    f: impl FnOnce(&mut fidel_core::Project) -> Result<(), fidel_core::designspace::DesignError>,
+) -> CmdResult<editor::DesignView> {
+    let view = {
+        let mut project = state.project();
+        f(&mut *project).map_err(err)?;
+        editor::design_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Add an axis, or change the one tagged `old_tag`.
+#[tauri::command]
+fn set_axis(
+    state: State<'_, AppState>,
+    old_tag: Option<String>,
+    axis: fidel_core::designspace::Axis,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.set_axis(old_tag.as_deref(), axis))
+}
+
+#[tauri::command]
+fn remove_axis(state: State<'_, AppState>, tag: String) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.remove_axis(&tag);
+        Ok(())
+    })
+}
+
+/// A new master starting from the drawings of the one being edited.
+#[tauri::command]
+fn add_master(
+    state: State<'_, AppState>,
+    name: String,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.add_master(&name, location);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_master(
+    state: State<'_, AppState>,
+    index: usize,
+    name: String,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.set_master(index, &name, location))
+}
+
+#[tauri::command]
+fn remove_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.remove_master(index))
+}
+
+/// Edit another master: its drawings come into the editor.
+#[tauri::command]
+fn switch_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.switch_master(index))
+}
+
+#[tauri::command]
+fn set_instances(
+    state: State<'_, AppState>,
+    instances: Vec<fidel_core::designspace::Instance>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.design.instances = instances;
+        Ok(())
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableSummary {
+    path: String,
+    family_name: String,
+    exported: usize,
+    skipped: usize,
+    /// Glyphs whose masters do not match, left as in the default master.
+    fixed: Vec<String>,
+}
+
+/// The variable font over all masters.
+#[tauri::command]
+fn export_variable(state: State<'_, AppState>, path: String) -> CmdResult<VariableSummary> {
+    let options = export_options(&state);
+    let family_name = options.family_name.clone();
+    let font = fidel_export::export_variable(&state.project(), &options).map_err(err)?;
+    let path = with_extension(PathBuf::from(path), "ttf");
+    std::fs::write(&path, &font.bytes).map_err(err)?;
+    Ok(VariableSummary {
+        path: path.to_string_lossy().into_owned(),
+        family_name,
+        exported: font.exported.len(),
+        skipped: font.skipped.len(),
+        fixed: font.fixed.iter().map(|c| c.to_string()).collect(),
+    })
+}
+
+/// Each instance marked for export, as its own font in `dir`. Returns the paths.
+#[tauri::command]
+fn export_instances(state: State<'_, AppState>, dir: String) -> CmdResult<Vec<String>> {
+    let options = export_options(&state);
+    let project = state.project().clone();
+    let mut out = Vec::new();
+    for inst in project.design.instances.iter().filter(|i| i.export) {
+        let font = fidel_export::export_instance(&project, inst, &options).map_err(err)?;
+        let stem = format!("{}-{}", options.family_name, inst.name)
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "");
+        let path = PathBuf::from(&dir).join(format!("{stem}.ttf"));
+        std::fs::write(&path, &font.bytes).map_err(err)?;
+        out.push(path.to_string_lossy().into_owned());
+    }
+    if out.is_empty() {
+        return Err("No instance is set to export.".into());
+    }
+    Ok(out)
+}
+
 /// Kerning classes and pairs.
 #[tauri::command]
 fn get_kerning(state: State<'_, AppState>) -> editor::KerningView {
@@ -579,7 +710,7 @@ pub struct ExportSummary {
 fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSummary> {
     let options = export_options(&state);
     let family_name = options.family_name.clone();
-    let font = fidel_export::export(&state.project(), &options).map_err(err)?;
+    let font = fidel_export::export(&state.project().default_project(), &options).map_err(err)?;
     let path = with_extension(PathBuf::from(path), "ttf");
     std::fs::write(&path, &font.bytes).map_err(err)?;
     Ok(ExportSummary {
@@ -626,7 +757,7 @@ pub struct InstallSummary {
 #[tauri::command]
 fn test_install(state: State<'_, AppState>) -> CmdResult<InstallSummary> {
     let options = export_options(&state);
-    let font = fidel_export::export(&state.project(), &options).map_err(err)?;
+    let font = fidel_export::export(&state.project().default_project(), &options).map_err(err)?;
     if font.exported.is_empty() {
         return Err("Nothing is drawn yet.".into());
     }
@@ -641,9 +772,21 @@ fn test_install(state: State<'_, AppState>) -> CmdResult<InstallSummary> {
 /// The current drawings as font bytes, for the live proof line. Empty when
 /// nothing is drawn yet.
 #[tauri::command]
-fn proof_font(state: State<'_, AppState>) -> tauri::ipc::Response {
+fn proof_font(
+    state: State<'_, AppState>,
+    location: Option<std::collections::BTreeMap<String, f64>>,
+) -> tauri::ipc::Response {
     let options = fidel_export::ExportOptions::new("Fidel Proof");
-    let bytes = fidel_export::export(&state.project(), &options).map(|f| f.bytes).unwrap_or_default();
+    let project = match &location {
+        Some(at) => state.project().instance_at(at).ok(),
+        None => None,
+    };
+    let bytes = match project {
+        Some(p) => fidel_export::export(&p, &options),
+        None => fidel_export::export(&state.project(), &options),
+    }
+    .map(|f| f.bytes)
+    .unwrap_or_default();
     tauri::ipc::Response::new(bytes)
 }
 
@@ -767,6 +910,16 @@ pub fn run() {
             set_component_rule,
             set_component_end,
             rule_ends,
+            get_design,
+            set_axis,
+            remove_axis,
+            add_master,
+            set_master,
+            remove_master,
+            switch_master,
+            set_instances,
+            export_variable,
+            export_instances,
             get_kerning,
             set_kern_pair,
             set_kern_class,

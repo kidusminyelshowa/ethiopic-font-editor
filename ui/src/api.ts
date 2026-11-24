@@ -324,6 +324,48 @@ export interface ExportSummary {
   skipped: number;
 }
 
+export interface Axis {
+  tag: string;
+  name: string;
+  min: number;
+  default: number;
+  max: number;
+  /** User value to design value. */
+  map?: [number, number][];
+}
+
+export interface MasterInfo {
+  id: string;
+  name: string;
+  /** Design units by axis tag. */
+  location: Record<string, number>;
+}
+
+export interface InstanceInfo {
+  name: string;
+  /** User units by axis tag. */
+  location: Record<string, number>;
+  export: boolean;
+}
+
+export interface DesignData {
+  axes: Axis[];
+  masters: MasterInfo[];
+  instances: InstanceInfo[];
+  active: number;
+  default: number | null;
+  problem: string | null;
+  incompatible: { drawing: string; masters: string[] }[];
+}
+
+export interface VariableSummary {
+  path: string;
+  familyName: string;
+  exported: number;
+  skipped: number;
+  fixed: string[];
+}
+
 export type KernSide = "left" | "right";
 
 /** One kerning value. A side is a character, or `@` and a class name. */
@@ -356,7 +398,18 @@ export const api = {
   rejoinAlteration: (id: string) => invoke<string>("rejoin_alteration", { id }),
   exportFont: (path: string) => invoke<ExportSummary>("export_font", { path }),
   /** Font bytes of everything drawn so far; empty when nothing is drawn. */
-  proofFont: () => invoke<ArrayBuffer>("proof_font"),
+  proofFont: (location?: Record<string, number> | null) => invoke<ArrayBuffer>("proof_font", { location: location ?? null }),
+  getDesign: () => invoke<DesignData>("get_design"),
+  setAxis: (oldTag: string | null, axis: Axis) => invoke<DesignData>("set_axis", { oldTag, axis }),
+  removeAxis: (tag: string) => invoke<DesignData>("remove_axis", { tag }),
+  addMaster: (name: string, location: Record<string, number>) => invoke<DesignData>("add_master", { name, location }),
+  setMaster: (index: number, name: string, location: Record<string, number>) =>
+    invoke<DesignData>("set_master", { index, name, location }),
+  removeMaster: (index: number) => invoke<DesignData>("remove_master", { index }),
+  switchMaster: (index: number) => invoke<DesignData>("switch_master", { index }),
+  setInstances: (instances: InstanceInfo[]) => invoke<DesignData>("set_instances", { instances }),
+  exportVariable: (path: string) => invoke<VariableSummary>("export_variable", { path }),
+  exportInstances: (dir: string) => invoke<string[]>("export_instances", { dir }),
   projectInfo: () => invoke<ProjectInfo>("project_info"),
   newProject: () => invoke<ProjectInfo>("new_project"),
   openProject: (path: string) => invoke<ProjectInfo>("open_project", { path }),

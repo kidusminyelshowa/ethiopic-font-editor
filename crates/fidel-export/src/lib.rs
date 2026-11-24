@@ -32,6 +32,9 @@ use write_fonts::tables::variations::ivs_builder::VariationStoreBuilder;
 use write_fonts::types::{FWord, Fixed, GlyphId, GlyphId16, LongDateTime, NameId, Tag, UfWord};
 use write_fonts::{FontBuilder, OffsetMarker};
 
+mod variable;
+pub use variable::{export_instance, export_variable, VariableFont};
+
 /// Largest distance, in font units, between a cubic and its quadratic stand-in.
 pub const CURVE_ACCURACY: f64 = 0.5;
 
@@ -87,6 +90,8 @@ pub enum ExportError {
     TooManyGlyphs,
     #[error("could not write the font: {0}")]
     Write(String),
+    #[error("{0}")]
+    Design(String),
 }
 
 struct GlyphOut {
@@ -101,38 +106,11 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     if family.is_empty() {
         return Err(ExportError::NoFamilyName);
     }
-    let upm = project.metrics.units_per_em;
-    let upm_f = f64::from(upm);
-
-    let mut glyphs = vec![
-        notdef(upm_f),
-        GlyphOut {
-            name: "space".into(),
-            codepoint: Some(' '),
-            advance: project.info.space_advance(upm).round() as u16,
-            glyph: Glyph::Empty,
-        },
-    ];
+    let mut glyphs = fixed_glyphs(project);
     let mut exported = Vec::new();
     let mut skipped = Vec::new();
 
-    // Every fidel and symbol in the project's character sets, by codepoint.
-    let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
-        .iter()
-        .chain(Order::EXTRA.iter())
-        .flat_map(|&o| project.resolve_order(o))
-        .filter_map(|f| {
-            let ch = f.codepoint?;
-            Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
-        })
-        .chain(
-            project.symbols.values().map(|s| (s.codepoint, project.symbol_outline(&s.id), s.advance_width)),
-        )
-        .filter(|(ch, ..)| project.in_charset(*ch))
-        .collect();
-    items.sort_by_key(|(ch, ..)| *ch);
-    items.dedup_by_key(|(ch, ..)| *ch);
-    for (ch, outline, advance) in items {
+    for (ch, outline, advance) in collect_items(project) {
         // Open paths are working lines, not part of the glyph.
         let contours: Vec<&Contour> = outline.iter().filter(|c| !c.open && c.points.len() >= 2).collect();
         if contours.is_empty() {
@@ -148,8 +126,43 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     if exported.is_empty() {
         return Err(ExportError::NothingDrawn);
     }
-    let bytes = build(project, options, family, &glyphs)?;
+    let bytes = build(project, options, family, &glyphs, None)?;
     Ok(ExportedFont { bytes, exported, skipped })
+}
+
+/// The first two glyphs of every font: .notdef and the space.
+fn fixed_glyphs(project: &Project) -> Vec<GlyphOut> {
+    let upm = project.metrics.units_per_em;
+    vec![
+        notdef(f64::from(upm)),
+        GlyphOut {
+            name: "space".into(),
+            codepoint: Some(' '),
+            advance: project.info.space_advance(upm).round() as u16,
+            glyph: Glyph::Empty,
+        },
+    ]
+}
+
+/// Every fidel and symbol in the project's character sets, by codepoint,
+/// with its outline and advance.
+fn collect_items(project: &Project) -> Vec<(char, Vec<Contour>, f64)> {
+    let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
+        .iter()
+        .chain(Order::EXTRA.iter())
+        .flat_map(|&o| project.resolve_order(o))
+        .filter_map(|f| {
+            let ch = f.codepoint?;
+            Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
+        })
+        .chain(
+            project.symbols.values().map(|s| (s.codepoint, project.symbol_outline(&s.id), s.advance_width)),
+        )
+        .filter(|(ch, ..)| project.in_charset(*ch))
+        .collect();
+    items.sort_by_key(|(ch, ..)| *ch);
+    items.dedup_by_key(|(ch, ..)| *ch);
+    items
 }
 
 fn build(
@@ -157,6 +170,7 @@ fn build(
     options: &ExportOptions,
     family: &str,
     glyphs: &[GlyphOut],
+    var: Option<variable::VarTables>,
 ) -> Result<Vec<u8>, ExportError> {
     let write_err = |e: &dyn std::fmt::Display| ExportError::Write(e.to_string());
     let metrics = &project.metrics;
@@ -326,6 +340,9 @@ fn build(
     if !options.designer.trim().is_empty() {
         records.push((9, options.designer.trim().to_string()));
     }
+    if let Some(v) = &var {
+        records.extend(v.names.iter().cloned());
+    }
     records.sort_by_key(|(id, _)| *id);
     let name = Name::new(
         records
@@ -352,6 +369,9 @@ fn build(
         .map_err(|e| write_err(&e))?;
     if let Some(gpos) = &gpos {
         font.add_table(gpos).map_err(|e| write_err(&e))?;
+    }
+    if let Some(v) = var {
+        v.add_to(&mut font).map_err(|e| write_err(&e))?;
     }
     Ok(font.build())
 }

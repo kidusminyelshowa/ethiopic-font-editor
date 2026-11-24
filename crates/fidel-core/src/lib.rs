@@ -27,6 +27,7 @@ pub mod component;
 pub mod coverage;
 pub mod defaults;
 pub mod deform;
+pub mod designspace;
 pub mod ethiopic;
 pub mod fidel;
 pub mod geometry;

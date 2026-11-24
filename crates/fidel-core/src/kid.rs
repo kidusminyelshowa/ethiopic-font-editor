@@ -12,13 +12,15 @@
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! components/<id>.json          one leaf, cap or corner, drawn once
 //! kerning.json                  kerning pairs and classes
+//! designspace.json              axes, instances, and the masters other than
+//!                               the active one, each with its drawings
 //! ```
 //!
 //! `project.json` also lists the character sets the project covers. Files
 //! from before sets existed open as Ge'ez only.
 //!
-//! Multiple masters will add a `masters/<name>/` level later; version 1 holds
-//! a single master. Entries are written in sorted order with a fixed
+//! The files above hold the active master's drawings; the other masters'
+//! drawings are in `designspace.json`. Entries are written in sorted order with a fixed
 //! timestamp, so saving the same project twice gives identical bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,6 +121,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     if !project.kerning.is_empty() {
         entries.insert("kerning.json".into(), to_json("kerning.json", &project.kerning)?);
     }
+    if !project.design.is_empty() {
+        entries.insert("designspace.json".into(), to_json("designspace.json", &project.design)?);
+    }
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -168,6 +173,9 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
     }
     if names.iter().any(|n| n == "kerning.json") {
         project.kerning = read_entry(&mut zip, "kerning.json")?;
+    }
+    if names.iter().any(|n| n == "designspace.json") {
+        project.design = read_entry(&mut zip, "designspace.json")?;
     }
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {

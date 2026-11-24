@@ -58,6 +58,7 @@ import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
 import { initProof, setProofFont } from "./proof";
 import { KernView } from "./kernView";
 import { resolve as resolveKern } from "./kerning";
+import { designSections, initMasters, loadDesign, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -114,6 +115,7 @@ const state = {
 async function loadParts() {
   [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
   kernView.data = await api.getKerning();
+  await loadDesign();
 }
 
 // ---------- Toasts ----------
@@ -623,9 +625,14 @@ function renderFontProperties(p: FontProperties) {
         ),
         el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
       ),
+      ...designSections(),
     ),
   );
 }
+// The masters sections redraw when the design space changes.
+onDesign(() => {
+  if (state.view === "grid" && !state.selected && !state.selectedSymbol && ui.inspector.querySelector(".font-props")) renderEmptyInspector();
+});
 
 function deselect() {
   if (!state.selected && !state.selectedSymbol) return;
@@ -1737,6 +1744,36 @@ void getCurrentWindow()
 
 const FONT_FILTER = [{ name: "Font", extensions: ["ttf"] }];
 
+async function exportVariable() {
+  const path = await saveDialog({ defaultPath: `${projectInfo.name}-VF.ttf`, filters: FONT_FILTER });
+  if (!path) return;
+  try {
+    const r = await api.exportVariable(path);
+    const fixed = r.fixed.length ? ` ${r.fixed.length} do not interpolate and stay as in the default master: ${r.fixed.slice(0, 12).join(" ")}` : "";
+    toast(`Exported a variable font of ${r.exported} glyphs as “${r.familyName}”.${fixed}`);
+  } catch (err) {
+    toast(`Could not export: ${err}`, "error");
+  }
+}
+
+async function exportInstances() {
+  const dir = await openDialog({ directory: true, title: "Folder for the instances" });
+  if (!dir || Array.isArray(dir)) return;
+  try {
+    const paths = await api.exportInstances(dir);
+    toast(`Exported ${paths.length} ${paths.length === 1 ? "font" : "fonts"}.`);
+  } catch (err) {
+    toast(`Could not export: ${err}`, "error");
+  }
+}
+
+/** The font properties, with the masters and axes. */
+function showProperties() {
+  showView("grid");
+  deselect();
+  renderEmptyInspector();
+}
+
 async function exportFont() {
   const path = await saveDialog({ defaultPath: `${projectInfo.name}.ttf`, filters: FONT_FILTER });
   if (!path) return;
@@ -1760,6 +1797,34 @@ async function testInstall() {
   }
 }
 
+initMasters({
+  toast,
+  afterSwitch: async () => {
+    await refreshGrid();
+    kernView.data = await api.getKerning();
+    if (state.view === "kerning") kernView.refresh();
+    const t = editor.drawing?.target;
+    if (t) {
+      const ctx = editor.drawing?.context?.family;
+      editor.reset();
+      await editor.open(t, ctx);
+      if (state.view === "editor") renderEditorSide(editor);
+    }
+  },
+  changed: () => {
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  openDrawing: (key) => {
+    const [kind, id] = key.split(/:(.*)/s);
+    showView("editor");
+    void openDrawing({ kind, id } as DrawingTarget);
+  },
+  exportVariable: () => void exportVariable(),
+  exportInstances: () => void exportInstances(),
+  showProperties,
+});
+
 initProof(document.querySelector<HTMLElement>(".grid-view .proof")!, {
   rows: () =>
     (state.grid?.rows ?? []).map((r) => {
@@ -1771,6 +1836,11 @@ initProof(document.querySelector<HTMLElement>(".grid-view .proof")!, {
   symbols: () => (state.grid?.symbols ?? []).map((s) => s.codepoint),
   testInstall: () => void testInstall(),
 });
+{
+  // Axis sliders in the proof, when there are masters to move between.
+  const tools = document.querySelector<HTMLElement>(".grid-view .proof .proof-tools");
+  tools?.insertBefore(proofAxes(() => void refreshProof()), tools.querySelector(".grow"));
+}
 
 // ---------- Character sets ----------
 
@@ -1933,6 +2003,10 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
   b.addEventListener("click", () => {
     const m = b.dataset.menu;
     if (m === "export") void exportFont();
+    else if (m === "export-variable") void exportVariable();
+    else if (m === "export-instances") void exportInstances();
+    else if (m === "masters") showProperties();
+    else if (m === "view-kerning") showView("kerning");
     else if (m === "test-install") void testInstall();
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
@@ -1970,7 +2044,7 @@ let proofSerial = 0;
 async function refreshProof() {
   const note = document.getElementById("proof-note")!;
   try {
-    const bytes = await api.proofFont();
+    const bytes = await api.proofFont(proofLocation);
     if (proofFace) document.fonts.delete(proofFace);
     proofFace = null;
     if (!bytes.byteLength) {

@@ -184,6 +184,9 @@ pub struct Project {
     /// Kerning pairs and classes.
     #[serde(default, skip_serializing_if = "crate::kerning::Kerning::is_empty")]
     pub kerning: crate::kerning::Kerning,
+    /// Axes, masters and instances.
+    #[serde(default, skip_serializing_if = "crate::designspace::Designspace::is_empty")]
+    pub design: crate::designspace::Designspace,
 }
 
 pub type SymbolId = String;

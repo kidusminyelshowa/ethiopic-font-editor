@@ -3134,3 +3134,92 @@ body.kerning .side-list {
   font-size: 11px;
   color: var(--ink-soft);
 }
+
+/* ---------- Masters and axes (ETH-23) ---------- */
+
+.master-btn {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.master-btn:hover {
+  border-color: var(--orange);
+}
+.ds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ds-head .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+.ds-card {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+.ds-card.active {
+  border-color: var(--orange-soft);
+}
+.ds-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ds-row > .field:has(.ds-tag) {
+  flex: 0 0 72px;
+}
+.ds-row > .pill {
+  flex: none;
+}
+.ds-row > .field {
+  flex: 1;
+  min-width: 0;
+}
+.ds-remove {
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+.ds-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.ds-problem {
+  color: var(--orange);
+}
+.ds-incompat {
+  max-height: 180px;
+  overflow: auto;
+  margin-bottom: 8px;
+}
+.ds-incompat-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 8px;
+  cursor: pointer;
+}
+.ds-actions {
+  margin-top: 4px;
+}
+.proof-axes {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.proof-axes[hidden] {
+  display: none;
+}

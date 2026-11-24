@@ -25,15 +25,19 @@
             <button class="menu-item" role="menuitem" data-file="save">Save<kbd>Ctrl S</kbd></button>
             <button class="menu-item" role="menuitem" data-file="saveas">Save as…<kbd>Ctrl Shift S</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="export">Export font…<kbd>Ctrl E</kbd></button>
+            <button class="menu-item" role="menuitem" data-menu="export-variable">Export variable font…</button>
+            <button class="menu-item" role="menuitem" data-menu="export-instances">Export instances…</button>
             <button class="menu-item" role="menuitem" data-menu="test-install">Test install</button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">Project</div>
             <button class="menu-item" role="menuitem" data-menu="charsets">Character sets…</button>
+            <button class="menu-item" role="menuitem" data-menu="masters">Masters and axes…</button>
             <button class="menu-item" role="menuitem" data-menu="shortcuts">Keyboard shortcuts…</button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">View</div>
             <button class="menu-item" role="menuitem" data-menu="view-grid">Fidel grid<kbd>1</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="view-editor">Glyph editor<kbd>2</kbd></button>
+            <button class="menu-item" role="menuitem" data-menu="view-kerning">Kerning<kbd>3</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="toggle-left">Show or hide sidebars<kbd>Ctrl \</kbd></button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">Appearance</div>
@@ -56,6 +60,7 @@
         <span id="project-name" class="project-name" data-tauri-drag-region>Untitled Ge'ez</span>
         <span class="title-sep" data-tauri-drag-region>/</span>
         <span id="project-meta" class="project-meta" data-tauri-drag-region>Regular · 1000 UPM</span>
+        <button id="master-btn" class="master-btn" aria-haspopup="menu" hidden></button>
       </div>
 
       <div class="titlebar-end" data-tauri-drag-region>
