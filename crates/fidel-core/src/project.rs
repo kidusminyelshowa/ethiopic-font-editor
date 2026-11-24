@@ -209,8 +209,6 @@ pub enum ModelError {
     NoSuchVariant(Order, usize),
     #[error("two component placements share the id {0}")]
     DuplicatePlacementId(u32),
-    #[error("points were added or removed; choose Draw it to change the outline itself")]
-    OutlineChanged,
 }
 
 /// A drawing the glyph editor can open: a base, an alteration, a symbol, or
@@ -370,9 +368,10 @@ impl Project {
             .collect())
     }
 
-    /// Save points moved on a generated fidel (from
-    /// [`Project::generated_outline`]) as nudges, so they survive changes to
-    /// the base and the marks. Adding or removing points is refused.
+    /// Save an edit to a generated fidel (from [`Project::generated_outline`]).
+    /// Moved points become nudges, so they survive changes to the base and
+    /// the marks. Adding or removing points or contours draws the fidel by
+    /// hand, with the edited outline as its drawing.
     pub fn set_generated_outline(
         &mut self,
         family: &str,
@@ -380,18 +379,18 @@ impl Project {
         contours: &[Contour],
     ) -> Result<(), ModelError> {
         let resolved = self.resolve(family, order)?;
-        if resolved.contours.len() != contours.len() {
-            return Err(ModelError::OutlineChanged);
+        let same_points = resolved.contours.len() == contours.len()
+            && resolved.contours.iter().zip(contours).all(|(rc, edited)| {
+                rc.contour.points.len() == edited.points.len()
+                    && rc.contour.points.iter().zip(&edited.points).all(|(a, b)| a.id == b.id)
+            });
+        if !same_points {
+            self.fidel_mut(family, order)?.state = FidelState::Detached { contours: contours.to_vec() };
+            return Ok(());
         }
         let mut moves = Vec::new();
         for (rc, edited) in resolved.contours.iter().zip(contours) {
-            if rc.contour.points.len() != edited.points.len() {
-                return Err(ModelError::OutlineChanged);
-            }
             for (a, b) in rc.contour.points.iter().zip(&edited.points) {
-                if a.id != b.id {
-                    return Err(ModelError::OutlineChanged);
-                }
                 let d = b.pos - a.pos;
                 if d.x.abs() > 1e-9 || d.y.abs() > 1e-9 {
                     let target =

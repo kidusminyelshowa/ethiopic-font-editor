@@ -321,7 +321,7 @@ fn forks_survive_save_and_open() {
 }
 
 #[test]
-fn moving_points_on_a_generated_fidel_adds_nudges_and_keeps_it_generated() {
+fn editing_a_generated_fidel_nudges_points_or_draws_it_by_hand() {
     let mut p = project();
     let mut outline = p.generated_outline("la", Order::Hamis).unwrap();
     let before = outline[0].points[0].pos;
@@ -331,13 +331,15 @@ fn moving_points_on_a_generated_fidel_adds_nudges_and_keeps_it_generated() {
     let after = p.generated_outline("la", Order::Hamis).unwrap();
     assert_eq!(after[0].points[0].pos, before + Vec2::new(12.0, -4.0));
 
-    // Adding a point is not a nudge: the fidel has to be drawn by hand for that.
+    // Adding a point (or a contour) draws the fidel by hand, keeping the edit.
     let mut grown = after.clone();
     let extra = grown[0].points[0].clone();
     grown[0].points.push(Point { id: 999, ..extra });
-    assert!(matches!(
-        p.set_drawing(&DrawingTarget::fidel("la", Order::Hamis), grown),
-        Err(ModelError::OutlineChanged)
-    ));
-    assert_eq!(p.generated_outline("la", Order::Hamis).unwrap(), after);
+    p.set_drawing(&DrawingTarget::fidel("la", Order::Hamis), grown.clone()).unwrap();
+    assert_eq!(p.fidel("la", Order::Hamis).unwrap().state, FidelState::Detached { contours: grown.clone() });
+
+    // Drawing on it now edits that outline directly.
+    grown.push(Contour::rect(77, None, Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0)));
+    p.set_drawing(&DrawingTarget::fidel("la", Order::Hamis), grown.clone()).unwrap();
+    assert_eq!(p.fidel("la", Order::Hamis).unwrap().state, FidelState::Detached { contours: grown });
 }

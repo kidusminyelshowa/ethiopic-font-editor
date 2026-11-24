@@ -147,6 +147,14 @@ export interface EditorHost {
 }
 
 const key = (ci: number, pi: number) => `${ci}:${pi}`;
+
+/** Same contours with the same points, wherever they are: only moves between `a` and `b`. */
+function samePoints(a: Contour[], b: Contour[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((c, i) => c.points.length === b[i].points.length && c.points.every((p, j) => p.id === b[i].points[j].id))
+  );
+}
 const parseKey = (k: string) => k.split(":").map(Number) as [number, number];
 
 /** Marks our own paths on the system clipboard, so a paste keeps them exact. */
@@ -2168,18 +2176,24 @@ export class GlyphEditor {
     const s = JSON.parse(this.history.now) as { c: Contour[]; w: number | null };
     const widthChanged = s.w !== null && s.w !== this.savedAdvance && target.kind !== "alteration";
     if (widthChanged) this.savedAdvance = s.w;
+    // On a generated fidel, adding or removing points draws it by hand.
+    const drawsByHand = !!this.drawing?.generated && !samePoints(this.drawing.contours, s.c);
     // Keep writes in order.
     this.saving = this.saving
       .then(() => api.setDrawing(target, s.c))
       .then(() => (widthChanged ? api.setAdvance(target, s.w!) : undefined))
-      .then(() => this.host.changed(target))
-      .catch((err) => {
-        this.host.toast(`Could not save the drawing: ${err}`, "error");
-        // A generated fidel only takes point moves: go back to what the core has.
-        if (this.drawing?.generated && this.target?.kind === target.kind && this.target.id === target.id) {
-          void this.open(target);
+      .then(() => {
+        if (drawsByHand && this.drawing && this.target?.kind === target.kind && this.target.id === target.id) {
+          this.drawing.generated = false;
+          this.drawing.handles = [];
+          this.drawing.subtitle = this.drawing.subtitle.replace(/ · .*$/, " · drawn by hand");
+          this.subtitle.textContent = this.drawing.subtitle;
+          this.render();
+          this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
-      });
+        this.host.changed(target);
+      })
+      .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
   }
 
   // ---------- Chrome: tool palette, bottom bar, keys, paste ----------
