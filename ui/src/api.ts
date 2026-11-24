@@ -366,6 +366,7 @@ export const api = {
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
   ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
+  testInstall: () => invoke<{ path: string; familyName: string; exported: number }>("test_install"),
   getOrganize: () => invoke<OrganizeView>("get_organize"),
   setMark: (key: string, mark: GlyphMark) => invoke<OrganizeView>("set_mark", { key, mark }),
   setSmartFilters: (filters: SmartFilter[]) => invoke<OrganizeView>("set_smart_filters", { filters }),

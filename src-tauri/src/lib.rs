@@ -3,6 +3,7 @@
 
 mod editor;
 mod grid;
+mod install;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
@@ -500,6 +501,22 @@ pub struct ExportSummary {
 /// The family name is the project's name.
 #[tauri::command]
 fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSummary> {
+    let options = export_options(&state);
+    let family_name = options.family_name.clone();
+    let font = fidel_export::export(&state.project(), &options).map_err(err)?;
+    let path = with_extension(PathBuf::from(path), "ttf");
+    std::fs::write(&path, &font.bytes).map_err(err)?;
+    Ok(ExportSummary {
+        path: path.to_string_lossy().into_owned(),
+        family_name,
+        exported: font.exported.len(),
+        skipped: font.skipped.len(),
+    })
+}
+
+/// Export settings from the font info, named after the project when the
+/// family name is empty.
+fn export_options(state: &State<'_, AppState>) -> fidel_export::ExportOptions {
     let (family_name, info) = {
         let project = state.project();
         let info = project.info.clone();
@@ -507,7 +524,7 @@ fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSumm
             if info.family_name.trim().is_empty() { state.info().name } else { info.family_name.clone() };
         (name, info)
     };
-    let mut options = fidel_export::ExportOptions::new(family_name.clone());
+    let mut options = fidel_export::ExportOptions::new(family_name);
     if !info.style_name.trim().is_empty() {
         options.style_name = info.style_name.clone();
     }
@@ -518,14 +535,30 @@ fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSumm
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    options
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallSummary {
+    path: String,
+    family_name: String,
+    exported: usize,
+}
+
+/// Install the current font for this user, replacing the last test copy.
+#[tauri::command]
+fn test_install(state: State<'_, AppState>) -> CmdResult<InstallSummary> {
+    let options = export_options(&state);
     let font = fidel_export::export(&state.project(), &options).map_err(err)?;
-    let path = with_extension(PathBuf::from(path), "ttf");
-    std::fs::write(&path, &font.bytes).map_err(err)?;
-    Ok(ExportSummary {
+    if font.exported.is_empty() {
+        return Err("Nothing is drawn yet.".into());
+    }
+    let path = install::install(&font.bytes, &options.family_name, options.timestamp)?;
+    Ok(InstallSummary {
         path: path.to_string_lossy().into_owned(),
-        family_name,
+        family_name: options.family_name,
         exported: font.exported.len(),
-        skipped: font.skipped.len(),
     })
 }
 
@@ -660,7 +693,8 @@ pub fn run() {
             rule_ends,
             get_organize,
             set_mark,
-            set_smart_filters
+            set_smart_filters,
+            test_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

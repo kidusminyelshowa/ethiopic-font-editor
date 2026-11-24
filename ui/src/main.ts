@@ -54,6 +54,7 @@ import { setupChrome } from "./chrome";
 import { keysFor, onShortcuts, showKeys } from "./shortcuts";
 import { applyFind, find, initFind, loadOrganize, markSection } from "./findBar";
 import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
+import { initProof, setProofFont } from "./proof";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -1659,6 +1660,27 @@ async function exportFont() {
 
 document.getElementById("export-font")!.addEventListener("click", () => void exportFont());
 
+async function testInstall() {
+  try {
+    const r = await api.testInstall();
+    toast(`Installed “${r.familyName}” with ${r.exported} fidel. Restart Word or the browser to see this version.`);
+  } catch (err) {
+    toast(`Could not install: ${err}`, "error");
+  }
+}
+
+initProof(document.querySelector<HTMLElement>(".grid-view .proof")!, {
+  rows: () =>
+    (state.grid?.rows ?? []).map((r) => {
+      const cp = (o: string) => r.cells.find((c) => c.order === o)?.codepoint ?? "";
+      const main = state.grid!.orders.filter((o) => !o.extra).map((o) => cp(o.order)).filter(Boolean);
+      const extras = state.grid!.orders.filter((o) => o.extra).map((o) => cp(o.order)).filter(Boolean);
+      return { base: cp("giiz"), orders: main, extras };
+    }),
+  symbols: () => (state.grid?.symbols ?? []).map((s) => s.codepoint),
+  testInstall: () => void testInstall(),
+});
+
 // ---------- Character sets ----------
 
 const charsetBtn = document.getElementById("charset-btn") as HTMLButtonElement;
@@ -1820,6 +1842,7 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
   b.addEventListener("click", () => {
     const m = b.dataset.menu;
     if (m === "export") void exportFont();
+    else if (m === "test-install") void testInstall();
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
     else if (m === "toggle-left") toggleSidebars();
@@ -1854,14 +1877,13 @@ let proofFace: FontFace | null = null;
 let proofSerial = 0;
 
 async function refreshProof() {
-  const input = document.getElementById("proof-input") as HTMLInputElement;
   const note = document.getElementById("proof-note")!;
   try {
     const bytes = await api.proofFont();
     if (proofFace) document.fonts.delete(proofFace);
     proofFace = null;
     if (!bytes.byteLength) {
-      input.style.fontFamily = "";
+      setProofFont(null);
       note.title = "System font until you draw";
       return;
     }
@@ -1869,7 +1891,7 @@ async function refreshProof() {
     await face.load();
     document.fonts.add(face);
     proofFace = face;
-    input.style.fontFamily = `"${face.family}", var(--ethiopic)`;
+    setProofFont(face.family);
     note.title = "Your drawings, the rest in the system font";
   } catch (err) {
     console.warn("Proof font failed", err);

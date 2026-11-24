@@ -2742,3 +2742,161 @@ body.editing .side-list {
   outline: none;
   border-color: var(--select-strong);
 }
+
+/* ---------- Proof panel (ETH-20) ---------- */
+
+.grid-view .proof {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 6px;
+  z-index: 5;
+}
+.proof-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 8px;
+}
+button.proof-label {
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+button.proof-label[aria-expanded="true"] {
+  background: var(--select-strong);
+}
+textarea.proof-input {
+  resize: none;
+  overflow: hidden;
+  white-space: nowrap;
+  height: 34px;
+  line-height: 34px;
+  padding: 0;
+}
+.proof-tools,
+.proof-waterfall {
+  display: none;
+}
+.grid-view .proof.open {
+  top: 38%;
+}
+.proof.open .proof-line {
+  padding-right: 0;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  order: 2;
+}
+.proof.open .proof-line .proof-label,
+.proof.open .proof-note {
+  display: none;
+}
+.proof.open textarea.proof-input {
+  height: auto;
+  overflow: auto;
+  white-space: pre-wrap;
+  padding: 12px 14px;
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
+}
+.proof.open .proof-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--panel-line);
+  order: 1;
+}
+
+.proof.open .proof-waterfall:not([hidden]) {
+  display: block;
+  order: 3;
+  max-height: 45%;
+  overflow: auto;
+  padding: 8px 14px;
+  border-top: 1px solid var(--panel-line);
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
+}
+.proof-fall-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.proof-fall-size {
+  flex: none;
+  width: 22px;
+  font: 10px var(--mono, ui-monospace, monospace);
+  color: var(--ink-faint);
+  text-decoration: none;
+  text-align: right;
+}
+.proof-fall-text {
+  line-height: 1.3;
+  text-decoration-line: var(--proof-deco, none);
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
+}
+.proof-select {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.proof-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+.proof-range input {
+  width: 84px;
+  accent-color: var(--select-strong);
+}
+.proof-value {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.proof-align {
+  margin: 0;
+}
+.proof-flag {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.proof-flag.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--ground);
+}
+.proof-tools .grow {
+  flex: 1;
+}
+.proof.inverted textarea.proof-input,
+.proof.inverted .proof-waterfall {
+  background: #151515;
+  color: #f4f1ea;
+  border-radius: 6px;
+}
+.proof.inverted .proof-fall-size {
+  color: rgba(244, 241, 234, 0.5);
+}
