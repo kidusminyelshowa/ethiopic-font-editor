@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::alteration::AlterationId;
-use crate::fidel::{FamilyId, FidelState, IrregularForm, Nudge, NudgeTarget, Source};
+use crate::fidel::{FamilyId, FidelState, Nudge, NudgeTarget, Source};
 use crate::order::Order;
 use crate::project::{ModelError, Project};
 
@@ -128,27 +128,18 @@ impl Project {
     ) -> Result<(), ModelError> {
         let rule = self.rule_alterations(family, order);
         let fidel = self.fidel_mut(family, order)?;
-        match &mut fidel.state {
-            FidelState::Irregular { form: IrregularForm::Recipe { alterations, .. }, .. } => {
-                for a in alterations.iter_mut().filter(|a| *a == from) {
-                    *a = to.to_string();
-                }
-            }
-            _ => {
-                // Which rule alteration currently resolves to `from`?
-                let key = fidel
-                    .alteration_overrides
-                    .iter()
-                    .find(|(_, v)| *v == from)
-                    .map(|(k, _)| k.clone())
-                    .or_else(|| rule.iter().find(|r| *r == from).cloned());
-                if let Some(key) = key {
-                    if key == to {
-                        fidel.alteration_overrides.remove(&key);
-                    } else {
-                        fidel.alteration_overrides.insert(key, to.to_string());
-                    }
-                }
+        // Which rule alteration currently resolves to `from`?
+        let key = fidel
+            .alteration_overrides
+            .iter()
+            .find(|(_, v)| *v == from)
+            .map(|(k, _)| k.clone())
+            .or_else(|| rule.iter().find(|r| *r == from).cloned());
+        if let Some(key) = key {
+            if key == to {
+                fidel.alteration_overrides.remove(&key);
+            } else {
+                fidel.alteration_overrides.insert(key, to.to_string());
             }
         }
         if let Some(nudges) = nudges_mut(&mut fidel.state) {
@@ -180,7 +171,6 @@ impl Project {
 fn nudges_mut(state: &mut FidelState) -> Option<&mut Vec<Nudge>> {
     match state {
         FidelState::Adjusted { nudges } => Some(nudges),
-        FidelState::Irregular { form: IrregularForm::Recipe { nudges, .. }, .. } => Some(nudges),
         _ => None,
     }
 }

@@ -58,10 +58,13 @@ pub enum Source {
     Base,
     /// A placed alteration.
     Alteration(AlterationId),
-    /// Drawn directly on this fidel (Irregular drawn, or Detached).
+    /// Drawn directly on this fidel (Detached).
     Own,
     /// A component placed on the base, by its placement id.
     Component(u32),
+    /// A component placed by rule on a stroke end (a leaf on a bar), as
+    /// `component@owner/contour:side`.
+    Leaf(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -83,35 +86,56 @@ pub struct Nudge {
 
 /// Every fidel has exactly one state, always visible as a badge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase", tag = "state")]
+#[serde(rename_all = "lowercase", tag = "state", from = "StateRepr")]
 pub enum FidelState {
-    /// Fully generated from base + order rule; updates automatically.
+    /// Fully generated from base + the family's form of its order; updates
+    /// automatically.
     Linked,
     /// Generated, plus local nudges that survive upstream changes.
     Adjusted { nudges: Vec<Nudge> },
-    /// The order rule does not apply. The fidel uses its own recipe (which may
-    /// still reuse the base and other alterations) or a free drawing.
-    Irregular {
-        form: IrregularForm,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        note: Option<String>,
-    },
-    /// Fully redrawn by hand; no longer receives updates.
+    /// Drawn by hand ("Draw it"): no longer generated. With no contours yet
+    /// it shows the generated form as a starting point.
     Detached { contours: Vec<Contour> },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// What older projects stored, including the retired Irregular state: its
+/// recipe form keeps its nudges, its drawn form becomes a drawing.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase", tag = "state")]
+enum StateRepr {
+    Linked,
+    Adjusted { nudges: Vec<Nudge> },
+    Irregular { form: OldIrregular },
+    Detached { contours: Vec<Contour> },
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "lowercase", tag = "form")]
-pub enum IrregularForm {
-    /// Base + its own list of alterations (e.g. ሙ keeps the መ bowls but has its
-    /// own 2nd-order recipe). Updates when the base or those alterations change.
+enum OldIrregular {
     Recipe {
-        alterations: Vec<AlterationId>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         nudges: Vec<Nudge>,
     },
-    /// Drawn freely; does not update.
-    Drawn { contours: Vec<Contour> },
+    Drawn {
+        contours: Vec<Contour>,
+    },
+}
+
+impl From<StateRepr> for FidelState {
+    fn from(r: StateRepr) -> Self {
+        match r {
+            StateRepr::Linked => FidelState::Linked,
+            StateRepr::Adjusted { nudges } => FidelState::Adjusted { nudges },
+            StateRepr::Irregular { form: OldIrregular::Recipe { nudges } } if nudges.is_empty() => {
+                FidelState::Linked
+            }
+            StateRepr::Irregular { form: OldIrregular::Recipe { nudges } } => FidelState::Adjusted { nudges },
+            StateRepr::Irregular { form: OldIrregular::Drawn { contours } } => {
+                FidelState::Detached { contours }
+            }
+            StateRepr::Detached { contours } => FidelState::Detached { contours },
+        }
+    }
 }
 
 /// The state without its data, for badges and filters.
@@ -120,7 +144,6 @@ pub enum IrregularForm {
 pub enum StateKind {
     Linked,
     Adjusted,
-    Irregular,
     Detached,
 }
 
@@ -130,7 +153,6 @@ pub enum StateKind {
 pub enum Badge {
     None,
     Dot,
-    Outlined,
     Solid,
 }
 
@@ -139,7 +161,6 @@ impl StateKind {
         match self {
             StateKind::Linked => Badge::None,
             StateKind::Adjusted => Badge::Dot,
-            StateKind::Irregular => Badge::Outlined,
             StateKind::Detached => Badge::Solid,
         }
     }
@@ -150,7 +171,6 @@ impl FidelState {
         match self {
             FidelState::Linked => StateKind::Linked,
             FidelState::Adjusted { .. } => StateKind::Adjusted,
-            FidelState::Irregular { .. } => StateKind::Irregular,
             FidelState::Detached { .. } => StateKind::Detached,
         }
     }
@@ -159,7 +179,6 @@ impl FidelState {
     pub fn nudges(&self) -> &[Nudge] {
         match self {
             FidelState::Adjusted { nudges } => nudges,
-            FidelState::Irregular { form: IrregularForm::Recipe { nudges, .. }, .. } => nudges,
             _ => &[],
         }
     }

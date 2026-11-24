@@ -189,6 +189,25 @@ fn set_rule_variant(
     Ok(detail)
 }
 
+/// Pick how a fidel's order is formed: one of the order's forms for the
+/// whole family (`variant`), or "Draw it" for this fidel (`None`).
+#[tauri::command]
+fn set_form(
+    state: State<'_, AppState>,
+    family: String,
+    order: Order,
+    variant: Option<usize>,
+) -> CmdResult<FidelDetail> {
+    let form = variant.map_or(fidel_core::Form::Draw, fidel_core::Form::Variant);
+    let detail = {
+        let mut project = state.project();
+        project.set_form(&family, order, form).map_err(err)?;
+        FidelDetail::from_project(&project, &family, order).map_err(err)?
+    };
+    state.mark_dirty();
+    Ok(detail)
+}
+
 /// Set the zone a deform lands on and how far it pulls.
 #[tauri::command]
 fn set_deform(
@@ -497,6 +516,7 @@ pub fn run() {
             detach_fidel,
             relink_fidel,
             set_rule_variant,
+            set_form,
             set_deform,
             set_zone,
             list_components,

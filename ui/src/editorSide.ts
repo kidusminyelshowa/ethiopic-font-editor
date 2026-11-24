@@ -214,6 +214,11 @@ export function issuesSection(ed: GlyphEditor): Node[] {
   }
   const fix = el("button", { class: "pill small", title: "Fixes direction, duplicate points, near-straight lines, kinks and missing extremes" }, "Fix");
   fix.disabled = !issues.some((i) => i.fixable);
+  if (ed.drawing?.generated) {
+    // A generated fidel takes its outline from the base: fix it there.
+    fix.disabled = true;
+    fix.title = "Generated from the base: fix the outline on the base";
+  }
   fix.addEventListener("click", () => ed.fixOutline());
   return [el("h3", { class: "section-label" }, "Outline check"), list, el("div", { class: "button-row" }, fix)];
 }

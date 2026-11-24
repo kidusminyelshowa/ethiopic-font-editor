@@ -94,7 +94,7 @@ fn outline(font: &FontRef, c: char) -> Bounds {
 fn exports_drawn_fidel_and_skips_the_rest() {
     let p = project();
     let font = export(&p, &ExportOptions::new("Test Geez")).unwrap();
-    // Hoy and Lawi: every order except the irregular ሩ, which is drawn by hand.
+    // Hoy and Lawi: every order except ሩ, which is drawn by hand.
     assert!(font.exported.contains(&'ሀ') && font.exported.contains(&'ሄ') && font.exported.contains(&'ሌ'));
     assert!(!font.exported.contains(&'ሩ'));
     assert!(font.skipped.contains(&'መ') && font.skipped.contains(&'ሩ'));

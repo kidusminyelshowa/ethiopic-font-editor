@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::alteration::{AlterationId, Verb};
 use crate::base::Base;
-use crate::fidel::{FamilyId, FidelState, IrregularForm, Nudge, NudgeTarget, Source, StateKind};
+use crate::fidel::{FamilyId, FidelState, Nudge, NudgeTarget, Source, StateKind};
 use crate::geometry::{bounds_of, Contour, Vec2};
 use crate::order::Order;
 use crate::project::Project;
@@ -41,7 +41,7 @@ pub enum Diagnostic {
     /// A nudge whose point no longer exists. It is kept, not dropped, so it
     /// comes back if the point does.
     OrphanedNudge { target: NudgeTarget },
-    /// Irregular drawn fidel with no contours yet.
+    /// Drawn by hand, but nothing drawn yet: the generated form is shown.
     NotYetDrawn,
     /// The fidel it is built on does not exist; built from the base instead.
     MissingBuiltOn { order: Order },
@@ -59,6 +59,22 @@ pub struct ResolvedFidel {
     pub advance_width: f64,
     pub contours: Vec<ResolvedContour>,
     pub diagnostics: Vec<Diagnostic>,
+    /// One handle per stroke a deform changed, to drag on the canvas.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<DeformHandle>,
+}
+
+/// Where a deform ends up on a fidel: the end of a short leg, the foot of a
+/// swept stem. Dragging it changes the family's offset for that deform.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DeformHandle {
+    pub alteration: AlterationId,
+    pub at: Vec2,
+    /// `true` when the handle moves up and down (a short leg's end),
+    /// `false` when it moves sideways (a crick, a sweep).
+    pub vertical: bool,
+    /// The family's offset for this deform now.
+    pub offset: Vec2,
 }
 
 impl ResolvedFidel {
@@ -92,6 +108,7 @@ fn resolve_in_chain(
         advance_width: base.map(|b| b.advance_width).unwrap_or(0.0),
         contours: Vec::new(),
         diagnostics: Vec::new(),
+        handles: Vec::new(),
     };
 
     let own = |contours: &[Contour]| {
@@ -99,17 +116,12 @@ fn resolve_in_chain(
     };
 
     match &fidel.state {
-        FidelState::Detached { contours } => {
+        FidelState::Detached { contours } if !contours.is_empty() => {
             out.contours = own(contours);
             return Some(out);
         }
-        FidelState::Irregular { form: IrregularForm::Drawn { contours }, .. } => {
-            if contours.is_empty() {
-                out.diagnostics.push(Diagnostic::NotYetDrawn);
-            }
-            out.contours = own(contours);
-            return Some(out);
-        }
+        // Drawn by hand but not drawn yet: show the generated form meanwhile.
+        FidelState::Detached { .. } => out.diagnostics.push(Diagnostic::NotYetDrawn),
         _ => {}
     }
 
@@ -148,7 +160,9 @@ fn resolve_in_chain(
             out.diagnostics.extend(p.diagnostics.into_iter().filter(|d| {
                 matches!(d, Diagnostic::BuiltOnCycle { .. } | Diagnostic::MissingBuiltOn { .. })
             }));
-            out.contours = p.contours;
+            // Leaves are placed again at the end, on the strokes as they
+            // end up here.
+            out.contours = p.contours.into_iter().filter(|c| !matches!(c.source, Source::Leaf(_))).collect();
             start_base = Base {
                 contours: out.contours.iter().map(|c| c.contour.clone()).collect(),
                 advance_width: p.advance_width,
@@ -185,7 +199,8 @@ fn resolve_in_chain(
         if alt.verb.is_additive() {
             continue;
         }
-        if apply_deform(&mut out, alt, family_base, &project.metrics) {
+        let offset = project.attach_offset(family_id, alt_id);
+        if apply_deform(&mut out, alt, family_base, &project.metrics, offset) {
             deformed = true;
         }
     }
@@ -230,6 +245,7 @@ fn resolve_in_chain(
         }
     }
 
+    place_leaves(project, &family.base, &mut out);
     apply_point_nudges(&mut out, nudges, &alterations);
 
     // Grow the advance so added parts keep the base's right sidebearing.
@@ -250,8 +266,9 @@ fn apply_deform(
     alt: &crate::alteration::Alteration,
     family_base: &Base,
     metrics: &crate::project::Metrics,
+    offset: Vec2,
 ) -> bool {
-    use crate::deform::{pick, warp_contour, warp_for};
+    use crate::deform::{pick_all, warp_contour, warp_for};
     if alt.verb == Verb::Bend {
         out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt.id.clone(), verb: alt.verb });
         return false;
@@ -293,22 +310,67 @@ fn apply_deform(
             });
         }
     }
-    let Some(i) = pick(&candidates, alt.placement.region) else { return false };
-    let b = candidates.iter().find(|(j, _)| *j == i).map(|(_, b)| *b).expect("picked from candidates");
-    let Some(warp) = warp_for(alt, b, metrics) else {
-        out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt.id.clone(), verb: alt.verb });
+    let picked = pick_all(&candidates, alt.placement.region, alt.all_but_one);
+    if picked.is_empty() {
         return false;
-    };
-    let stroke_id = out.contours[i].contour.id;
-    warp_contour(&mut out.contours[i].contour, &warp);
-    // Components sitting on that stroke move with it.
-    for r in family_base.components.iter().filter(|r| r.on == Some(stroke_id)) {
-        let d = warp.apply(r.at) - r.at;
-        for c in out.contours.iter_mut().filter(|c| c.source == Source::Component(r.id)) {
-            c.contour.translate(d);
+    }
+    for i in picked {
+        let Some(warp) = warp_for(alt, &out.contours[i].contour, metrics, offset) else {
+            out.diagnostics.push(Diagnostic::DeformNotApplied { alteration: alt.id.clone(), verb: alt.verb });
+            return false;
+        };
+        let stroke_id = out.contours[i].contour.id;
+        warp_contour(&mut out.contours[i].contour, &warp);
+        if let Some(at) = handle_point(&out.contours[i].contour, alt.verb, alt.placement.region) {
+            let vertical = matches!(alt.verb, Verb::Shorten | Verb::Lengthen);
+            out.handles.push(DeformHandle { alteration: alt.id.clone(), at, vertical, offset });
+        }
+        // Components sitting on that stroke move with it.
+        for r in family_base.components.iter().filter(|r| r.on == Some(stroke_id)) {
+            let d = warp.apply(r.at) - r.at;
+            for c in out.contours.iter_mut().filter(|c| c.source == Source::Component(r.id)) {
+                c.contour.translate(d);
+            }
         }
     }
     true
+}
+
+/// The end of a deformed stroke: the middle of its lowest points, or of its
+/// highest for a crick at the top.
+fn handle_point(c: &Contour, verb: Verb, region: crate::alteration::Region) -> Option<Vec2> {
+    use crate::alteration::Region;
+    let b = c.bounds()?;
+    let top = verb == Verb::Crick && matches!(region, Region::TopLeft | Region::TopRight);
+    let y = if top { b.max.y } else { b.min.y };
+    let xs: Vec<f64> =
+        c.points.iter().filter(|p| p.is_on_curve() && (p.pos.y - y).abs() < 1.0).map(|p| p.pos.x).collect();
+    let x = if xs.is_empty() { (b.min.x + b.max.x) / 2.0 } else { xs.iter().sum::<f64>() / xs.len() as f64 };
+    Some(Vec2::new(x, y))
+}
+
+/// Put every rule-placed component (leaves) on the ends of the strokes it
+/// lands on: the base's own strokes and the marks of the order.
+fn place_leaves(project: &Project, base_id: &str, out: &mut ResolvedFidel) {
+    let mut placed = Vec::new();
+    for comp in project.components.values().filter(|c| !c.lands_on.is_empty()) {
+        for rc in &out.contours {
+            let owner = match &rc.source {
+                Source::Base => base_id,
+                Source::Alteration(a) => a.as_str(),
+                _ => continue,
+            };
+            for (key, r) in comp.ends(owner, &rc.contour) {
+                let source = Source::Leaf(format!("{}@{key}", comp.id));
+                placed.extend(
+                    r.place(comp)
+                        .into_iter()
+                        .map(|contour| ResolvedContour { source: source.clone(), contour }),
+                );
+            }
+        }
+    }
+    out.contours.extend(placed);
 }
 
 fn placement_nudge(nudges: &[Nudge], alt: &str) -> Vec2 {

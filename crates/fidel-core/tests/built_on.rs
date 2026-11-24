@@ -104,8 +104,8 @@ fn nudges_on_the_child_sit_on_top_of_the_parent() {
 #[test]
 fn impacts_reach_fidel_built_on_the_changed_one() {
     let mut p = project();
-    // ሄ does not use the 4th-order deform itself, but ሃ does and ሄ is built on ሃ.
-    let shorten = Change::Alteration(defaults::SHORTEN_LEFT_LEG.into());
+    // ሄ does not use the 4th-order leg itself, but ሃ does and ሄ is built on ሃ.
+    let shorten = Change::Alteration(defaults::LEG_RIGHT.into());
     let hit: Vec<_> = p.impacts(&shorten).into_iter().filter(|i| i.family == "ha").map(|i| i.order).collect();
     assert_eq!(hit, vec![Order::Salis, Order::Rabi, Order::Hamis]);
 

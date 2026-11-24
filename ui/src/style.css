@@ -443,10 +443,6 @@ button {
   background: var(--green);
 }
 
-.swatch-irregular {
-  border: 2px solid var(--orange);
-}
-
 .swatch-detached {
   background: var(--ink-soft);
 }
@@ -571,10 +567,6 @@ button {
   outline-offset: 2px;
 }
 
-.cell.state-irregular {
-  background: var(--orange-soft);
-}
-
 .cell.state-adjusted {
   background: var(--green-soft);
 }
@@ -598,12 +590,11 @@ button {
 /* Dim cells that do not match the active filter. */
 .grid-scroll[data-filter="linked"] .cell:not([data-state="linked"]),
 .grid-scroll[data-filter="adjusted"] .cell:not([data-state="adjusted"]),
-.grid-scroll[data-filter="irregular"] .cell:not([data-state="irregular"]),
 .grid-scroll[data-filter="detached"] .cell:not([data-state="detached"]) {
   opacity: 0.18;
 }
 
-/* State badges: none / dot / outlined / solid, as in the brief. */
+/* State badges: none / dot / solid. */
 .badge {
   width: 8px;
   height: 8px;
@@ -625,10 +616,6 @@ button {
   width: 7px;
   height: 7px;
   background: var(--green);
-}
-
-.badge-outlined {
-  border: 2px solid var(--orange);
 }
 
 .badge-solid {
@@ -708,10 +695,6 @@ button {
   position: absolute;
   inset: 0;
   background: radial-gradient(120% 80% at 20% 0%, rgba(255, 255, 255, 0.55), transparent 60%);
-}
-
-.preview-irregular {
-  background: linear-gradient(150deg, #ebc1b9 0%, #d78472 60%, #c2442a 100%);
 }
 
 .preview-adjusted {

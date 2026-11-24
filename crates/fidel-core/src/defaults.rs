@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::alteration::{Alteration, Placement, Region, Verb};
 use crate::base::Base;
-use crate::ethiopic::{default_built_on, default_irregular_note, DEFAULT_RULE_VARIANTS, GEEZ_FAMILIES};
-use crate::fidel::{Family, Fidel, FidelState, IrregularForm};
+use crate::ethiopic::{default_built_on, default_form, Form, GEEZ_FAMILIES};
+use crate::fidel::{Family, Fidel, FidelState};
 use crate::geometry::Vec2;
 use crate::order::{Order, OrderRule};
 use crate::parts::Part;
@@ -15,11 +15,19 @@ use crate::project::{Metrics, Project, ZONE_CRICK, ZONE_SHORT_LEG, ZONE_STRETCH}
 pub const STROKE_MIDDLE_RIGHT: &str = "stroke.middle-right";
 pub const STROKE_BOTTOM_RIGHT: &str = "stroke.bottom-right";
 pub const SHORTEN_LEFT_LEG: &str = "shorten.left-leg";
+pub const SHORTEN_LEFT_LEGS: &str = "shorten.left-legs";
 pub const STRETCH_STEM: &str = "stretch.stem";
+pub const HEAD_STROKE: &str = "stroke.head-left";
+pub const LEG_RIGHT: &str = "stroke.leg-right";
+pub const RING_ON_BAR: &str = "loop.on-bar";
 pub const LOOP_BOTTOM_RIGHT: &str = "loop.bottom-right";
 pub const CRICK_FIRST_STROKE: &str = "crick.first-stroke";
+pub const TICK_ON_TOP: &str = "stroke.top-tick";
+pub const FOOT_FLICK: &str = "crick.foot";
+pub const LOOP_BOTTOM_LEFT: &str = "loop.bottom-left";
 pub const LOOP_TOP_RIGHT: &str = "loop.top-right";
 pub const SHORTEN_RIGHT_LEG: &str = "shorten.right-leg";
+pub const SHORTEN_RIGHT_LEGS: &str = "shorten.right-legs";
 pub const LABIAL_MARK: &str = "mark.labial";
 pub const OA_MARK: &str = "mark.oa";
 
@@ -33,6 +41,7 @@ fn alteration(id: &str, name: &str, verb: Verb, region: Region, parts: &[Part]) 
         forked_from: None,
         zone: None,
         amount: None,
+        all_but_one: false,
     }
 }
 
@@ -41,67 +50,41 @@ fn on_zone(mut a: Alteration, zone: &str) -> Alteration {
     a
 }
 
-/// Hornus's alterations, undrawn. The designer draws each additive one once.
+fn all_but_one(mut a: Alteration) -> Alteration {
+    a.all_but_one = true;
+    a
+}
+
+/// The alterations behind every order form, undrawn. The designer draws each
+/// additive one once; the deforms work on the base's own strokes.
 pub fn hornus_alterations() -> Vec<Alteration> {
     use Part::*;
     let legs = [Leg, Stem, Diagonal];
+    let shorten =
+        |id, name, region| on_zone(alteration(id, name, Verb::Shorten, region, &legs), ZONE_SHORT_LEG);
     vec![
-        alteration(
-            STROKE_MIDDLE_RIGHT,
-            "2nd-order stroke, middle right",
-            Verb::Stroke,
-            Region::MiddleRight,
-            &legs,
-        ),
-        alteration(
-            STROKE_BOTTOM_RIGHT,
-            "3rd-order stroke, bottom right",
-            Verb::Stroke,
-            Region::BottomRight,
-            &legs,
-        ),
+        alteration(STROKE_MIDDLE_RIGHT, "2nd-order stroke", Verb::Stroke, Region::MiddleRight, &legs),
+        alteration(STROKE_BOTTOM_RIGHT, "3rd-order stroke", Verb::Stroke, Region::BottomRight, &legs),
+        shorten(SHORTEN_LEFT_LEG, "Short left leg", Region::BottomLeft),
+        all_but_one(shorten(SHORTEN_LEFT_LEGS, "Short left and middle legs", Region::BottomLeft)),
         on_zone(
-            alteration(
-                SHORTEN_LEFT_LEG,
-                "4th-order shortened left leg",
-                Verb::Shorten,
-                Region::BottomLeft,
-                &[Leg],
-            ),
-            ZONE_SHORT_LEG,
-        ),
-        on_zone(
-            alteration(
-                STRETCH_STEM,
-                "4th-order stretched stem",
-                Verb::Stretch,
-                Region::BottomRight,
-                &[Stem, Leg],
-            ),
+            alteration(STRETCH_STEM, "Stem sweeps left", Verb::Stretch, Region::BottomLeft, &[Stem, Leg]),
             ZONE_STRETCH,
         ),
-        alteration(LOOP_BOTTOM_RIGHT, "5th-order loop, bottom right", Verb::Loop, Region::BottomRight, &legs),
+        alteration(HEAD_STROKE, "Head turns down", Verb::Stroke, Region::TopLeft, &[Branch, Stem, Leg]),
+        alteration(LEG_RIGHT, "Leg on the right", Verb::Stroke, Region::BottomRight, &[Bowl, Leg, Stem]),
+        alteration(RING_ON_BAR, "Ring on a short bar", Verb::Loop, Region::MiddleRight, &legs),
+        alteration(LOOP_BOTTOM_RIGHT, "5th-order ring", Verb::Loop, Region::BottomRight, &legs),
+        alteration(CRICK_FIRST_STROKE, "First stroke cricks", Verb::Crick, Region::TopLeft, &legs),
+        alteration(TICK_ON_TOP, "Tick on top", Verb::Stroke, Region::TopLeft, &[Stem, Leg, Branch]),
         on_zone(
-            alteration(CRICK_FIRST_STROKE, "6th-order crick", Verb::Crick, Region::BottomLeft, &legs),
+            alteration(FOOT_FLICK, "Foot flicks left", Verb::Crick, Region::BottomLeft, &legs),
             ZONE_CRICK,
         ),
-        alteration(
-            LOOP_TOP_RIGHT,
-            "7th-order loop, top right",
-            Verb::Loop,
-            Region::TopRight,
-            &[Stem, Leg, Arm],
-        ),
-        on_zone(
-            alteration(
-                SHORTEN_RIGHT_LEG,
-                "7th-order shortened right leg",
-                Verb::Shorten,
-                Region::BottomRight,
-                &[Leg],
-            ),
-            ZONE_SHORT_LEG,
-        ),
+        alteration(LOOP_BOTTOM_LEFT, "Ring at the foot", Verb::Loop, Region::BottomLeft, &legs),
+        alteration(LOOP_TOP_RIGHT, "Ring on top", Verb::Loop, Region::TopRight, &[Stem, Leg, Arm]),
+        shorten(SHORTEN_RIGHT_LEG, "Short right leg", Region::BottomRight),
+        all_but_one(shorten(SHORTEN_RIGHT_LEGS, "Short middle and right legs", Region::BottomRight)),
     ]
 }
 
@@ -120,7 +103,7 @@ pub fn extra_alterations() -> Vec<Alteration> {
 /// vowel mark of its own order where the parent does not carry it.
 pub fn extra_order_rules() -> Vec<OrderRule> {
     let one = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let rule = |order, ids: &[&str]| OrderRule { order, variants: vec![one(ids)] };
+    let rule = |order, ids: &[&str]| OrderRule { order, variants: vec![one(ids)], names: Vec::new() };
     vec![
         rule(Order::Wa, &[LABIAL_MARK]),
         rule(Order::Wi, &[LABIAL_MARK, STROKE_BOTTOM_RIGHT]),
@@ -131,20 +114,48 @@ pub fn extra_order_rules() -> Vec<OrderRule> {
     ]
 }
 
-/// Default order rules (Hornus 3.1): 2nd = middle-right stroke, 3rd =
-/// bottom-right stroke, 4th = shortened left leg or stretched stem, 5th =
-/// bottom-right loop, 6th = crick, 7th = top-right loop or shortened right leg.
+/// The forms of each order, from the reference fonts (Noto Sans and Serif
+/// Ethiopic, Abyssinica SIL). Each family picks one ([`DEFAULT_FORMS`]); the
+/// first is the default.
 pub fn hornus_order_rules() -> Vec<OrderRule> {
-    let one = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let rule = |order, variants: Vec<Vec<String>>| OrderRule { order, variants };
+    let rule = |order, forms: &[(&str, &[&str])]| OrderRule {
+        order,
+        variants: forms.iter().map(|(_, ids)| ids.iter().map(|s| s.to_string()).collect()).collect(),
+        names: forms.iter().map(|(n, _)| n.to_string()).collect(),
+    };
     vec![
-        rule(Order::Giiz, vec![vec![]]),
-        rule(Order::Kaib, vec![one(&[STROKE_MIDDLE_RIGHT])]),
-        rule(Order::Salis, vec![one(&[STROKE_BOTTOM_RIGHT])]),
-        rule(Order::Rabi, vec![one(&[SHORTEN_LEFT_LEG]), one(&[STRETCH_STEM])]),
-        rule(Order::Hamis, vec![one(&[LOOP_BOTTOM_RIGHT])]),
-        rule(Order::Sadis, vec![one(&[CRICK_FIRST_STROKE])]),
-        rule(Order::Sabi, vec![one(&[LOOP_TOP_RIGHT]), one(&[SHORTEN_RIGHT_LEG])]),
+        rule(Order::Giiz, &[("Base", &[])]),
+        rule(Order::Kaib, &[("Stroke at the right", &[STROKE_MIDDLE_RIGHT])]),
+        rule(Order::Salis, &[("Stroke at the foot", &[STROKE_BOTTOM_RIGHT])]),
+        rule(
+            Order::Rabi,
+            &[
+                ("Short left leg", &[SHORTEN_LEFT_LEG]),
+                ("Stem sweeps left", &[STRETCH_STEM]),
+                ("Short left and middle legs", &[SHORTEN_LEFT_LEGS]),
+                ("Head turns down", &[HEAD_STROKE]),
+                ("Leg on the right", &[LEG_RIGHT]),
+            ],
+        ),
+        rule(Order::Hamis, &[("Ring at the foot", &[LOOP_BOTTOM_RIGHT])]),
+        rule(
+            Order::Sadis,
+            &[
+                ("First stroke cricks", &[CRICK_FIRST_STROKE]),
+                ("Tick on top", &[TICK_ON_TOP]),
+                ("Foot flicks left", &[FOOT_FLICK]),
+                ("Ring at the foot", &[LOOP_BOTTOM_LEFT]),
+            ],
+        ),
+        rule(
+            Order::Sabi,
+            &[
+                ("Short right leg", &[SHORTEN_RIGHT_LEG]),
+                ("Ring on top", &[LOOP_TOP_RIGHT]),
+                ("Short middle and right legs", &[SHORTEN_RIGHT_LEGS]),
+                ("Ring on a short bar", &[RING_ON_BAR]),
+            ],
+        ),
     ]
 }
 
@@ -157,8 +168,7 @@ pub fn starter_project(metrics: Metrics) -> Project {
 }
 
 /// A new project with the 26 Ge'ez families, empty bases, Hornus's rules and
-/// the built-in irregular flags and "built on" links. Every fidel starts
-/// Linked unless pre-flagged.
+/// the forms each family uses and the "built on" links.
 pub fn geez_project(metrics: Metrics) -> Project {
     let mut p = Project { metrics, ..Default::default() };
     p.charsets.insert(crate::charset::CharSet::Geez);
@@ -175,11 +185,7 @@ pub fn geez_project(metrics: Metrics) -> Project {
             name: f.name.into(),
             base: f.id.into(),
             group: Some(f.group),
-            rule_variants: DEFAULT_RULE_VARIANTS
-                .iter()
-                .filter(|(id, _, _)| *id == f.id)
-                .map(|(_, o, v)| (*o, *v))
-                .collect(),
+            rule_variants: BTreeMap::new(),
             attach_offsets: BTreeMap::new(),
             fidels: BTreeMap::new(),
         };
@@ -197,18 +203,28 @@ pub fn geez_project(metrics: Metrics) -> Project {
                 },
             );
         }
+        apply_default_forms(&mut family);
         p.families.insert(f.id.into(), family);
-        for order in Order::ALL {
-            let c = f.codepoint(order);
-            if let Some(note) = default_irregular_note(c) {
-                let alterations = p.effective_alterations(f.id, order).unwrap_or_default();
-                p.families.get_mut(f.id).unwrap().fidels.get_mut(&order).unwrap().state =
-                    FidelState::Irregular {
-                        form: IrregularForm::Recipe { alterations, nudges: Vec::new() },
-                        note: Some(note.into()),
-                    };
+    }
+    p
+}
+
+/// Give a family the forms the reference fonts use (see
+/// [`crate::ethiopic::DEFAULT_FORMS`]): the variant of each order rule, and
+/// "Draw it" for the fidel no rule makes. Only Linked fidel are touched.
+pub fn apply_default_forms(family: &mut Family) {
+    let row = family.id.clone();
+    for (order, fidel) in family.fidels.iter_mut() {
+        match default_form(&row, *order) {
+            Form::Variant(0) => {}
+            Form::Variant(v) => {
+                family.rule_variants.entry(*order).or_insert(v);
+            }
+            Form::Draw => {
+                if fidel.state == FidelState::Linked {
+                    fidel.state = FidelState::Detached { contours: Vec::new() };
+                }
             }
         }
     }
-    p
 }

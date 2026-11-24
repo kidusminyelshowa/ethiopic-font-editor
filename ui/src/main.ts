@@ -51,20 +51,18 @@ import { setupChrome } from "./chrome";
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
 
-const STATES: StateKind[] = ["linked", "adjusted", "irregular", "detached"];
+const STATES: StateKind[] = ["linked", "adjusted", "detached"];
 
 const STATE_LABEL: Record<StateKind, string> = {
   linked: "Linked",
   adjusted: "Adjusted",
-  irregular: "Irregular",
-  detached: "Detached",
+  detached: "Drawn by hand",
 };
 
 const STATE_HELP: Record<StateKind, string> = {
   linked: "Generated from the base and the order rule. Updates automatically.",
   adjusted: "Generated, with local nudges that survive upstream changes.",
-  irregular: "The order rule does not apply. Uses its own recipe.",
-  detached: "Redrawn by hand. No longer receives updates.",
+  detached: "Drawn by hand. No longer follows the base or the order's form.",
 };
 
 const GROUP_LABEL: Record<string, string> = {
@@ -346,29 +344,22 @@ async function select(family: string, order: string) {
   state.selectedSymbol = null;
   markSelected();
   try {
-    renderInspector(await api.fidelDetail(family, order));
+    const d = await api.fidelDetail(family, order);
+    // A double-click may have opened the editor meanwhile: its panel wins.
+    if (state.view === "grid") renderInspector(d);
   } catch (err) {
     ui.inspector.replaceChildren(el("p", { class: "subtle" }, String(err)));
   }
 }
 
-/** Double-click: the 1st order opens its base; other orders open their first drawable alteration. */
+/** Double-click: the 1st order opens its base; every other order opens the fidel itself. */
 async function editFromCell(family: string, order: string) {
-  const detail0 = await api.fidelDetail(family, order);
-  if (detail0.drawnByHand) {
-    await openDrawing({ kind: "fidel", id: `${family}/${order}` });
+  if (order === "giiz") {
+    await openDrawing({ kind: "base", id: baseOf(family) });
     return;
   }
-  if (order !== "giiz") {
-    const detail = detail0;
-    const drawable = detail.recipe.find((s) => state.alterations.find((a) => a.id === s.id)?.drawable);
-    if (drawable) {
-      state.contextFamily = family;
-      await openDrawing({ kind: "alteration", id: drawable.id });
-      return;
-    }
-  }
-  await openDrawing({ kind: "base", id: baseOf(family) });
+  state.contextFamily = family;
+  await openDrawing({ kind: "fidel", id: `${family}/${order}` });
 }
 
 function cellOutline(family: string, order: string) {
@@ -456,7 +447,7 @@ function renderInspector(d: FidelDetail) {
       ...(d.note ? [el("p", { class: "state-help" }, d.note)] : []),
       el("h3", { class: "section-label" }, "Recipe"),
       recipe,
-      ...(d.variants.length > 1 ? [variantPicker(d)] : []),
+      ...(d.order !== "giiz" ? [formPicker(d)] : []),
       ...(d.builtOnChoices.length && d.order !== "giiz" ? [builtOnPicker(d)] : []),
       ...(d.builtOnBy.length
         ? [
@@ -473,21 +464,30 @@ function renderInspector(d: FidelDetail) {
   );
 }
 
-/** Which variant of the order rule this family uses. */
-function variantPicker(d: FidelDetail) {
-  const pick = el("select", { class: "built-on-select", "aria-label": "Rule" });
+/** How this family forms the order: one of the order's forms, or drawn by hand. */
+function formPicker(d: FidelDetail, onChange?: (d: FidelDetail) => void) {
+  const pick = el("select", { class: "built-on-select", "aria-label": "Form" });
   for (const v of d.variants) {
     const opt = el("option", { value: String(v.index) }, v.label || "Nothing added");
-    if (v.index === d.variant) opt.selected = true;
+    if (!d.drawnByHand && v.index === d.variant) opt.selected = true;
     pick.append(opt);
   }
+  const draw = el("option", { value: "draw" }, "Draw it");
+  if (d.drawnByHand) draw.selected = true;
+  pick.append(draw);
   pick.addEventListener("change", () => {
-    void changeFidel(() => api.setRuleVariant(d.family, d.order, Number(pick.value)), d);
+    const variant = pick.value === "draw" ? null : Number(pick.value);
+    const run = () => api.setForm(d.family, d.order, variant);
+    if (onChange) void run().then(onChange, (err) => toast(String(err), "error"));
+    else void changeFidel(run, d);
   });
   return el(
     "label",
-    { class: "built-on", title: `Used by every ${d.orderName} of ${d.familyName}` },
-    el("span", { class: "section-label" }, "Rule"),
+    {
+      class: "built-on",
+      title: `How ${d.familyName} forms its ${d.orderName}. "Draw it" keeps the generated outline as a starting point.`,
+    },
+    el("span", { class: "section-label" }, "Form"),
     pick,
   );
 }
@@ -960,6 +960,7 @@ const editor = new GlyphEditor(ui.editorView, {
   toast,
   renderSide: (ed) => renderEditorSide(ed),
   contextMenu: (ed, at) => showContextMenu(ed, at),
+  alterationName: (id) => state.alterations.find((a) => a.id === id)?.name ?? id,
 });
 onRefresh((ed) => renderEditorSide(ed));
 bindViewMenu(ui.editorView);
@@ -1025,6 +1026,48 @@ function scheduleSideRefresh() {
 
 let previewToken = 0;
 
+/** The editor's panel for a fidel: its form, and what it is built from. */
+function fidelFormSection(fd: FidelDetail, ed: GlyphEditor): Node[] {
+  const reopen = async () => {
+    if (ed.drawing) await editor.open(ed.drawing.target);
+    await refreshGrid();
+    void refreshProjectInfo();
+  };
+  const parts = el("div", { class: "button-row" });
+  if (fd.baseGlyph) {
+    const b = el(
+      "button",
+      { class: "pill small ghost", title: `Edit the base. Every ${fd.familyName} fidel follows it.` },
+      el("span", { lang: "gez" }, fd.baseGlyph),
+      " Base",
+    );
+    b.addEventListener("click", () => void openDrawing({ kind: "base", id: baseOf(fd.family) }));
+    parts.append(b);
+  }
+  for (const step of fd.recipe) {
+    if (!state.alterations.find((a) => a.id === step.id)?.drawable) continue;
+    const b = el(
+      "button",
+      {
+        class: `pill small ghost${step.drawn ? "" : " undrawn"}`,
+        title: `${step.drawn ? "Edit" : "Draw"} this mark. Every fidel that uses it follows.`,
+      },
+      step.name,
+    );
+    b.addEventListener("click", () => {
+      state.contextFamily = fd.family;
+      void openDrawing({ kind: "alteration", id: step.id });
+    });
+    parts.append(b);
+  }
+  return [
+    formPicker(fd, () => void reopen()),
+    ...(fd.drawnByHand || !parts.childElementCount
+      ? []
+      : [el("h3", { class: "section-label", title: "Edit a part to change every fidel that uses it" }, "Built from"), parts]),
+  ];
+}
+
 function renderEditorSide(ed: GlyphEditor) {
   if (state.view !== "editor" || !ed.drawing) return;
   renderSidebar();
@@ -1077,6 +1120,16 @@ function renderEditorSide(ed: GlyphEditor) {
   if (d.target.kind === "base") {
     const fam = baseRows().find((r) => r.base === d.target.id)?.family ?? d.target.id;
     sections.push(...orderRulesSection(fam, state.alterations, d.zones ?? [], () => scheduleSideRefresh()));
+  }
+
+  if (d.target.kind === "fidel") {
+    const [family, order] = d.target.id.split("/");
+    const formBox = el("div", { class: "side-box" });
+    sections.push(formBox);
+    void api.fidelDetail(family, order).then((fd) => {
+      if (token !== previewToken) return;
+      formBox.replaceChildren(...fidelFormSection(fd, ed));
+    });
   }
 
   // Selection.

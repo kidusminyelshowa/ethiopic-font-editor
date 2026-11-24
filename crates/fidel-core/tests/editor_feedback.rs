@@ -1,6 +1,7 @@
 //! Per-family attach points, language presets, and editing detached fidel.
 
 use fidel_core::defaults::{geez_project, starter_project, LOOP_BOTTOM_RIGHT};
+use fidel_core::FidelState;
 use fidel_core::*;
 
 fn project() -> Project {
@@ -43,10 +44,10 @@ fn an_attach_offset_moves_the_mark_on_one_family_only() {
 }
 
 #[test]
-fn ma_second_order_is_not_irregular() {
+fn ma_second_order_is_generated_and_ru_is_drawn() {
     let p = geez_project(Metrics::default());
     assert_eq!(p.fidel("ma", Order::Kaib).unwrap().state.kind(), StateKind::Linked);
-    assert_eq!(p.fidel("ra", Order::Kaib).unwrap().state.kind(), StateKind::Irregular);
+    assert_eq!(p.fidel("ra", Order::Kaib).unwrap().state, FidelState::Detached { contours: vec![] });
 }
 
 #[test]
@@ -73,7 +74,7 @@ fn a_detached_fidel_is_edited_by_component() {
     assert_eq!(target, DrawingTarget::Fidel("la/hamis".into()));
     let contours = p.drawing(&target).unwrap().to_vec();
     let names: Vec<_> = contours.iter().map(|c| c.name.clone().unwrap()).collect();
-    assert_eq!(names, ["Stem", "Leg", "5th-order loop, bottom right"]);
+    assert_eq!(names, ["Stem", "Leg", "5th-order ring"]);
 
     // Move only the loop.
     let mut edited = contours.clone();

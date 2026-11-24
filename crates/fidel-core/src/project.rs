@@ -9,9 +9,7 @@ use crate::alteration::{Alteration, AlterationId};
 use crate::base::{Base, BaseId};
 use crate::charset::{CharSet, Language};
 use crate::component::{Component, ComponentId};
-use crate::fidel::{
-    merge_nudge, Family, FamilyId, Fidel, FidelState, IrregularForm, NudgeTarget, Source, StateKind,
-};
+use crate::fidel::{merge_nudge, Family, FamilyId, Fidel, FidelState, NudgeTarget, Source, StateKind};
 use crate::geometry::{Contour, ContourProblem, Vec2};
 use crate::order::{Order, OrderRule};
 use crate::resolve::{self, ResolvedFidel};
@@ -211,10 +209,12 @@ pub enum ModelError {
     NoSuchVariant(Order, usize),
     #[error("two component placements share the id {0}")]
     DuplicatePlacementId(u32),
+    #[error("points were added or removed; choose Draw it to change the outline itself")]
+    OutlineChanged,
 }
 
 /// A drawing the glyph editor can open: a base, an alteration, a symbol, or
-/// a fidel drawn by hand (Detached or Irregular drawn), as `family/order`.
+/// a fidel drawn by hand, as `family/order`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "kind", content = "id")]
 pub enum DrawingTarget {
@@ -260,7 +260,7 @@ pub enum Effect {
     Regenerates,
     /// Regenerated, then its nudges are re-applied.
     RegeneratesKeepingNudges,
-    /// Uses the changed thing but will not update (Detached or drawn Irregular).
+    /// Uses the changed thing but will not update (drawn by hand).
     Untouched,
 }
 
@@ -300,8 +300,7 @@ impl Project {
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
                 match &self.fidel(&family, order)?.state {
-                    FidelState::Detached { contours }
-                    | FidelState::Irregular { form: IrregularForm::Drawn { contours }, .. } => Ok(contours),
+                    FidelState::Detached { contours } => Ok(contours),
                     _ => Err(ModelError::NotDrawnByHand(family, order)),
                 }
             }
@@ -317,6 +316,13 @@ impl Project {
                 return Err(ModelError::DuplicateContourId(c.id));
             }
             c.validate().map_err(|problem| ModelError::InvalidContour { contour: c.id, problem })?;
+        }
+        // A generated fidel edited in place: moved points become nudges.
+        if let DrawingTarget::Fidel(id) = target {
+            let (family, order) = DrawingTarget::fidel_ref(id)?;
+            if !matches!(self.fidel(&family, order)?.state, FidelState::Detached { .. }) {
+                return self.set_generated_outline(&family, order, &contours);
+            }
         }
         let slot = match target {
             DrawingTarget::Base(id) => {
@@ -342,13 +348,61 @@ impl Project {
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
                 match &mut self.fidel_mut(&family, order)?.state {
-                    FidelState::Detached { contours }
-                    | FidelState::Irregular { form: IrregularForm::Drawn { contours }, .. } => contours,
+                    FidelState::Detached { contours } => contours,
                     _ => return Err(ModelError::NotDrawnByHand(family, order)),
                 }
             }
         };
         *slot = contours;
+        Ok(())
+    }
+
+    /// A generated fidel's outline for editing in place: its resolved
+    /// contours, with contour ids replaced by their position so ids from the
+    /// base and from the marks don't clash.
+    pub fn generated_outline(&self, family: &str, order: Order) -> Result<Vec<Contour>, ModelError> {
+        Ok(self
+            .resolve(family, order)?
+            .contours
+            .into_iter()
+            .enumerate()
+            .map(|(i, rc)| Contour { id: i as u32, ..rc.contour })
+            .collect())
+    }
+
+    /// Save points moved on a generated fidel (from
+    /// [`Project::generated_outline`]) as nudges, so they survive changes to
+    /// the base and the marks. Adding or removing points is refused.
+    pub fn set_generated_outline(
+        &mut self,
+        family: &str,
+        order: Order,
+        contours: &[Contour],
+    ) -> Result<(), ModelError> {
+        let resolved = self.resolve(family, order)?;
+        if resolved.contours.len() != contours.len() {
+            return Err(ModelError::OutlineChanged);
+        }
+        let mut moves = Vec::new();
+        for (rc, edited) in resolved.contours.iter().zip(contours) {
+            if rc.contour.points.len() != edited.points.len() {
+                return Err(ModelError::OutlineChanged);
+            }
+            for (a, b) in rc.contour.points.iter().zip(&edited.points) {
+                if a.id != b.id {
+                    return Err(ModelError::OutlineChanged);
+                }
+                let d = b.pos - a.pos;
+                if d.x.abs() > 1e-9 || d.y.abs() > 1e-9 {
+                    let target =
+                        NudgeTarget::Point { source: rc.source.clone(), contour: rc.contour.id, point: a.id };
+                    moves.push((target, d));
+                }
+            }
+        }
+        for (target, d) in moves {
+            self.nudge(family, order, target, d)?;
+        }
         Ok(())
     }
 
@@ -370,13 +424,10 @@ impl Project {
             .ok_or_else(|| ModelError::UnknownFidel(family.into(), order))
     }
 
-    /// The alterations that build this fidel: its own recipe if Irregular,
-    /// otherwise the order rule (in the variant the family picked).
+    /// The alterations that build this fidel: the form its family picked
+    /// for this order, with the fidel's own copies swapped in.
     pub fn effective_alterations(&self, family: &str, order: Order) -> Result<Vec<AlterationId>, ModelError> {
         let fidel = self.fidel(family, order)?;
-        if let FidelState::Irregular { form: IrregularForm::Recipe { alterations, .. }, .. } = &fidel.state {
-            return Ok(alterations.clone());
-        }
         let mut alts = self.rule_alterations(family, order);
         for a in &mut alts {
             if let Some(own) = fidel.alteration_overrides.get(a) {
@@ -427,10 +478,7 @@ impl Project {
                     merge_nudge(nudges, target, delta);
                 }
             }
-            FidelState::Adjusted { nudges }
-            | FidelState::Irregular { form: IrregularForm::Recipe { nudges, .. }, .. } => {
-                merge_nudge(nudges, target, delta)
-            }
+            FidelState::Adjusted { nudges } => merge_nudge(nudges, target, delta),
             other => return Err(ModelError::NotGenerated(other.kind())),
         }
         Ok(())
@@ -460,6 +508,9 @@ impl Project {
                         Some(self.alterations.get(id).map_or_else(|| id.clone(), |a| a.name.clone()))
                     }
                     Source::Own => None,
+                    Source::Leaf(_) => Some(
+                        self.components.get(id_of_leaf(&rc.source)).map_or("Leaf".into(), |c| c.name.clone()),
+                    ),
                     Source::Component(_) => Some(
                         rc.contour.part.map_or("Component".to_string(), |p| capitalise(&format!("{p:?}"))),
                     ),
@@ -471,19 +522,14 @@ impl Project {
         Ok(())
     }
 
-    /// Flag a fidel as irregular. It keeps its current alterations and nudges
-    /// as its own recipe, so it still reuses the base and parts.
-    pub fn mark_irregular(
-        &mut self,
-        family: &str,
-        order: Order,
-        note: Option<String>,
-    ) -> Result<(), ModelError> {
-        let alterations = self.effective_alterations(family, order)?;
-        let fidel = self.fidel_mut(family, order)?;
-        let nudges = fidel.state.nudges().to_vec();
-        fidel.state = FidelState::Irregular { form: IrregularForm::Recipe { alterations, nudges }, note };
-        Ok(())
+    /// "Draw it": the fidel is drawn by hand from now on. It starts from a
+    /// copy of what it generates today, so nothing jumps.
+    pub fn draw_by_hand(&mut self, family: &str, order: Order) -> Result<(), ModelError> {
+        if matches!(self.fidel(family, order)?.state, FidelState::Detached { ref contours } if !contours.is_empty())
+        {
+            return Ok(());
+        }
+        self.detach(family, order)
     }
 
     /// The "what will change" preview: every fidel that uses `change`, and
@@ -496,8 +542,7 @@ impl Project {
                     continue;
                 }
                 let effect = match &fidel.state {
-                    FidelState::Detached { .. }
-                    | FidelState::Irregular { form: IrregularForm::Drawn { .. }, .. } => Effect::Untouched,
+                    FidelState::Detached { contours } if !contours.is_empty() => Effect::Untouched,
                     s if s.nudges().is_empty() => Effect::Regenerates,
                     _ => Effect::RegeneratesKeepingNudges,
                 };
@@ -618,6 +663,27 @@ impl Project {
         Ok(())
     }
 
+    /// Pick how this fidel's order is formed: one of the order's forms for
+    /// the whole family (and this fidel goes back to being generated), or
+    /// "Draw it" for this fidel alone.
+    pub fn set_form(
+        &mut self,
+        family: &str,
+        order: Order,
+        form: crate::ethiopic::Form,
+    ) -> Result<(), ModelError> {
+        match form {
+            crate::ethiopic::Form::Draw => self.draw_by_hand(family, order),
+            crate::ethiopic::Form::Variant(v) => {
+                self.set_rule_variant(family, order, v)?;
+                if matches!(self.fidel(family, order)?.state, FidelState::Detached { .. }) {
+                    self.relink(family, order)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Set where a deforming alteration lands and how far it pulls.
     pub fn set_deform(
         &mut self,
@@ -649,8 +715,7 @@ impl Project {
             id = format!("{stem}-{n}");
             n += 1;
         }
-        self.components
-            .insert(id.clone(), Component { id: id.clone(), name: name.into(), kind, contours: Vec::new() });
+        self.components.insert(id.clone(), Component::new(id.clone(), name, kind));
         id
     }
 
@@ -687,4 +752,12 @@ fn capitalise(s: &str) -> String {
     let lower = s.to_lowercase();
     let mut c = lower.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// The component id of a rule-placed component's source.
+fn id_of_leaf(source: &Source) -> &str {
+    match source {
+        Source::Leaf(key) => key.split('@').next().unwrap_or(""),
+        _ => "",
+    }
 }

@@ -14,36 +14,45 @@ use crate::project::Metrics;
 /// components sitting on it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Warp {
-    /// Move the foot (everything below `lo + foot`) up by `shift` and stretch
-    /// or squash the shaft between it and `hi` to match.
-    Vertical { lo: f64, foot: f64, hi: f64, shift: f64 },
-    /// Push everything below `z` sideways: nothing at `z`, ramping to `dx` at
-    /// `z - ramp` and constant below.
-    Sideways { z: f64, ramp: f64, dx: f64 },
+    /// Shorten (positive `shift`) or lengthen a stroke along its own axis.
+    /// `origin` is where the stroke joins the body and `dir` points from
+    /// there to the foot (unit length). The foot, everything past `len -
+    /// foot` along the axis, moves back by `shift`; the shaft between is
+    /// squashed or stretched along the axis only, so a slanted leg keeps
+    /// its slope and its thickness.
+    Along { origin: Vec2, dir: Vec2, len: f64, foot: f64, shift: f64 },
+    /// Push everything past `z` sideways by `dx` (and down by `dy`):
+    /// nothing at `z`, ramping in over `ramp`. `below` warps the part
+    /// below `z` (a foot that flicks or sweeps); otherwise the part above
+    /// it (a stroke that cricks at the top).
+    Sideways { z: f64, ramp: f64, dx: f64, dy: f64, below: bool },
 }
 
 impl Warp {
     pub fn apply(&self, p: Vec2) -> Vec2 {
         match *self {
-            Warp::Vertical { lo, foot, hi, shift } => {
-                let knee = lo + foot;
-                let y = if p.y <= knee || hi - knee < 1e-9 {
-                    p.y + shift
-                } else {
-                    let k = (hi - (knee + shift)) / (hi - knee);
-                    knee + shift + (p.y - knee) * k
-                };
-                Vec2::new(p.x, y)
-            }
-            Warp::Sideways { z, ramp, dx } => {
-                let t = if p.y >= z {
+            Warp::Along { origin, dir, len, foot, shift } => {
+                let s = (p.x - origin.x) * dir.x + (p.y - origin.y) * dir.y;
+                let knee = len - foot;
+                let ds = if s <= 0.0 {
                     0.0
-                } else if ramp <= 1e-9 || p.y <= z - ramp {
+                } else if s >= knee || knee <= 1e-9 {
+                    -shift
+                } else {
+                    -shift * s / knee
+                };
+                Vec2::new(p.x + dir.x * ds, p.y + dir.y * ds)
+            }
+            Warp::Sideways { z, ramp, dx, dy, below } => {
+                let past = if below { z - p.y } else { p.y - z };
+                let t = if past <= 0.0 {
+                    0.0
+                } else if ramp <= 1e-9 || past >= ramp {
                     1.0
                 } else {
-                    (z - p.y) / ramp
+                    past / ramp
                 };
-                Vec2::new(p.x + dx * t, p.y)
+                Vec2::new(p.x + dx * t, p.y - dy * t)
             }
         }
     }
@@ -52,8 +61,8 @@ impl Warp {
     /// it in the right place.
     fn creases(&self) -> Vec<f64> {
         match *self {
-            Warp::Vertical { .. } => Vec::new(),
-            Warp::Sideways { z, ramp, .. } => vec![z, z - ramp],
+            Warp::Along { .. } => Vec::new(),
+            Warp::Sideways { z, ramp, below, .. } => vec![z, if below { z - ramp } else { z + ramp }],
         }
     }
 }
@@ -64,6 +73,10 @@ fn side(region: Region) -> f64 {
         Region::TopLeft | Region::MiddleLeft | Region::BottomLeft => -1.0,
         _ => 1.0,
     }
+}
+
+fn is_top(region: Region) -> bool {
+    matches!(region, Region::TopLeft | Region::TopRight)
 }
 
 /// Pick the stroke to deform among `candidates` (index, bounds).
@@ -90,9 +103,57 @@ pub fn pick(candidates: &[(usize, Rect)], region: Region) -> Option<usize> {
     pool.into_iter().max_by(|(_, a), (_, b)| by_side(a, b)).map(|(i, _)| *i)
 }
 
-/// The warp an alteration makes on a stroke with bounds `b`. `None` for verbs
-/// that add parts, and for bend, which is not built yet.
-pub fn warp_for(alt: &Alteration, b: Rect, metrics: &Metrics) -> Option<Warp> {
+/// Pick every stroke a deform acts on. One stroke, or with `all_but_one`
+/// every stroke reaching the baseline except the one at the far side: the
+/// left and middle legs of ሓ, the middle and right legs of ሖ.
+pub fn pick_all(candidates: &[(usize, Rect)], region: Region, all_but_one: bool) -> Vec<usize> {
+    if !all_but_one {
+        return pick(candidates, region).into_iter().collect();
+    }
+    let lowest = candidates.iter().map(|(_, b)| b.min.y).fold(f64::INFINITY, f64::min);
+    let feet: Vec<&(usize, Rect)> =
+        candidates.iter().filter(|(_, b)| b.min.y <= lowest + EDGE_TOLERANCE).collect();
+    if feet.len() < 2 {
+        return pick(candidates, region).into_iter().collect();
+    }
+    // Keep the stroke at the opposite side.
+    let mirrored = match region {
+        Region::BottomLeft | Region::MiddleLeft | Region::TopLeft => Region::BottomRight,
+        _ => Region::BottomLeft,
+    };
+    let keep = pick(candidates, mirrored);
+    feet.into_iter().map(|(i, _)| *i).filter(|i| Some(*i) != keep).collect()
+}
+
+/// The axis of a stroke: where it joins the body (its top middle), and the
+/// unit direction to its foot (its bottom middle). For a stroke whose foot
+/// is off to one side, like ለ's legs, that is its slant.
+fn stroke_axis(c: &Contour, b: Rect) -> (Vec2, Vec2) {
+    let h = b.max.y - b.min.y;
+    let band = (h * 0.15).max(1.0);
+    let mean = |pts: Vec<Vec2>| {
+        let n = pts.len().max(1) as f64;
+        let (x, y) = pts.iter().fold((0.0, 0.0), |(x, y), p| (x + p.x, y + p.y));
+        Vec2::new(x / n, y / n)
+    };
+    let on: Vec<Vec2> = c.points.iter().filter(|p| p.is_on_curve()).map(|p| p.pos).collect();
+    let top = mean(on.iter().copied().filter(|p| p.y >= b.max.y - band).collect());
+    let bottom = mean(on.iter().copied().filter(|p| p.y <= b.min.y + band).collect());
+    let (dx, dy) = (bottom.x - top.x, bottom.y - top.y);
+    let n = dx.hypot(dy);
+    // Nearly flat or upside down: fall back to straight down.
+    if n < 1e-6 || dy > -0.3 * n {
+        return (Vec2::new((b.min.x + b.max.x) / 2.0, b.max.y), Vec2::new(0.0, -1.0));
+    }
+    (top, Vec2::new(dx / n, dy / n))
+}
+
+/// The warp an alteration makes on `stroke`. `offset` is the family's own
+/// adjustment of this deform: it moves where a short leg ends (y) and how
+/// far a crick or sweep throws (x). `None` for verbs that add parts, and
+/// for bend, which is not built yet.
+pub fn warp_for(alt: &Alteration, stroke: &Contour, metrics: &Metrics, offset: Vec2) -> Option<Warp> {
+    let b = stroke.bounds()?;
     let (lo, hi) = (b.min.y, b.max.y);
     let height = hi - lo;
     if height <= 1.0 {
@@ -101,27 +162,46 @@ pub fn warp_for(alt: &Alteration, b: Rect, metrics: &Metrics) -> Option<Warp> {
     let width = (b.max.x - b.min.x).max(1.0);
     let pa = metrics.pa_height().max(1.0);
     let zone = alt.zone.as_deref().and_then(|z| metrics.zone_y(z));
-    let foot = width.min(height / 3.0);
     match alt.verb {
         Verb::Shorten | Verb::Lengthen => {
-            let target = match alt.verb {
-                Verb::Shorten => zone.unwrap_or(lo + height * 0.4),
-                _ => lo - alt.amount.unwrap_or(pa * 0.1),
+            let (origin, dir) = stroke_axis(stroke, b);
+            let along = |p: Vec2| (p.x - origin.x) * dir.x + (p.y - origin.y) * dir.y;
+            let len = stroke.points.iter().map(|p| along(p.pos)).fold(0.0, f64::max);
+            // The stroke's thickness across its axis.
+            let across = |p: Vec2| (p.x - origin.x) * -dir.y + (p.y - origin.y) * dir.x;
+            let (amin, amax) = stroke
+                .points
+                .iter()
+                .map(|p| across(p.pos))
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+            let foot = (amax - amin).min(len / 3.0).max(1.0);
+            // Rising by `rise` means moving back along the axis by rise / -dir.y.
+            let shift = match alt.verb {
+                Verb::Shorten => {
+                    let target = zone.unwrap_or(lo + height * 0.4) + offset.y;
+                    // Never shorter than the foot plus as much again of shaft.
+                    let rise = (target - lo).min(height - 2.0 * foot * -dir.y).max(0.0);
+                    rise / -dir.y
+                }
+                _ => -(alt.amount.unwrap_or(pa * 0.1) + offset.y) / -dir.y,
             };
-            // Never shorter than the foot plus as much again of shaft.
-            let target = target.min(hi - 2.0 * foot);
-            Some(Warp::Vertical { lo, foot, hi, shift: target - lo })
+            Some(Warp::Along { origin, dir, len, foot, shift })
         }
         Verb::Crick => {
-            let z = zone.unwrap_or(lo + height * 0.3).clamp(lo + 1.0, hi - 1.0);
-            let ramp = width.min(z - lo);
-            let dx = side(alt.placement.region) * alt.amount.unwrap_or(width * 0.8);
-            Some(Warp::Sideways { z, ramp, dx })
+            let top = is_top(alt.placement.region);
+            let default = if top { lo + height * 0.75 } else { lo + height * 0.3 };
+            let z = zone.map(|z| if top { hi - (z - lo) } else { z }).unwrap_or(default);
+            let z = z.clamp(lo + 1.0, hi - 1.0);
+            let ramp = if top { width.min(hi - z) } else { width.min(z - lo) };
+            let dx = side(alt.placement.region) * alt.amount.unwrap_or(width * 0.8) + offset.x;
+            Some(Warp::Sideways { z, ramp, dx, dy: 0.0, below: !top })
         }
         Verb::Stretch => {
-            let z = zone.unwrap_or(lo + height * 0.45).clamp(lo + 1.0, hi - 1.0);
-            let dx = side(alt.placement.region) * alt.amount.unwrap_or(pa * 0.12);
-            Some(Warp::Sideways { z, ramp: z - lo, dx })
+            // The stem's foot sweeps out and down below the baseline (ቃ ታ ፓ).
+            let z = (zone.unwrap_or(lo + height * 0.45) + offset.y).clamp(lo + 1.0, hi - 1.0);
+            let dx = side(alt.placement.region) * alt.amount.unwrap_or(pa * 0.12) + offset.x;
+            let dy = if side(alt.placement.region) < 0.0 { pa * 0.1 } else { 0.0 };
+            Some(Warp::Sideways { z, ramp: z - lo, dx, dy, below: true })
         }
         Verb::Bend | Verb::Stroke | Verb::Loop | Verb::Cap | Verb::Shoe => None,
     }
@@ -257,6 +337,7 @@ mod tests {
             forked_from: None,
             zone: zone.map(String::from),
             amount: None,
+            all_but_one: false,
         }
     }
 
@@ -268,13 +349,52 @@ mod tests {
     fn shorten_ends_the_leg_on_its_zone() {
         let m = Metrics::default();
         let mut c = leg();
-        let w =
-            warp_for(&alt(Verb::Shorten, Region::BottomRight, Some("short-leg")), c.bounds().unwrap(), &m);
+        let w = warp_for(&alt(Verb::Shorten, Region::BottomRight, Some("short-leg")), &c, &m, Vec2::ZERO);
         warp_contour(&mut c, &w.unwrap());
         let b = c.bounds().unwrap();
         assert!((b.min.y - 280.0).abs() < 1e-9, "{b:?}");
         assert_eq!(b.max.y, 700.0);
         assert_eq!(c.validate(), Ok(()));
+        // The family's own offset moves the end.
+        let mut c = leg();
+        let w = warp_for(
+            &alt(Verb::Shorten, Region::BottomRight, Some("short-leg")),
+            &c,
+            &m,
+            Vec2::new(0.0, 50.0),
+        );
+        warp_contour(&mut c, &w.unwrap());
+        assert!((c.bounds().unwrap().min.y - 330.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_slanted_leg_keeps_its_slope() {
+        // ለ's left leg: from the apex at (300, 700) down to the foot at (0, 0).
+        let mut c = Contour::new(
+            0,
+            Some(Part::Leg),
+            vec![
+                Point::line(0, 260.0, 700.0),
+                Point::line(1, 340.0, 700.0),
+                Point::line(2, 80.0, 0.0),
+                Point::line(3, 0.0, 0.0),
+            ],
+        );
+        let slope = |c: &Contour| {
+            let (a, b) = (c.points[0].pos, c.points[3].pos);
+            (a.x - b.x) / (a.y - b.y)
+        };
+        let before = slope(&c);
+        let m = Metrics::default();
+        let w =
+            warp_for(&alt(Verb::Shorten, Region::BottomLeft, Some("short-leg")), &c, &m, Vec2::ZERO).unwrap();
+        warp_contour(&mut c, &w);
+        assert!((c.bounds().unwrap().min.y - 280.0).abs() < 1e-6, "{:?}", c.bounds());
+        assert!((slope(&c) - before).abs() < 1e-9);
+        // The foot moved up the leg, so it moved right too.
+        assert!(c.points[3].pos.x > 100.0);
+        // Thickness across the bottom is unchanged.
+        assert!(((c.points[2].pos.x - c.points[3].pos.x) - 80.0).abs() < 1e-9);
     }
 
     #[test]
@@ -294,20 +414,25 @@ mod tests {
             ],
         );
         let before: Vec<Vec2> = c.points[2..6].iter().map(|p| p.pos).collect();
-        let w = Warp::Vertical { lo: 0.0, foot: 60.0, hi: 700.0, shift: 200.0 };
+        let w = Warp::Along {
+            origin: Vec2::new(430.0, 700.0),
+            dir: Vec2::new(0.0, -1.0),
+            len: 700.0,
+            foot: 60.0,
+            shift: 200.0,
+        };
         warp_contour(&mut c, &w);
         for (p, q) in c.points[2..6].iter().zip(before) {
-            assert_eq!(p.pos, Vec2::new(q.x, q.y + 200.0));
+            assert!((p.pos.y - (q.y + 200.0)).abs() < 1e-9 && (p.pos.x - q.x).abs() < 1e-9);
         }
         assert_eq!(c.points[0].pos.y, 700.0);
     }
 
     #[test]
-    fn crick_kinks_the_foot_left_at_its_zone() {
+    fn foot_flick_kinks_the_foot_left_at_its_zone() {
         let m = Metrics::default();
         let mut c = leg();
-        let w =
-            warp_for(&alt(Verb::Crick, Region::BottomLeft, Some("crick")), c.bounds().unwrap(), &m).unwrap();
+        let w = warp_for(&alt(Verb::Crick, Region::BottomLeft, Some("crick")), &c, &m, Vec2::ZERO).unwrap();
         warp_contour(&mut c, &w);
         assert_eq!(c.validate(), Ok(()));
         // The rectangle gained two points on each side: at the zone and at
@@ -325,15 +450,28 @@ mod tests {
     }
 
     #[test]
-    fn stretch_leans_the_stroke_out() {
+    fn crick_at_the_top_bends_the_head_left() {
         let m = Metrics::default();
         let mut c = leg();
-        let w = warp_for(&alt(Verb::Stretch, Region::BottomRight, Some("stretch")), c.bounds().unwrap(), &m)
-            .unwrap();
+        let w = warp_for(&alt(Verb::Crick, Region::TopLeft, None), &c, &m, Vec2::ZERO).unwrap();
         warp_contour(&mut c, &w);
         let b = c.bounds().unwrap();
-        assert!((b.max.x - (460.0 + 84.0)).abs() < 1e-9, "{b:?}");
-        assert_eq!(b.min.y, 0.0);
+        assert!(b.min.x < 400.0);
+        // The foot stays where it was.
+        let foot: Vec<f64> = c.points.iter().filter(|p| p.pos.y == 0.0).map(|p| p.pos.x).collect();
+        assert!(foot.iter().all(|x| *x == 400.0 || *x == 460.0));
+    }
+
+    #[test]
+    fn stem_sweeps_left_under_the_baseline() {
+        let m = Metrics::default();
+        let mut c = leg();
+        let w =
+            warp_for(&alt(Verb::Stretch, Region::BottomLeft, Some("stretch")), &c, &m, Vec2::ZERO).unwrap();
+        warp_contour(&mut c, &w);
+        let b = c.bounds().unwrap();
+        assert!((b.min.x - (400.0 - 84.0)).abs() < 1e-9, "{b:?}");
+        assert!((b.min.y + 70.0).abs() < 1e-9, "{b:?}");
     }
 
     #[test]
@@ -367,5 +505,10 @@ mod tests {
         assert_eq!(pick(&c, Region::BottomLeft), Some(0));
         assert_eq!(pick(&c, Region::BottomRight), Some(1));
         assert_eq!(pick(&c, Region::TopRight), Some(2));
+        // ሓ: every leg on the baseline but the right one; ሖ: but the left one.
+        let three = [(0, r(50.0, 0.0, 110.0)), (1, r(250.0, 0.0, 310.0)), (2, r(400.0, 0.0, 460.0))];
+        assert_eq!(pick_all(&three, Region::BottomLeft, true), vec![0, 1]);
+        assert_eq!(pick_all(&three, Region::BottomRight, true), vec![1, 2]);
+        assert_eq!(pick_all(&three, Region::BottomRight, false), vec![2]);
     }
 }
