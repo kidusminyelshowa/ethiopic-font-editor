@@ -15,7 +15,9 @@ import {
   type ImpactView,
   type Part,
   type PathOp,
+  type RuleEnd,
   type StrokeJoin,
+  type Tweak,
 } from "./api";
 import {
   clone,
@@ -366,6 +368,8 @@ export class GlyphEditor {
       this.measureLine = null;
       this.fit();
     }
+    if (!sameDrawing) this.ruleSel = null;
+    void this.loadRuleEnds();
     if (!sameDrawing) {
       void this.loadGuides();
       void this.loadReach();
@@ -1062,6 +1066,10 @@ export class GlyphEditor {
 
   /** The placement selected on the canvas or in the inspector. */
   placementSel: number | null = null;
+  /** Components placed by rule on this base (leaves, caps, corners). */
+  ruleEnds: RuleEnd[] = [];
+  /** The selected rule placement, as `component@key`. */
+  ruleSel: string | null = null;
   private pendingPlacement: { id: number; d: Vec2 } | null = null;
 
   get placements(): ComponentRef[] {
@@ -1074,6 +1082,49 @@ export class GlyphEditor {
   }
 
   /** Write the base's component placements and reload their outlines. */
+  /** Tell the app the open drawing changed in the core (outside the canvas). */
+  changedInCore(): void {
+    if (this.target) this.host.changed(this.target);
+  }
+
+  notify(message: string, tone?: "error" | "info"): void {
+    this.host.toast(message, tone);
+  }
+
+  /** Fetch where components land by rule on this base. */
+  async loadRuleEnds(): Promise<void> {
+    const target = this.target;
+    if (target?.kind !== "base") {
+      this.ruleEnds = [];
+      return;
+    }
+    try {
+      const ends = await api.ruleEnds(target.id);
+      if (this.target?.kind !== "base" || this.target.id !== target.id) return;
+      const before = JSON.stringify(this.ruleEnds);
+      this.ruleEnds = ends;
+      if (this.ruleSel && !ends.some((e) => `${e.component}@${e.key}` === this.ruleSel)) this.ruleSel = null;
+      if (JSON.stringify(ends) !== before) {
+        this.render();
+        this.host.renderSide(this);
+      }
+    } catch {
+      this.ruleEnds = [];
+    }
+  }
+
+  /** Switch one rule placement on or off, or adjust it. */
+  async setRuleEnd(end: RuleEnd, on: boolean, tweak: Tweak): Promise<void> {
+    const target = this.target;
+    try {
+      await api.setComponentEnd(end.component, end.key, on, tweak);
+      await this.loadRuleEnds();
+      if (target) this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not change the component: ${err}`, "error");
+    }
+  }
+
   async setPlacements(refs: ComponentRef[]): Promise<void> {
     const target = this.target;
     if (target?.kind !== "base" || !this.drawing) return;
@@ -1450,6 +1501,19 @@ export class GlyphEditor {
         this.changedSelection();
         return;
       }
+    }
+
+    const rk = (e.target as Element | null)?.closest?.("[data-rk]")?.getAttribute("data-rk");
+    if (rk != null && !direct) {
+      this.ruleSel = rk;
+      this.placementSel = null;
+      this.selection.clear();
+      this.changedSelection();
+      return;
+    }
+    if (this.ruleSel !== null) {
+      this.ruleSel = null;
+      this.host.renderSide(this);
     }
 
     const pid = (e.target as Element | null)?.closest?.("[data-pid]")?.getAttribute("data-pid");
@@ -3134,6 +3198,7 @@ export class GlyphEditor {
           this.render();
           this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
+        if (target.kind === "base") void this.loadRuleEnds();
         this.host.changed(target);
       })
       .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
@@ -3616,6 +3681,13 @@ export class GlyphEditor {
         `<circle class="deform-handle${h.vertical ? "" : " sideways"}${d ? " active" : ""}" data-hid="${i}" cx="${sx(at.x)}" cy="${sy(at.y)}" r="6"><title>${esc(tip)}</title></circle>`,
       );
     });
+
+    // Components placed by rule: they follow the strokes they sit on.
+    for (const r of this.ruleEnds) {
+      const k = `${r.component}@${r.key}`;
+      const cls = `rule-end${r.on ? "" : " off"}${this.ruleSel === k ? " selected" : ""}`;
+      parts.push(`<path class="${cls}" data-rk="${esc(k)}" transform="${xf}" d="${r.d}"><title>${esc(`${r.name}: ${r.label}`)}</title></path>`);
+    }
 
     // Components placed on a base: drawn once elsewhere, moved here as a whole.
     for (const pc of this.drawing.components ?? []) {

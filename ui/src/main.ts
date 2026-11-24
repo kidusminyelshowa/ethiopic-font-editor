@@ -31,7 +31,7 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
-import { componentsSection, orderRulesSection } from "./orderSide";
+import { componentRuleSection, componentsSection, orderRulesSection } from "./orderSide";
 import {
   bindViewMenu,
   historyRows,
@@ -1376,6 +1376,11 @@ function renderEditorSide(ed: GlyphEditor) {
   // Metrics: sidebearings and width, for bases and symbols.
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
   if (d.target.kind === "base") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  if (d.target.kind === "component") {
+    const id = d.target.id;
+    const kind = state.components.find((c) => c.id === id)?.kind;
+    if (kind) sections.unshift(...componentRuleSection(ed, d, kind));
+  }
   sections.push(...issuesSection(ed));
   sections.push(...backgroundSection(ed));
 

@@ -2,7 +2,7 @@
 //! Hornus's leafs are the Ethiopic counterpart of serifs; drawing them once
 //! keeps every terminal in the font the same.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,62 @@ pub enum ComponentKind {
     Cap,
     /// An inner or outer corner.
     Corner,
+}
+
+/// Which corners a corner component lands on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CornerSide {
+    /// Corners that point out of the ink.
+    #[default]
+    Outer,
+    /// Corners that point into the ink (where two strokes meet).
+    Inner,
+    Both,
+}
+
+impl CornerSide {
+    fn is_default(&self) -> bool {
+        *self == CornerSide::Outer
+    }
+}
+
+/// An adjustment to one rule placement: nudged, scaled or flipped.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tweak {
+    #[serde(default)]
+    pub dx: f64,
+    #[serde(default)]
+    pub dy: f64,
+    #[serde(default = "one")]
+    pub scale: f64,
+    #[serde(default)]
+    pub flip: bool,
+}
+
+impl Default for Tweak {
+    fn default() -> Self {
+        Tweak { dx: 0.0, dy: 0.0, scale: 1.0, flip: false }
+    }
+}
+
+impl Tweak {
+    pub fn is_identity(&self) -> bool {
+        *self == Tweak::default()
+    }
+}
+
+/// One place a component lands by rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct End {
+    /// `owner/contour:side`, the key `off` and `tweaks` use.
+    pub key: String,
+    /// "Right end", "Bottom", "Outer corner".
+    pub label: String,
+    /// The placement, with its tweak applied.
+    pub placement: ComponentRef,
+    /// False when switched off.
+    pub on: bool,
 }
 
 /// A shape drawn once, with the point where it joins the letter at the
@@ -40,6 +96,12 @@ pub struct Component {
     /// `alteration/contour:side` (side `l` or `r`).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub off: BTreeSet<String>,
+    /// For a corner component: which corners it lands on.
+    #[serde(default, skip_serializing_if = "CornerSide::is_default")]
+    pub corners: CornerSide,
+    /// Per-placement adjustments, by the same keys as `off`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tweaks: BTreeMap<String, Tweak>,
 }
 
 impl Component {
@@ -54,29 +116,149 @@ impl Component {
                 _ => Vec::new(),
             },
             off: BTreeSet::new(),
+            corners: CornerSide::Outer,
+            tweaks: BTreeMap::new(),
         }
     }
 
-    /// Where this component lands by rule on a stroke `owner/contour`: its
-    /// right end, then its left end mirrored. Each comes with its key.
-    pub fn ends(&self, owner: &str, contour: &Contour) -> Vec<(String, ComponentRef)> {
+    /// Where this component lands by rule on a stroke `owner/contour`, the
+    /// ends switched off included.
+    ///
+    /// - A leaf lands on the right end of the stroke with its top corner at
+    ///   the origin, and on the left end mirrored.
+    /// - A cap lands on the bottom of the stroke, its origin at the middle.
+    /// - A corner lands on each sharp corner, drawn for a corner whose edges
+    ///   run right and up from the origin and turned to fit.
+    pub fn all_ends(&self, owner: &str, contour: &Contour) -> Vec<End> {
         if self.contours.is_empty() || !contour.part.is_some_and(|p| self.lands_on.contains(&p)) {
             return Vec::new();
         }
         let Some(b) = contour.bounds() else { return Vec::new() };
-        let mut out = Vec::new();
-        for (side, x, flip) in [("r", b.max.x, false), ("l", b.min.x, true)] {
-            let key = format!("{owner}/{}:{side}", contour.id);
-            if self.off.contains(&key) {
-                continue;
-            }
-            let mut r = ComponentRef::new(0, self.id.clone(), Vec2::new(x, b.max.y));
-            r.flip_x = flip;
+        let mut raw: Vec<(String, String, ComponentRef)> = Vec::new();
+        let at = |x: f64, y: f64| {
+            let mut r = ComponentRef::new(0, self.id.clone(), Vec2::new(x, y));
             r.on = Some(contour.id);
-            out.push((key, r));
+            r
+        };
+        match self.kind {
+            ComponentKind::Leaf => {
+                for (side, label, x, flip) in
+                    [("r", "Right end", b.max.x, false), ("l", "Left end", b.min.x, true)]
+                {
+                    let mut r = at(x, b.max.y);
+                    r.flip_x = flip;
+                    raw.push((side.into(), label.into(), r));
+                }
+            }
+            ComponentKind::Cap => {
+                let xs: Vec<f64> = contour
+                    .points
+                    .iter()
+                    .filter(|p| p.is_on_curve() && (p.pos.y - b.min.y).abs() < 1.0)
+                    .map(|p| p.pos.x)
+                    .collect();
+                let x = match (xs.iter().copied().reduce(f64::min), xs.iter().copied().reduce(f64::max)) {
+                    (Some(lo), Some(hi)) => (lo + hi) / 2.0,
+                    _ => (b.min.x + b.max.x) / 2.0,
+                };
+                raw.push(("b".into(), "Bottom".into(), at(x, b.min.y)));
+            }
+            ComponentKind::Corner => {
+                for c in corners(contour) {
+                    let wanted = match self.corners {
+                        CornerSide::Outer => c.outer,
+                        CornerSide::Inner => !c.outer,
+                        CornerSide::Both => true,
+                    };
+                    if !wanted {
+                        continue;
+                    }
+                    let mut r = at(c.at.x, c.at.y);
+                    r.rotate = (c.along.y.atan2(c.along.x).to_degrees() * 1000.0).round() / 1000.0;
+                    let (cx, cy) = ((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
+                    let v = if c.at.y >= cy { "top" } else { "bottom" };
+                    let h = if c.at.x >= cx { "right" } else { "left" };
+                    let label = format!("{} corner, {v} {h}", if c.outer { "Outer" } else { "Inner" });
+                    raw.push((format!("p{}", c.point), label, r));
+                }
+            }
         }
-        out
+        raw.into_iter()
+            .map(|(side, label, mut r)| {
+                let key = format!("{owner}/{}:{side}", contour.id);
+                if let Some(t) = self.tweaks.get(&key) {
+                    r.at += Vec2::new(t.dx, t.dy);
+                    r.scale *= t.scale;
+                    if t.flip {
+                        r.flip_x = !r.flip_x;
+                    }
+                }
+                End { on: !self.off.contains(&key), key, label, placement: r }
+            })
+            .collect()
     }
+
+    /// Where this component lands by rule on a stroke, each with its key.
+    pub fn ends(&self, owner: &str, contour: &Contour) -> Vec<(String, ComponentRef)> {
+        self.all_ends(owner, contour).into_iter().filter(|e| e.on).map(|e| (e.key, e.placement)).collect()
+    }
+}
+
+/// A sharp corner of a contour.
+struct Corner {
+    point: crate::geometry::PointId,
+    at: Vec2,
+    /// The edge the component's x axis runs along.
+    along: Vec2,
+    outer: bool,
+}
+
+/// The sharp corners of a contour. A tagged stroke is ink on the inside, so
+/// a corner is outer when it turns the way the contour winds, whichever way
+/// that is.
+fn corners(c: &Contour) -> Vec<Corner> {
+    let pts = &c.points;
+    let n = pts.len();
+    let mut out = Vec::new();
+    if n < 3 {
+        return out;
+    }
+    let area: f64 = (0..n)
+        .map(|i| {
+            let (a, b) = (pts[i].pos, pts[(i + 1) % n].pos);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    let winds = if area < 0.0 { -1.0 } else { 1.0 };
+    let unit = |v: Vec2| {
+        let l = (v.x * v.x + v.y * v.y).sqrt();
+        (l > 1e-6).then(|| Vec2::new(v.x / l, v.y / l))
+    };
+    // The direction from point i to the first neighbour that is somewhere else.
+    let towards = |i: usize, step: isize| {
+        (1..n).find_map(|k| {
+            let j = (i as isize + step * k as isize).rem_euclid(n as isize) as usize;
+            unit(pts[j].pos - pts[i].pos)
+        })
+    };
+    for (i, p) in pts.iter().enumerate() {
+        if !p.is_on_curve() || p.smooth {
+            continue;
+        }
+        let (Some(back), Some(fwd)) = (towards(i, -1), towards(i, 1)) else { continue };
+        // Incoming direction is -back.
+        let cross = -back.x * fwd.y + back.y * fwd.x;
+        let dot = -back.x * fwd.x - back.y * fwd.y;
+        let turn = cross.atan2(dot).to_degrees();
+        if turn.abs() < 30.0 {
+            continue;
+        }
+        let outer = cross * winds > 0.0;
+        // The edge that keeps the component's axes right-handed.
+        let along = if cross > 0.0 { fwd } else { back };
+        out.push(Corner { point: p.id, at: p.pos, along, outer });
+    }
+    out
 }
 
 /// One placement of a component on a base.
@@ -237,5 +419,71 @@ mod tests {
         assert!(comp.ends("ta", &leg).is_empty());
         comp.off.insert("ta/3:l".into());
         assert_eq!(comp.ends("ta", &bar).len(), 1);
+        // A tweak nudges and scales one end.
+        comp.tweaks.insert("ta/3:r".into(), Tweak { dx: 5.0, dy: -2.0, scale: 2.0, flip: false });
+        let r = &comp.ends("ta", &bar)[0].1;
+        assert_eq!((r.at, r.scale), (Vec2::new(465.0, 698.0), 2.0));
+    }
+
+    #[test]
+    fn a_cap_lands_on_the_bottom_of_a_leg() {
+        let cap = Contour::rect(0, None, Vec2::new(-40.0, -10.0), Vec2::new(40.0, 0.0));
+        let mut comp =
+            Component { contours: vec![cap], ..Component::new("foot", "Foot", ComponentKind::Cap) };
+        let leg = Contour::rect(1, Some(Part::Leg), Vec2::new(100.0, 0.0), Vec2::new(160.0, 700.0));
+        assert!(comp.ends("la", &leg).is_empty(), "a new cap lands nowhere until told");
+        comp.lands_on = vec![Part::Leg];
+        let ends = comp.all_ends("la", &leg);
+        assert_eq!(ends.len(), 1);
+        assert_eq!((ends[0].key.as_str(), ends[0].placement.at), ("la/1:b", Vec2::new(130.0, 0.0)));
+    }
+
+    #[test]
+    fn a_corner_turns_to_fit_each_corner() {
+        // A spur drawn on a corner whose edges run right and up.
+        let spur = Contour::rect(0, None, Vec2::new(-10.0, -10.0), Vec2::new(0.0, 0.0));
+        let mut comp =
+            Component { contours: vec![spur], ..Component::new("spur", "Spur", ComponentKind::Corner) };
+        comp.lands_on = vec![Part::Stem];
+        let stem = Contour::rect(2, Some(Part::Stem), Vec2::new(0.0, 0.0), Vec2::new(100.0, 500.0));
+        let ends = comp.all_ends("ha", &stem);
+        assert_eq!(ends.len(), 4);
+        assert!(ends.iter().all(|e| e.label.starts_with("Outer corner")));
+        assert_eq!(ends[0].label, "Outer corner, bottom left");
+        // Each spur sits outside its corner.
+        for e in &ends {
+            let b = e.placement.place(&comp)[0].bounds().unwrap();
+            let inside = b.min.x >= 0.0 && b.max.x <= 100.0 && b.min.y >= 0.0 && b.max.y <= 500.0;
+            assert!(!inside, "{} at {:?}", e.key, b);
+            assert_eq!(e.placement.place(&comp)[0].validate(), Ok(()));
+        }
+        // An L has one inner corner.
+        let l = Contour::new(
+            3,
+            Some(Part::Stem),
+            vec![
+                crate::geometry::Point::line(0, 0.0, 0.0),
+                crate::geometry::Point::line(1, 300.0, 0.0),
+                crate::geometry::Point::line(2, 300.0, 100.0),
+                crate::geometry::Point::line(3, 100.0, 100.0),
+                crate::geometry::Point::line(4, 100.0, 500.0),
+                crate::geometry::Point::line(5, 0.0, 500.0),
+            ],
+        );
+        comp.corners = CornerSide::Inner;
+        let inner = comp.all_ends("ha", &l);
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].key, "ha/3:p3");
+        // Edges right and up: no turn needed.
+        assert_eq!(inner[0].placement.rotate, 0.0);
+        comp.corners = CornerSide::Both;
+        assert_eq!(comp.all_ends("ha", &l).len(), 6);
+        // Drawn the other way round, the same corners are found.
+        let mut back = l.clone();
+        reverse(&mut back);
+        comp.corners = CornerSide::Inner;
+        let inner = comp.all_ends("ha", &back);
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].placement.at, Vec2::new(100.0, 100.0));
     }
 }

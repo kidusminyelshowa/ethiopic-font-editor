@@ -189,6 +189,30 @@ export interface PlacedComponent {
   d: string;
 }
 
+export type CornerSide = "outer" | "inner" | "both";
+
+/** An adjustment to one rule placement. */
+export interface Tweak {
+  dx: number;
+  dy: number;
+  scale: number;
+  flip: boolean;
+}
+
+/** One place a component lands by rule on a base. */
+export interface RuleEnd {
+  component: string;
+  name: string;
+  kind: ComponentKind;
+  key: string;
+  /** "Bar · Right end". */
+  label: string;
+  on: boolean;
+  tweak: Tweak;
+  /** Placed outline, in base coordinates. */
+  d: string;
+}
+
 export interface ComponentSummary {
   id: string;
   name: string;
@@ -222,6 +246,8 @@ export interface DrawingView {
   generated: boolean;
   /** Ends of deformed strokes on a generated fidel, to drag. */
   handles: DeformHandle[];
+  /** For a component: where it lands by rule, and how many times. */
+  rule?: { landsOn: Part[]; corners: CornerSide; uses: number };
 }
 
 export interface DeformHandle {
@@ -334,6 +360,11 @@ export const api = {
   listComponents: () => invoke<ComponentSummary[]>("list_components"),
   addComponent: (name: string, kind: ComponentKind) => invoke<string>("add_component", { name, kind }),
   removeComponent: (id: string) => invoke<void>("remove_component", { id }),
+  setComponentRule: (id: string, landsOn: Part[], corners: CornerSide) =>
+    invoke<void>("set_component_rule", { id, landsOn, corners }),
+  setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
+    invoke<void>("set_component_end", { id, key, on, tweak }),
+  ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
   setBaseComponents: (base: string, placements: ComponentRef[]) =>
     invoke<void>("set_base_components", { base, placements }),
 };

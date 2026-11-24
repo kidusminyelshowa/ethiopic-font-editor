@@ -734,6 +734,64 @@ impl Project {
         Ok(())
     }
 
+    /// Set where a component lands by rule: on which parts, and for a corner
+    /// component, which corners.
+    pub fn set_component_rule(
+        &mut self,
+        id: &str,
+        lands_on: Vec<crate::parts::Part>,
+        corners: crate::component::CornerSide,
+    ) -> Result<(), ModelError> {
+        let c = self.components.get_mut(id).ok_or_else(|| ModelError::UnknownComponent(id.into()))?;
+        c.lands_on = lands_on;
+        c.corners = corners;
+        Ok(())
+    }
+
+    /// Switch one rule placement on or off, and set how it is adjusted.
+    pub fn set_component_end(
+        &mut self,
+        id: &str,
+        key: &str,
+        on: bool,
+        tweak: crate::component::Tweak,
+    ) -> Result<(), ModelError> {
+        let c = self.components.get_mut(id).ok_or_else(|| ModelError::UnknownComponent(id.into()))?;
+        if on {
+            c.off.remove(key);
+        } else {
+            c.off.insert(key.into());
+        }
+        if tweak.is_identity() {
+            c.tweaks.remove(key);
+        } else {
+            c.tweaks.insert(key.into(), tweak);
+        }
+        Ok(())
+    }
+
+    /// Every rule placement on a base's own strokes, the ones switched off
+    /// included, with the component it places.
+    pub fn rule_ends(&self, base: &str) -> Vec<(&Component, crate::component::End)> {
+        let Some(b) = self.bases.get(base) else { return Vec::new() };
+        let mut out = Vec::new();
+        for comp in self.components.values().filter(|c| !c.lands_on.is_empty()) {
+            for c in &b.contours {
+                out.extend(comp.all_ends(base, c).into_iter().map(|e| (comp, e)));
+            }
+        }
+        out
+    }
+
+    /// How many times a component lands by rule across the bases.
+    pub fn rule_uses(&self, id: &str) -> usize {
+        let Some(comp) = self.components.get(id) else { return 0 };
+        self.bases
+            .iter()
+            .map(|(bid, b)| b.contours.iter().map(|c| comp.ends(bid, c).len()).sum::<usize>())
+            .sum()
+    }
+
     /// Replace the component placements on a base.
     pub fn set_base_components(
         &mut self,

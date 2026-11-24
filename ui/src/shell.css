@@ -2258,7 +2258,7 @@ body.editing .side-list {
 
 /* ---------- Shortcuts and display options (ETH-17) ---------- */
 
-.canvas[data-preview] > *:not(.outline-fill):not(.neighbour) {
+.canvas[data-preview] > *:not(.outline-fill):not(.neighbour):not(.rule-end) {
   display: none;
 }
 .canvas[data-preview] .outline-fill,
@@ -2382,4 +2382,47 @@ body.editing .side-list {
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--panel-line);
+}
+
+/* ---------- Components placed by rule (ETH-18) ---------- */
+
+.canvas .rule-end {
+  fill: rgba(43, 108, 176, 0.16);
+  stroke: rgba(43, 108, 176, 0.55);
+  stroke-width: 1px;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+.canvas .rule-end.off {
+  fill: none;
+  stroke: var(--ink-faint);
+  pointer-events: visibleStroke;
+}
+.canvas .rule-end.selected {
+  fill: rgba(43, 108, 176, 0.36);
+  stroke: #2b6cb0;
+  stroke-dasharray: none;
+  stroke-width: 1.5px;
+}
+.canvas[data-preview] .rule-end {
+  fill: var(--ink);
+  stroke: none;
+}
+.canvas[data-preview] .rule-end.off {
+  display: none;
+}
+.placement-head.off {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+.rule-label {
+  margin: 8px 0 4px;
+  padding: 0;
+}
+.rule-corners {
+  margin: 8px 0 0;
+}
+.rule-uses {
+  margin: 8px 0 0;
 }

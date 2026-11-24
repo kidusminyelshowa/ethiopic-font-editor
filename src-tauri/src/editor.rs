@@ -1,8 +1,8 @@
 //! What the glyph editor reads and writes.
 
 use fidel_core::{
-    Alteration, Change, ComponentKind, ComponentRef, Contour, DeformHandle, DrawingTarget, Effect,
-    FidelState, Metrics, ModelError, Order, Project, StateKind, Vec2, Verb,
+    Alteration, Change, ComponentKind, ComponentRef, Contour, CornerSide, DeformHandle, DrawingTarget,
+    Effect, FidelState, Metrics, ModelError, Order, Part, Project, StateKind, Tweak, Vec2, Verb,
 };
 use serde::Serialize;
 
@@ -33,6 +33,64 @@ pub struct DrawingView {
     generated: bool,
     /// For a generated fidel: the ends of its deformed strokes, to drag.
     handles: Vec<DeformHandle>,
+    /// For a component: where it lands by rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule: Option<ComponentRule>,
+}
+
+/// Where a component lands by rule, and how often it does.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentRule {
+    lands_on: Vec<Part>,
+    corners: CornerSide,
+    /// Placements across all bases.
+    uses: usize,
+}
+
+/// One place a component lands by rule on a base.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleEnd {
+    component: String,
+    name: String,
+    kind: ComponentKind,
+    key: String,
+    /// "Bar · Right end".
+    label: String,
+    on: bool,
+    tweak: Tweak,
+    /// Placed outline, in base coordinates.
+    d: String,
+}
+
+pub fn rule_ends(project: &Project, base: &str) -> Vec<RuleEnd> {
+    let Some(b) = project.bases.get(base) else { return Vec::new() };
+    project
+        .rule_ends(base)
+        .into_iter()
+        .map(|(comp, e)| {
+            let contour = e.placement.on.and_then(|id| b.contours.iter().find(|c| c.id == id));
+            let what = contour
+                .and_then(|c| c.name.clone().or_else(|| c.part.map(|p| capitalise(&format!("{p:?}")))))
+                .unwrap_or_else(|| "Path".into());
+            RuleEnd {
+                component: comp.id.clone(),
+                name: comp.name.clone(),
+                kind: comp.kind,
+                label: format!("{what} · {}", e.label),
+                on: e.on,
+                tweak: comp.tweaks.get(&e.key).copied().unwrap_or_default(),
+                d: fidel_core::svg_path(&e.placement.place(comp)),
+                key: e.key,
+            }
+        })
+        .collect()
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c.flat_map(char::to_lowercase)).collect()).unwrap_or_default()
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +240,7 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
+                    rule: None,
                     target,
                     contours,
                     metrics,
@@ -198,6 +257,7 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
+                    rule: None,
                     target,
                     contours,
                     metrics,
@@ -222,6 +282,7 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated,
                     handles: if generated { r.handles.clone() } else { Vec::new() },
+                    rule: None,
                     target,
                     contours,
                     metrics,
@@ -238,6 +299,7 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
+                    rule: None,
                     target,
                     contours,
                     metrics,
@@ -259,6 +321,11 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
+                    rule: Some(ComponentRule {
+                        lands_on: comp.lands_on.clone(),
+                        corners: comp.corners,
+                        uses: project.rule_uses(id),
+                    }),
                     target,
                     contours,
                     metrics,

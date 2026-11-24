@@ -308,6 +308,39 @@ fn remove_component(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// Where a component lands by rule.
+#[tauri::command]
+fn set_component_rule(
+    state: State<'_, AppState>,
+    id: String,
+    lands_on: Vec<fidel_core::Part>,
+    corners: fidel_core::CornerSide,
+) -> CmdResult<()> {
+    state.project().set_component_rule(&id, lands_on, corners).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Switch one rule placement on or off and set how it is adjusted.
+#[tauri::command]
+fn set_component_end(
+    state: State<'_, AppState>,
+    id: String,
+    key: String,
+    on: bool,
+    tweak: fidel_core::Tweak,
+) -> CmdResult<()> {
+    state.project().set_component_end(&id, &key, on, tweak).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Every rule placement on a base, the ones switched off included.
+#[tauri::command]
+fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
+    editor::rule_ends(&state.project(), &base)
+}
+
 /// Replace the components placed on a base.
 #[tauri::command]
 fn set_base_components(
@@ -585,7 +618,10 @@ pub fn run() {
             list_components,
             add_component,
             remove_component,
-            set_base_components
+            set_base_components,
+            set_component_rule,
+            set_component_end,
+            rule_ends
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
