@@ -166,17 +166,49 @@ export function metricsSection(ed: GlyphEditor, paLabel: string): Node[] {
   if (!sb) return [];
   const center = el("button", { class: "pill small ghost", title: "Same space left and right" }, "Center");
   center.addEventListener("click", () => ed.centerInWidth());
-  return [
+  const mk = ed.drawing?.metricKeys;
+  const keys = mk?.keys ?? {};
+  // A keyed value follows its key; type in the key, not the number.
+  const field = (label: string, side: "left" | "width" | "right", value: number, set: (v: number) => void, title: string) => {
+    const f = numberField(label, value, set, title);
+    if (keys[side]) {
+      f.classList.add("linked");
+      f.querySelector("input")!.readOnly = true;
+      f.title = `Follows ${keys[side]}`;
+    }
+    return f;
+  };
+  const nodes: Node[] = [
     el("h3", { class: "section-label", title: "Drag the left or right metric line on the canvas, too" }, "Metrics"),
     el(
       "div",
       { class: "field-grid three" },
-      numberField("LSB", sb.lsb, (v) => ed.setSidebearing("left", v), "Left sidebearing"),
-      numberField("Width", sb.width, (v) => void ed.setAdvance(v), "Advance width"),
-      numberField("RSB", sb.rsb, (v) => ed.setSidebearing("right", v), "Right sidebearing"),
+      field("LSB", "left", sb.lsb, (v) => ed.setSidebearing("left", v), "Left sidebearing"),
+      field("Width", "width", sb.width, (v) => void ed.setAdvance(v), "Advance width"),
+      field("RSB", "right", sb.rsb, (v) => ed.setSidebearing("right", v), "Right sidebearing"),
     ),
-    el("div", { class: "button-row" }, center, el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`)),
   ];
+  if (mk) {
+    const keyInput = (side: "left" | "width" | "right", label: string) => {
+      const input = el("input", {
+        type: "text",
+        class: `metric-key${mk.errors[side] ? " invalid" : ""}`,
+        value: keys[side] ?? "",
+        placeholder: "Key",
+        "aria-label": `${label} key`,
+        title: mk.errors[side] ?? `${label} from another glyph: =ሀ, =ሀ+10, =|ሀ for its other side, or =600`,
+        spellcheck: "false",
+      }) as HTMLInputElement;
+      input.addEventListener("change", () => void ed.setMetricKeys({ ...keys, [side]: input.value.trim() || null }));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") input.blur();
+      });
+      return input;
+    };
+    nodes.push(el("div", { class: "field-grid three metric-keys" }, keyInput("left", "Left sidebearing"), keyInput("width", "Width"), keyInput("right", "Right sidebearing")));
+  }
+  nodes.push(el("div", { class: "button-row" }, center, el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`)));
+  return nodes;
 }
 
 /** Options for the shape tool in use. */

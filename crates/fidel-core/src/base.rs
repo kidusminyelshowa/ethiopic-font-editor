@@ -30,6 +30,9 @@ pub struct Base {
     /// rebuilt whenever the source or the added marks change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derived: Option<Derived>,
+    /// Sidebearings and width set by other glyphs (`=ሀ+10`).
+    #[serde(default, skip_serializing_if = "crate::metric_keys::MetricKeys::is_empty")]
+    pub metric_keys: crate::metric_keys::MetricKeys,
 }
 
 /// A base built from another base plus marks such as a cap.
@@ -54,6 +57,7 @@ impl Base {
             anchors: BTreeMap::new(),
             components: Vec::new(),
             derived: None,
+            metric_keys: Default::default(),
         }
     }
 

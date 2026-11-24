@@ -2900,3 +2900,37 @@ textarea.proof-input {
 .proof.inverted .proof-fall-size {
   color: rgba(244, 241, 234, 0.5);
 }
+
+/* ---------- Metric keys (ETH-21) ---------- */
+
+.field.linked input {
+  color: var(--select-strong);
+  cursor: default;
+}
+.metric-keys {
+  margin-top: 4px;
+}
+.metric-key {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px dashed var(--hairline);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: 12px var(--ethiopic), var(--sans);
+}
+.metric-key:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--select-strong);
+}
+.metric-key:not(:placeholder-shown) {
+  border-style: solid;
+  color: var(--select-strong);
+}
+.metric-key.invalid {
+  border-color: #c2442a;
+  color: #c2442a;
+}

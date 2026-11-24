@@ -39,6 +39,35 @@ pub struct DrawingView {
     /// For a base made from another row's base (ሸ from ሰ).
     #[serde(skip_serializing_if = "Option::is_none")]
     derived: Option<DerivedView>,
+    /// For bases and symbols: sidebearings and width set by other glyphs,
+    /// with why a key does not apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metric_keys: Option<KeysView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeysView {
+    keys: fidel_core::metric_keys::MetricKeys,
+    /// By side (`left`, `right`, `width`).
+    errors: std::collections::BTreeMap<&'static str, String>,
+}
+
+fn keys_view(project: &Project, keys: &fidel_core::metric_keys::MetricKeys) -> KeysView {
+    use fidel_core::metric_keys::Side;
+    let mut errors = std::collections::BTreeMap::new();
+    for (name, side, key) in [
+        ("left", Side::Left, &keys.left),
+        ("right", Side::Right, &keys.right),
+        ("width", Side::Width, &keys.width),
+    ] {
+        if let Some(k) = key.as_deref().filter(|k| !k.trim().is_empty()) {
+            if let Err(e) = project.evaluate_key(k, side) {
+                errors.insert(name, e);
+            }
+        }
+    }
+    KeysView { keys: keys.clone(), errors }
 }
 
 /// Where a derived base comes from.
@@ -279,6 +308,7 @@ impl DrawingView {
                     title: format!("{} {glyph}", base.name).trim().to_string(),
                     subtitle: subtitle.trim().to_string(),
                     derived,
+                    metric_keys: Some(keys_view(project, &base.metric_keys)),
                     advance_width: Some(base.advance_width),
                     context: None,
                     components: Some(placed_components(project, &base.components)),
@@ -304,6 +334,7 @@ impl DrawingView {
                     handles: Vec::new(),
                     rule: None,
                     derived: None,
+                    metric_keys: None,
                     target,
                     contours,
                     metrics,
@@ -330,6 +361,7 @@ impl DrawingView {
                     handles: if generated { r.handles.clone() } else { Vec::new() },
                     rule: None,
                     derived: None,
+                    metric_keys: None,
                     target,
                     contours,
                     metrics,
@@ -348,6 +380,7 @@ impl DrawingView {
                     handles: Vec::new(),
                     rule: None,
                     derived: None,
+                    metric_keys: Some(keys_view(project, &sym.metric_keys)),
                     target,
                     contours,
                     metrics,
@@ -370,6 +403,7 @@ impl DrawingView {
                     generated: false,
                     handles: Vec::new(),
                     derived: None,
+                    metric_keys: None,
                     rule: Some(ComponentRule {
                         lands_on: comp.lands_on.clone(),
                         corners: comp.corners,

@@ -192,6 +192,13 @@ export interface PlacedComponent {
   d: string;
 }
 
+/** `=ሀ`, `=ሀ+10`, `=|ሀ` or `=600`. */
+export interface MetricKeys {
+  left?: string | null;
+  right?: string | null;
+  width?: string | null;
+}
+
 export type CornerSide = "outer" | "inner" | "both";
 
 /** An adjustment to one rule placement. */
@@ -251,6 +258,8 @@ export interface DrawingView {
   handles: DeformHandle[];
   /** For a base made from another row's base (ሸ from ሰ). */
   derived?: { from: string; fromName: string; fromGlyph: string; adds: [string, string][]; follows: boolean };
+  /** For bases and symbols: sidebearings and width set by other glyphs. */
+  metricKeys?: { keys: MetricKeys; errors: Partial<Record<keyof MetricKeys, string>> };
   /** For a component: where it lands by rule, and how many times. */
   rule?: { landsOn: Part[]; corners: CornerSide; uses: number };
 }
@@ -370,6 +379,7 @@ export const api = {
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
   ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
+  setMetricKeys: (target: DrawingTarget, keys: MetricKeys) => invoke<void>("set_metric_keys", { target, keys }),
   setBaseFollows: (base: string, follows: boolean) => invoke<void>("set_base_follows", { base, follows }),
   testInstall: () => invoke<{ path: string; familyName: string; exported: number }>("test_install"),
   getOrganize: () => invoke<OrganizeView>("get_organize"),

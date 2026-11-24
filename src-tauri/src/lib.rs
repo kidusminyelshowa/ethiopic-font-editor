@@ -142,7 +142,7 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
                 return Err("this drawing has no advance width of its own".into())
             }
         }
-        project.refresh_derived();
+        project.after_edit();
     }
     state.mark_dirty();
     Ok(())
@@ -347,6 +347,18 @@ fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
 #[tauri::command]
 fn set_base_follows(state: State<'_, AppState>, base: String, follows: bool) -> CmdResult<()> {
     state.project().set_base_follows(&base, follows).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Set the metric keys of a base or symbol (`=ሀ+10`) and apply them.
+#[tauri::command]
+fn set_metric_keys(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    keys: fidel_core::metric_keys::MetricKeys,
+) -> CmdResult<()> {
+    state.project().set_metric_keys(&target, keys).map_err(err)?;
     state.mark_dirty();
     Ok(())
 }
@@ -717,7 +729,8 @@ pub fn run() {
             set_smart_filters,
             test_install,
             set_base_follows,
-            set_symbol_components
+            set_symbol_components,
+            set_metric_keys
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

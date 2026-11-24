@@ -72,6 +72,7 @@ impl Project {
                         advance_width: advance,
                         contours: Vec::new(),
                         components: Vec::new(),
+                        metric_keys: Default::default(),
                     });
                 }
             }
@@ -86,7 +87,7 @@ impl Project {
         }
         self.charsets = sets;
         self.languages = languages;
-        self.refresh_derived();
+        self.after_edit();
     }
 
     fn ensure_extra_rules(&mut self) {

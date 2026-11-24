@@ -199,7 +199,7 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
             _ => {}
         }
     }
-    project.refresh_derived();
+    project.after_edit();
     Ok(project)
 }
 

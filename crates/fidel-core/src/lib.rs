@@ -32,6 +32,7 @@ pub mod fidel;
 pub mod geometry;
 pub mod guides;
 pub mod kid;
+pub mod metric_keys;
 pub mod order;
 pub mod organize;
 pub mod parts;

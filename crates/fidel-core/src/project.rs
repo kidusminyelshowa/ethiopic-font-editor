@@ -198,10 +198,16 @@ pub struct Symbol {
     /// Components placed on it: a numeral frame, a shared dot.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<crate::component::ComponentRef>,
+    /// Sidebearings and width set by other glyphs, or fixed (`=600` for
+    /// tabular numerals).
+    #[serde(default, skip_serializing_if = "crate::metric_keys::MetricKeys::is_empty")]
+    pub metric_keys: crate::metric_keys::MetricKeys,
 }
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ModelError {
+    #[error("only bases and symbols have metrics of their own")]
+    NoMetrics,
     #[error("no family `{0}`")]
     UnknownFamily(FamilyId),
     #[error("family `{0}` has no {1:?} fidel")]
@@ -385,9 +391,37 @@ impl Project {
             }
         };
         *slot = contours;
-        if refresh {
-            self.refresh_derived();
+        if refresh || matches!(target, DrawingTarget::Symbol(_)) {
+            self.after_edit();
         }
+        Ok(())
+    }
+
+    /// Bring derived bases and metric keys up to date after an edit.
+    pub fn after_edit(&mut self) {
+        self.refresh_derived();
+        self.apply_metric_keys();
+    }
+
+    /// Set the metric keys of a base (`base:la`) or symbol (`symbol:uni1361`)
+    /// and apply them.
+    pub fn set_metric_keys(
+        &mut self,
+        target: &DrawingTarget,
+        keys: crate::metric_keys::MetricKeys,
+    ) -> Result<(), ModelError> {
+        let keys = keys.tidy();
+        match target {
+            DrawingTarget::Base(id) => {
+                self.bases.get_mut(id).ok_or_else(|| ModelError::UnknownBase(id.clone()))?.metric_keys = keys
+            }
+            DrawingTarget::Symbol(id) => {
+                self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.metric_keys =
+                    keys
+            }
+            _ => return Err(ModelError::NoMetrics),
+        }
+        self.after_edit();
         Ok(())
     }
 
@@ -457,7 +491,7 @@ impl Project {
         if let Some(d) = b.derived.as_mut() {
             d.own = !follows;
         }
-        self.refresh_derived();
+        self.after_edit();
         Ok(())
     }
 
@@ -744,7 +778,7 @@ impl Project {
         } else {
             fam.attach_offsets.insert(alteration.into(), offset);
         }
-        self.refresh_derived();
+        self.after_edit();
         Ok(())
     }
 
@@ -947,7 +981,7 @@ impl Project {
             }
         }
         self.bases.get_mut(base).ok_or_else(|| ModelError::UnknownBase(base.into()))?.components = refs;
-        self.refresh_derived();
+        self.after_edit();
         Ok(())
     }
 }

@@ -15,6 +15,7 @@ import {
   type ImpactView,
   type Part,
   type PathOp,
+  type MetricKeys,
   type RuleEnd,
   type StrokeJoin,
   type Tweak,
@@ -3003,6 +3004,38 @@ export class GlyphEditor {
     this.host.renderSide(this);
   }
 
+  /** Set the metric keys of this base or symbol, then take the outline the core keyed. */
+  async setMetricKeys(keys: MetricKeys): Promise<void> {
+    const target = this.target;
+    if (!target || (target.kind !== "base" && target.kind !== "symbol")) return;
+    try {
+      await this.saving;
+      await api.setMetricKeys(target, keys);
+      await this.syncFromCore();
+      this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not set the key: ${err}`, "error");
+    }
+  }
+
+  /** After a save, metric keys may have moved the outline or changed the width in the core: take that in. */
+  private async syncFromCore(): Promise<void> {
+    const target = this.target;
+    if (!target || !this.drawing) return;
+    const fresh = await api.getDrawing(target);
+    if (this.target?.kind !== target.kind || this.target.id !== target.id || !this.drawing) return;
+    this.drawing.metricKeys = fresh.metricKeys;
+    const now = JSON.stringify({ c: fresh.contours, w: fresh.advanceWidth });
+    if (now !== this.history.now) {
+      this.contours = translated(fresh.contours, this.origin);
+      this.drawing.advanceWidth = fresh.advanceWidth;
+      this.savedAdvance = fresh.advanceWidth;
+      this.history.now = this.snapshot();
+    }
+    this.render();
+    this.host.renderSide(this);
+  }
+
   /** Put the outline in the middle of its width. */
   centerInWidth(): void {
     const sb = this.sidebearings();
@@ -3200,6 +3233,9 @@ export class GlyphEditor {
           this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
         if (target.kind === "base") void this.loadRuleEnds();
+        // Keys on this glyph (or on ones it follows) may have moved it.
+        const mk = this.drawing?.metricKeys?.keys;
+        if (mk && (mk.left || mk.right || mk.width)) void this.syncFromCore();
         // Drawing on a base made from another one makes it its own.
         const dv = this.drawing?.derived;
         if (dv?.follows && this.target?.kind === "base" && this.target.id === target.id) {
