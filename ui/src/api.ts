@@ -316,6 +316,8 @@ export const api = {
   familyPreview: (family: string) => invoke<FidelPreview[]>("family_preview", { family }),
   setRuleVariant: (family: string, order: string, variant: number) =>
     invoke<FidelDetail>("set_rule_variant", { family, order, variant }),
+  /** Remove overlap, booleans, offset, expand stroke or knife, done by the core. */
+  pathOp: (op: PathOp) => invoke<Contour[]>("path_op", { op }),
   /** Pick one of the order's forms, or `null` to draw it by hand. */
   setForm: (family: string, order: string, variant: number | null) =>
     invoke<FidelDetail>("set_form", { family, order, variant }),
@@ -332,3 +334,12 @@ export const api = {
 export function sameTarget(a: DrawingTarget | null, b: DrawingTarget | null): boolean {
   return !!a && !!b && a.kind === b.kind && a.id === b.id;
 }
+
+export type BooleanKind = "union" | "subtract" | "intersect" | "exclude";
+export type StrokeJoin = "miter" | "round" | "bevel";
+export type PathOp =
+  | { op: "remove-overlap"; contours: Contour[] }
+  | { op: "boolean"; a: Contour[]; b: Contour[]; kind: BooleanKind; firstId: number }
+  | { op: "offset"; contours: Contour[]; distance: number; join: StrokeJoin; firstId: number }
+  | { op: "expand-stroke"; contours: Contour[]; width: number; join: StrokeJoin; firstId: number }
+  | { op: "knife"; contours: Contour[]; from: { x: number; y: number }; to: { x: number; y: number }; firstId: number };

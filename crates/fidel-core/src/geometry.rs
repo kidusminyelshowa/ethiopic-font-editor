@@ -45,6 +45,13 @@ impl AddAssign for Vec2 {
     }
 }
 
+impl std::ops::Mul<f64> for Vec2 {
+    type Output = Vec2;
+    fn mul(self, k: f64) -> Vec2 {
+        Vec2::new(self.x * k, self.y * k)
+    }
+}
+
 impl Sub for Vec2 {
     type Output = Vec2;
     fn sub(self, o: Vec2) -> Vec2 {

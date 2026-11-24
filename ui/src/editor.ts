@@ -3,7 +3,18 @@
 // to the core (set_drawing) when each gesture ends, so every fidel that uses
 // the drawing updates.
 
-import { api, PARTS, type ComponentRef, type DeformHandle, type DrawingTarget, type DrawingView, type Part } from "./api";
+import {
+  api,
+  PARTS,
+  type BooleanKind,
+  type ComponentRef,
+  type DeformHandle,
+  type DrawingTarget,
+  type DrawingView,
+  type Part,
+  type PathOp,
+  type StrokeJoin,
+} from "./api";
 import {
   clone,
   constrain45,
@@ -34,6 +45,7 @@ import {
   addExtremes,
   closestOnSegment,
   correctDirections,
+  directionOk,
   fixIssues,
   insertPoint,
   ISSUE_LABEL,
@@ -68,13 +80,14 @@ import {
   joinPaths,
   moveTunni,
   powerNudge,
+  roundCorners,
   tunniPoint,
 } from "./curves";
 import { gridStep, onPrefs, prefs } from "./prefs";
 import { importSvg, SvgImportError } from "./svgImport";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
-export type Tool = "select" | "direct" | "pen" | "pencil" | ShapeKind | "hand";
+export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | ShapeKind | "hand";
 export type ShapeKind = "rect" | "rounded" | "ellipse" | "polygon" | "star";
 export const SHAPES: ShapeKind[] = ["rect", "rounded", "ellipse", "polygon", "star"];
 export const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -132,6 +145,7 @@ type Gesture =
   | { kind: "placement"; id: number; start: Vec2; d: Vec2; moved: boolean }
   | { kind: "deform"; i: number; start: Vec2; d: number }
   | { kind: "pencil"; pts: Vec2[]; startScreen: Vec2 }
+  | { kind: "knife"; start: Vec2; now: Vec2 }
   | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
@@ -809,6 +823,10 @@ export class GlyphEditor {
       this.gesture = { kind: "pencil", pts: [font], startScreen: screen };
       return;
     }
+    if (this.tool === "knife") {
+      this.gesture = { kind: "knife", start: font, now: font };
+      return;
+    }
 
     // A Tunni point: drag to change both handles of its curve.
     const tun = (e.target as Element | null)?.closest?.("[data-tunni]")?.getAttribute("data-tunni");
@@ -1073,6 +1091,10 @@ export class GlyphEditor {
       case "lasso":
         g.pts.push(font);
         break;
+      case "knife": {
+        g.now = e.shiftKey ? constrain45(g.start, font) : font;
+        break;
+      }
       case "pencil": {
         const last = g.pts[g.pts.length - 1];
         if (Math.hypot(font.x - last.x, font.y - last.y) * this.view.scale > 1.5) g.pts.push(font);
@@ -1249,6 +1271,9 @@ export class GlyphEditor {
       this.host.renderSide(this);
     } else if (g.kind === "zone") {
       if (g.now !== g.start) void this.moveZone(g.id, g.now);
+    } else if (g.kind === "knife") {
+      if (Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 4) void this.knife(g.start, g.now);
+      else this.render();
     } else if (g.kind === "pencil") {
       this.finishPencil(g.pts, g.startScreen, this.screenOf(e));
     } else if (g.kind === "tunni") {
@@ -2061,6 +2086,104 @@ export class GlyphEditor {
     this.editSelectedContours((c, ids) => autoHandles(c, ids), "Automatic handles");
   }
 
+  // ---------- Path operations (done by the core) ----------
+
+  /** Contours a path operation works on: the selected ones, or every editable one. */
+  private opTargets(): number[] {
+    const sel = this.selectedContours();
+    if (sel.length) return sel;
+    return this.contours.flatMap((c, ci) => (c.locked || c.hidden ? [] : [ci]));
+  }
+
+  /**
+   * Replace contours `which` with `result`, keeping part tags and names when
+   * one contour turns into others, then fix path directions.
+   */
+  private replaceContours(which: number[], result: Contour[], label: string): void {
+    const set = new Set(which);
+    // Results keep a part tag or name only when every replaced contour shared it.
+    const shared = <K extends "part" | "name">(k: K) => {
+      const v = this.contours[which[0]]?.[k];
+      return which.every((ci) => this.contours[ci][k] === v) ? v : undefined;
+    };
+    const part = shared("part");
+    const name = shared("name");
+    for (const c of result) {
+      if (part && !c.part) c.part = part;
+      if (name && !c.name) c.name = name;
+    }
+    const kept = this.contours.filter((_, ci) => !set.has(ci));
+    // The results go where the first of the replaced contours was.
+    const at = Math.min(Math.min(...which), kept.length);
+    const merged = [...kept.slice(0, at), ...result, ...kept.slice(at)];
+    // New outlines come back in any direction: outer paths counter-clockwise, counters clockwise.
+    const ok = directionOk(merged);
+    const fixed = merged.map((c, i) => (i >= at && i < at + result.length && !ok[i] ? reversed(c) : c));
+    this.contours = fixed;
+    this.selection = new Set(result.flatMap((_, i) => fixed[at + i].points.map((__, pi) => key(at + i, pi))));
+    this.commit(label);
+    this.changedSelection();
+  }
+
+  private async runOp(which: number[], op: PathOp, label: string): Promise<void> {
+    if (!which.length) return;
+    try {
+      const out = await api.pathOp(op);
+      this.replaceContours(which, out, label);
+    } catch (err) {
+      this.host.toast(`${label} failed: ${err}`, "error");
+    }
+  }
+
+  /** Merge overlapping paths into one outline. */
+  removeOverlap(): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    return this.runOp(which, { op: "remove-overlap", contours: which.map((ci) => this.contours[ci]) }, "Remove overlap");
+  }
+
+  /**
+   * Booleans between selected paths. The frontmost (last) selected path is
+   * the one that cuts, as in Figma; union merges them all.
+   */
+  booleanOp(kind: BooleanKind): Promise<void> {
+    const which = this.selectedContours().filter((ci) => !this.contours[ci].open);
+    if (which.length < 2) {
+      this.host.toast("Select two or more closed paths first.");
+      return Promise.resolve();
+    }
+    const front = which[which.length - 1];
+    const rest = which.slice(0, -1);
+    const label = { union: "Union", subtract: "Subtract", intersect: "Intersect", exclude: "Exclude" }[kind];
+    return this.runOp(
+      which,
+      { op: "boolean", a: rest.map((ci) => this.contours[ci]), b: [this.contours[front]], kind, firstId: nextContourId(this.contours) },
+      label,
+    );
+  }
+
+  /** Grow (positive) or shrink (negative) the selected paths. */
+  offsetPaths(distance: number, join: StrokeJoin): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    return this.runOp(which, { op: "offset", contours: which.map((ci) => this.contours[ci]), distance, join, firstId: nextContourId(this.contours) }, "Offset path");
+  }
+
+  /** Turn the selected paths into outlines of the given width. */
+  expandStroke(width: number, join: StrokeJoin): Promise<void> {
+    const which = this.opTargets();
+    return this.runOp(which, { op: "expand-stroke", contours: which.map((ci) => this.contours[ci]), width, join, firstId: nextContourId(this.contours) }, "Expand stroke");
+  }
+
+  /** Cut along a line: the selected paths, or everything under it. */
+  async knife(from: Vec2, to: Vec2): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    await this.runOp(which, { op: "knife", contours: which.map((ci) => this.contours[ci]), from, to, firstId: nextContourId(this.contours) }, "Knife");
+  }
+
+  /** Round or chamfer the selected corner points. */
+  roundCorners(radius: number, style: "round" | "chamfer"): void {
+    this.editSelectedContours((c, ids) => roundCorners(c, ids, radius, style), style === "round" ? "Round corners" : "Chamfer corners");
+  }
+
   /** Move the selected on-curve points, reshaping the curves next to them proportionally. */
   powerNudge(dx: number, dy: number): void {
     if (!this.selectedOnCurve().length) return this.nudge(dx, dy);
@@ -2489,6 +2612,9 @@ export class GlyphEditor {
       } else if (mod && e.shiftKey && k === "r") {
         e.preventDefault();
         this.reverseDirection();
+      } else if (mod && e.shiftKey && k === "o") {
+        e.preventDefault();
+        void this.removeOverlap();
       } else if (mod && e.shiftKey && k === "l") {
         e.preventDefault();
         this.setLayerFlag("locked", this.selectedContours());
@@ -2514,6 +2640,7 @@ export class GlyphEditor {
       else if (k === "a") this.setTool("direct");
       else if (k === "p") this.setTool("pen");
       else if (k === "b") this.setTool("pencil");
+      else if (k === "k") this.setTool("knife");
       else if (e.shiftKey && k === "j") this.joinSelection();
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
@@ -2813,6 +2940,11 @@ export class GlyphEditor {
       }
       const first = pts[0];
       parts.push(`<circle class="pen-start" cx="${sx(first.pos.x)}" cy="${sy(first.pos.y)}" r="8"/>`);
+    }
+
+    // Knife line in progress.
+    if (g?.kind === "knife") {
+      parts.push(`<line class="knife-line" x1="${sx(g.start.x)}" y1="${sy(g.start.y)}" x2="${sx(g.now.x)}" y2="${sy(g.now.y)}"/>`);
     }
 
     // Freehand stroke in progress.

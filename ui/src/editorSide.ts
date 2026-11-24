@@ -3,6 +3,7 @@
 // right-click menu and the view (snapping and display) menu.
 
 import { el } from "./dom";
+import type { StrokeJoin } from "./api";
 import { SHAPE_LABEL, SHAPES, type GlyphEditor, type ShapeKind } from "./editor";
 import { evalNumber, ISSUE_LABEL, rotateAbout, scaleAbout, skewAbout, type IssueKind } from "./pathops";
 import { prefs, setPref, type CanvasPrefs } from "./prefs";
@@ -349,6 +350,15 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Reverse direction", keys: "Ctrl Shift R", run: () => ed.reverseDirection() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
+      ...(contours.length > 1
+        ? [
+            { label: "Union", run: () => void ed.booleanOp("union") },
+            { label: "Subtract front", run: () => void ed.booleanOp("subtract") },
+            { label: "Intersect", run: () => void ed.booleanOp("intersect") },
+            { label: "Exclude", run: () => void ed.booleanOp("exclude") },
+          ]
+        : []),
       { label: "Duplicate", keys: "Ctrl D", run: () => ed.duplicate() },
       { label: "Lock", keys: "Ctrl Shift L", run: () => ed.setLayerFlag("locked", contours, true) },
       { label: "Hide", keys: "Ctrl Shift H", run: () => ed.setLayerFlag("hidden", contours, true) },
@@ -360,6 +370,7 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Select all", keys: "Ctrl A", run: () => ed.selectAll() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
       { label: "Round coordinates", run: () => ed.roundCoordinates() },
     );
   }
@@ -464,4 +475,62 @@ export function onRefresh(fn: (ed: GlyphEditor) => void) {
 
 function refresh(ed: GlyphEditor) {
   refreshSide(ed);
+}
+
+/** Values the path operation fields remember between uses. */
+const opValues = { offset: 10, stroke: 40, radius: 20, join: "miter" as StrokeJoin };
+
+/**
+ * Remove overlap, booleans, offset, expand stroke and corners for the
+ * selection (or the whole drawing when nothing is selected).
+ */
+export function pathOpsSection(ed: GlyphEditor): Node[] {
+  if (!ed.contours.length) return [];
+  const closed = ed.selectedContours().filter((ci) => !ed.contours[ci].open).length;
+  const btn = (label: string, title: string, run: () => void, disabled = false) => {
+    const b = el("button", { class: "pill small ghost", title }, label);
+    b.disabled = disabled;
+    b.addEventListener("click", run);
+    return b;
+  };
+  const bools = el(
+    "div",
+    { class: "button-row" },
+    btn("Remove overlap", "Merge overlapping paths into one outline (Ctrl Shift O)", () => void ed.removeOverlap()),
+    btn("Union", "Merge the selected paths", () => void ed.booleanOp("union"), closed < 2),
+    btn("Subtract", "Cut the frontmost selected path out of the others", () => void ed.booleanOp("subtract"), closed < 2),
+    btn("Intersect", "Keep only where the selected paths overlap", () => void ed.booleanOp("intersect"), closed < 2),
+    btn("Exclude", "Keep where the selected paths do not overlap", () => void ed.booleanOp("exclude"), closed < 2),
+  );
+  const join = el("select", { class: "built-on-select", "aria-label": "Corners" }) as HTMLSelectElement;
+  for (const j of ["miter", "round", "bevel"] as StrokeJoin[]) {
+    const o = el("option", { value: j }, { miter: "Sharp corners", round: "Round corners", bevel: "Cut corners" }[j]);
+    if (opValues.join === j) o.selected = true;
+    join.append(o);
+  }
+  join.addEventListener("change", () => (opValues.join = join.value as StrokeJoin));
+  const offset = el(
+    "div",
+    { class: "field-row" },
+    numberField("Offset", opValues.offset, (v) => (opValues.offset = v), "Positive grows the paths, negative shrinks them"),
+    btn("Offset", "Grow or shrink the selected paths", () => void ed.offsetPaths(opValues.offset, opValues.join)),
+  );
+  const stroke = el(
+    "div",
+    { class: "field-row" },
+    numberField("Width", opValues.stroke, (v) => (opValues.stroke = Math.abs(v)), "Width of the outline drawn around each path"),
+    btn("Expand stroke", "Turn the selected paths into outlines of this width", () => void ed.expandStroke(opValues.stroke, opValues.join)),
+  );
+  const corners = ed.selectedNodes().some((n) => n.type === "corner");
+  const round = el(
+    "div",
+    { class: "field-row" },
+    numberField("Radius", opValues.radius, (v) => (opValues.radius = Math.abs(v)), "How far back along each side the corner starts"),
+    btn("Round", "Round the selected corner points", () => ed.roundCorners(opValues.radius, "round"), !corners),
+    btn("Chamfer", "Cut the selected corner points straight across", () => ed.roundCorners(opValues.radius, "chamfer"), !corners),
+  );
+  return [
+    el("h3", { class: "section-label", title: "Works on the selected paths, or the whole drawing when nothing is selected" }, "Path operations"),
+    el("div", { class: "side-box" }, bools, offset, stroke, join, ...(ed.tool === "direct" ? [round] : [])),
+  ];
 }

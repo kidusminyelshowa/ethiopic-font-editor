@@ -12,6 +12,7 @@ import {
   joinPaths,
   moveTunni,
   powerNudge,
+  roundCorners,
   tensions,
   tunniPoint,
 } from "./curves";
@@ -149,5 +150,29 @@ describe("freehand", () => {
     expect(validate(c)).toBeNull();
     // Every fitted point lies on the arc.
     for (const n of toNodes(c)) expect(Math.abs(Math.hypot(n.pos.x, n.pos.y) - 200)).toBeLessThan(3);
+  });
+});
+
+describe("corners", () => {
+  it("rounds a square's corner with a quarter circle", () => {
+    const c = square();
+    const id = c.points[0].id;
+    const out = roundCorners(c, new Set([id]), 20, "round");
+    const nodes = toNodes(out);
+    expect(nodes).toHaveLength(5);
+    expect(validate(out)).toBeNull();
+    const pos = nodes.map((n) => n.pos);
+    expect(pos).toContainEqual({ x: 20, y: 0 });
+    expect(pos).toContainEqual({ x: 0, y: 20 });
+    // Handle length of a quarter circle: 0.5523 of the radius.
+    const a = nodes.find((n) => n.pos.x === 0 && n.pos.y === 20)!;
+    const h = a.out ?? a.in;
+    expect(h).toBeTruthy();
+  });
+  it("chamfers a corner with a straight cut", () => {
+    const c = square();
+    const out = roundCorners(c, new Set([c.points[0].id]), 20, "chamfer");
+    expect(out.points.every((p) => p.kind === "line")).toBe(true);
+    expect(toNodes(out)).toHaveLength(5);
   });
 });

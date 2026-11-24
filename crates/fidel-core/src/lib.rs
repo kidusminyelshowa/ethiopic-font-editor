@@ -33,6 +33,7 @@ pub mod geometry;
 pub mod kid;
 pub mod order;
 pub mod parts;
+pub mod pathops;
 pub mod project;
 pub mod resolve;
 pub mod scope;

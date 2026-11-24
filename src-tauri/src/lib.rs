@@ -208,6 +208,13 @@ fn set_form(
     Ok(detail)
 }
 
+/// Remove overlap, booleans, offset, expand stroke or a knife cut, on
+/// contours the editor sends. Returns the contours that replace them.
+#[tauri::command]
+fn path_op(op: fidel_core::pathops::PathOp) -> Vec<fidel_core::Contour> {
+    op.run()
+}
+
 /// Set the zone a deform lands on and how far it pulls.
 #[tauri::command]
 fn set_deform(
@@ -517,6 +524,7 @@ pub fn run() {
             relink_fidel,
             set_rule_variant,
             set_form,
+            path_op,
             set_deform,
             set_zone,
             list_components,

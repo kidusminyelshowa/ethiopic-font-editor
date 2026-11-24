@@ -43,6 +43,7 @@ import {
   shapeSection,
   showContextMenu,
   showMenu,
+  pathOpsSection,
   transformSection,
 } from "./editorSide";
 import { checkForUpdate } from "./updater";
@@ -1214,6 +1215,7 @@ function renderEditorSide(ed: GlyphEditor) {
   }
   sections.push(el("h3", { class: "section-label" }, "Selection"), selBox);
   sections.push(...transformSection(ed));
+  sections.push(...pathOpsSection(ed));
   sections.push(...shapeSection(ed));
 
   // Metrics: sidebearings and width, for bases and symbols.

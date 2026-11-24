@@ -4,6 +4,7 @@
 // so the editor only wires them up.
 
 import { clone, fromNodes, neighbour, rebuilt, toNodes, type Contour, type Node, type Vec2 } from "./geometry";
+import { insertPoint, pointAt, segments } from "./pathops";
 
 const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
 const add = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x + b.x, y: a.y + b.y });
@@ -516,4 +517,77 @@ function reparam(pts: Vec2[], first: number, last: number, u: number[], b: Vec2[
     if (Math.abs(den) < 1e-12) return t;
     return Math.min(1, Math.max(0, t - num / den));
   });
+}
+
+// ---------- Corners ----------
+
+/**
+ * Round (or cut straight across) the selected corner points: each corner is
+ * replaced by a curve, or a line, between two points `radius` units back
+ * along its segments. Curved segments are split where they reach that
+ * distance, so their shape is kept.
+ */
+export function roundCorners(c: Contour, ids: Set<number>, radius: number, style: "round" | "chamfer"): Contour {
+  let cur = clone(c);
+  for (const id of ids) {
+    const nodes = toNodes(cur);
+    const k = nodes.findIndex((nd) => nd.id === id);
+    if (k < 0 || nodes[k].smooth) continue;
+    if (cur.open && (k === 0 || k === nodes.length - 1)) continue;
+    const corner = nodes[k].pos;
+    // Split the segment after the corner, then the one before (indices shift).
+    const after = splitAtDistance(cur, k, corner, radius, "after");
+    if (!after) continue;
+    cur = after.contour;
+    const before = splitAtDistance(cur, k, corner, radius, "before");
+    if (!before) continue;
+    cur = before.contour;
+    const ns = toNodes(cur);
+    const ci = ns.findIndex((nd) => nd.id === id);
+    const a = ns[(ci - 1 + ns.length) % ns.length];
+    const b = ns[(ci + 1) % ns.length];
+    const dirA = unit(a.out ? sub(a.out.pos, a.pos) : sub(corner, a.pos));
+    const dirB = unit(b.in ? sub(b.in.pos, b.pos) : sub(corner, b.pos));
+    let next = maxPointId(cur) + 1;
+    if (style === "chamfer") {
+      delete a.out;
+      delete b.in;
+    } else {
+      // A circular arc: handle length from the turning angle.
+      const turn = Math.acos(Math.max(-1, Math.min(1, -dot(dirA, dirB))));
+      const t = (dist(a.pos, corner) + dist(b.pos, corner)) / 2;
+      const r = turn > 1e-3 ? t / Math.tan(turn / 2) : t;
+      const h = turn > 1e-3 ? (4 / 3) * Math.tan(turn / 4) * r : t * 0.55;
+      a.out = { id: a.out?.id ?? next++, pos: r2(add(a.pos, mul(dirA, h))) };
+      b.in = { id: b.in?.id ?? next++, pos: r2(add(b.pos, mul(dirB, h))) };
+      a.smooth = !!a.in;
+      b.smooth = !!b.out;
+    }
+    ns.splice(ci, 1);
+    cur = rebuilt(cur, ns, next);
+  }
+  return cur;
+}
+
+/** Add a point on the segment before or after node k, `d` units from `from`. */
+function splitAtDistance(c: Contour, k: number, from: Vec2, d: number, side: "before" | "after"): { contour: Contour } | null {
+  const nodes = toNodes(c);
+  const n = nodes.length;
+  const segs = segments(c);
+  const si = side === "after" ? k : (k - 1 + n) % n;
+  const s = segs[si];
+  if (!s) return null;
+  const far = side === "after" ? s.pts[s.pts.length - 1] : s.pts[0];
+  if (dist(far, from) <= d + 0.5) return null;
+  // Bisection on the parameter for the point d units from the corner.
+  let lo = 0;
+  let hi = 1;
+  const near = (t: number) => dist(pointAt(s.pts, side === "after" ? t : 1 - t), from);
+  for (let i = 0; i < 40; i++) {
+    const m = (lo + hi) / 2;
+    if (near(m) < d) lo = m;
+    else hi = m;
+  }
+  const t = (lo + hi) / 2;
+  return { contour: insertPoint(c, si, side === "after" ? t : 1 - t).contour };
 }
