@@ -350,6 +350,7 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Reverse direction", keys: "Ctrl Shift R", run: () => ed.reverseDirection() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Tidy up", run: () => ed.tidyUp() },
       { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
       ...(contours.length > 1
         ? [
@@ -370,6 +371,7 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Select all", keys: "Ctrl A", run: () => ed.selectAll() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Tidy up", run: () => ed.tidyUp() },
       { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
       { label: "Round coordinates", run: () => ed.roundCoordinates() },
     );
@@ -497,6 +499,7 @@ export function pathOpsSection(ed: GlyphEditor): Node[] {
     "div",
     { class: "button-row" },
     btn("Remove overlap", "Merge overlapping paths into one outline (Ctrl Shift O)", () => void ed.removeOverlap()),
+    btn("Tidy up", "Merge doubled points, straighten flat curves and drop points in the middle of straight lines", () => ed.tidyUp()),
     btn("Union", "Merge the selected paths", () => void ed.booleanOp("union"), closed < 2),
     btn("Subtract", "Cut the frontmost selected path out of the others", () => void ed.booleanOp("subtract"), closed < 2),
     btn("Intersect", "Keep only where the selected paths overlap", () => void ed.booleanOp("intersect"), closed < 2),

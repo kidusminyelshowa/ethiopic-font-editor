@@ -591,3 +591,115 @@ function splitAtDistance(c: Contour, k: number, from: Vec2, d: number, side: "be
   const t = (lo + hi) / 2;
   return { contour: insertPoint(c, si, side === "after" ? t : 1 - t).contour };
 }
+
+// ---------- Eraser and tidy up ----------
+
+/**
+ * Remove the segments with the given indices (as `segments(c)` numbers them).
+ * What is left comes back as open paths; the first keeps the contour's id and
+ * the rest take ids from `freeId` up.
+ */
+export function eraseSegments(c: Contour, touched: Set<number>, freeId: number): Contour[] {
+  const nodes = toNodes(c);
+  const segs = segments(c);
+  if (!touched.size) return [clone(c)];
+  if (segs.every((_, k) => touched.has(k))) return [];
+  const m = segs.length;
+  // Walk from the segment after a removed one (for a closed path) so no run wraps.
+  let start = 0;
+  if (!c.open) {
+    const firstGone = [...touched].sort((a, b) => a - b)[0];
+    start = (firstGone + 1) % m;
+  }
+  const runs: number[][] = [];
+  let run: number[] = [];
+  for (let i = 0; i < m; i++) {
+    const k = (start + i) % m;
+    if (touched.has(k)) {
+      if (run.length) runs.push(run);
+      run = [];
+    } else run.push(k);
+  }
+  if (run.length) runs.push(run);
+  let next = maxPointId(c) + 1;
+  const copy = (nd: Node): Node => ({
+    id: next++,
+    pos: { ...nd.pos },
+    smooth: nd.smooth,
+    ...(nd.in ? { in: { id: next++, pos: { ...nd.in.pos } } } : {}),
+    ...(nd.out ? { out: { id: next++, pos: { ...nd.out.pos } } } : {}),
+  });
+  let id = freeId;
+  return runs.map((r, ri) => {
+    const picked = [...r.map((k) => nodes[segs[k].from]), nodes[segs[r[r.length - 1]].to]].map(copy);
+    picked[0].smooth = false;
+    picked[picked.length - 1].smooth = false;
+    return named(c, fromNodes(picked, ri === 0 ? c.id : id++, c.part, next, true));
+  });
+}
+
+/**
+ * Tidy a path: merge points that sit on top of each other, turn curves whose
+ * handles are both retracted into lines, and drop corner points in the middle
+ * of a straight run. Returns the contour unchanged when there is nothing to do.
+ */
+export function tidyUp(c: Contour, tolerance = 0.5): Contour {
+  let nodes = toNodes(c).map((nd) => clone(nd));
+  const n0 = nodes.length;
+  // Handles that sit on their point are no handles.
+  for (const nd of nodes) {
+    if (nd.in && dist(nd.in.pos, nd.pos) < tolerance) nd.in.pos = { ...nd.pos };
+    if (nd.out && dist(nd.out.pos, nd.pos) < tolerance) nd.out.pos = { ...nd.pos };
+  }
+  // Coincident neighbours merge: the first keeps its incoming handle, the second's outgoing one.
+  const merged: Node[] = [];
+  for (const nd of nodes) {
+    const prev = merged[merged.length - 1];
+    if (prev && dist(prev.pos, nd.pos) < tolerance) {
+      if (nd.out) prev.out = nd.out;
+      else delete prev.out;
+      continue;
+    }
+    merged.push(nd);
+  }
+  if (!c.open && merged.length > 2 && dist(merged[0].pos, merged[merged.length - 1].pos) < tolerance) {
+    const last = merged.pop()!;
+    if (last.in) merged[0].in = last.in;
+  }
+  nodes = merged;
+  // A segment is a line when neither end has a real handle.
+  const real = (h: { pos: Vec2 } | undefined, at: Vec2) => !!h && dist(h.pos, at) >= tolerance;
+  const count = nodes.length;
+  for (let k = 0; k < count; k++) {
+    const a = nodes[k];
+    const b = nodes[(k + 1) % count];
+    if (c.open && k === count - 1) break;
+    if (!real(a.out, a.pos) && !real(b.in, b.pos)) {
+      delete a.out;
+      delete b.in;
+    }
+  }
+  // Corner points in the middle of a straight run go.
+  const keep = nodes.filter((nd, k) => {
+    if (nodes.length <= 3) return true;
+    if (c.open && (k === 0 || k === nodes.length - 1)) return true;
+    if (nd.in || nd.out) return true;
+    const p = nodes[(k - 1 + nodes.length) % nodes.length];
+    const q = nodes[(k + 1) % nodes.length];
+    if (p.out || q.in) return true;
+    const d = sub(q.pos, p.pos);
+    const l = len(d);
+    if (l < 1e-9) return false;
+    const off = Math.abs(cross(d, sub(nd.pos, p.pos))) / l;
+    const t = dot(d, sub(nd.pos, p.pos)) / (l * l);
+    return !(off < tolerance && t > 0 && t < 1);
+  });
+  const same =
+    keep.length === n0 &&
+    keep.every((nd, k) => {
+      const o = toNodes(c)[k];
+      return nd.id === o.id && !!nd.in === !!o.in && !!nd.out === !!o.out;
+    });
+  if (same) return clone(c);
+  return rebuilt(c, keep, maxPointId(c) + 1);
+}

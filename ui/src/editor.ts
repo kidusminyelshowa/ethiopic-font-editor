@@ -57,6 +57,7 @@ import {
   rotateAbout,
   roundedRectContour,
   scaleAbout,
+  pointAt,
   segments,
   selectionBox,
   setSegmentKind,
@@ -75,19 +76,21 @@ import {
   closePath,
   combTeeth,
   endOf,
+  eraseSegments,
   fitStroke,
   harmonize,
   joinPaths,
   moveTunni,
   powerNudge,
   roundCorners,
+  tidyUp,
   tunniPoint,
 } from "./curves";
 import { gridStep, onPrefs, prefs } from "./prefs";
 import { importSvg, SvgImportError } from "./svgImport";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
-export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | ShapeKind | "hand";
+export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | ShapeKind | "hand";
 export type ShapeKind = "rect" | "rounded" | "ellipse" | "polygon" | "star";
 export const SHAPES: ShapeKind[] = ["rect", "rounded", "ellipse", "polygon", "star"];
 export const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -102,6 +105,16 @@ const isShape = (t: Tool): t is ShapeKind => (SHAPES as string[]).includes(t);
 /** Snap distance, in screen pixels. */
 const SNAP_PX = 6;
 const HIT_PX = 8;
+/** Half the width of the eraser stroke, in screen pixels. */
+const ERASER_RADIUS = 6;
+
+function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
 /** Transform handle size and the ring outside a corner that rotates. */
 const HANDLE_PX = 7;
 const ROTATE_PX = 18;
@@ -146,6 +159,7 @@ type Gesture =
   | { kind: "deform"; i: number; start: Vec2; d: number }
   | { kind: "pencil"; pts: Vec2[]; startScreen: Vec2 }
   | { kind: "knife"; start: Vec2; now: Vec2 }
+  | { kind: "eraser"; pts: Vec2[] }
   | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
@@ -827,6 +841,11 @@ export class GlyphEditor {
       this.gesture = { kind: "knife", start: font, now: font };
       return;
     }
+    if (this.tool === "eraser") {
+      this.gesture = { kind: "eraser", pts: [font] };
+      this.render();
+      return;
+    }
 
     // A Tunni point: drag to change both handles of its curve.
     const tun = (e.target as Element | null)?.closest?.("[data-tunni]")?.getAttribute("data-tunni");
@@ -1095,6 +1114,9 @@ export class GlyphEditor {
         g.now = e.shiftKey ? constrain45(g.start, font) : font;
         break;
       }
+      case "eraser":
+        g.pts.push(font);
+        break;
       case "pencil": {
         const last = g.pts[g.pts.length - 1];
         if (Math.hypot(font.x - last.x, font.y - last.y) * this.view.scale > 1.5) g.pts.push(font);
@@ -1274,6 +1296,8 @@ export class GlyphEditor {
     } else if (g.kind === "knife") {
       if (Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 4) void this.knife(g.start, g.now);
       else this.render();
+    } else if (g.kind === "eraser") {
+      this.erase(g.pts);
     } else if (g.kind === "pencil") {
       this.finishPencil(g.pts, g.startScreen, this.screenOf(e));
     } else if (g.kind === "tunni") {
@@ -2179,6 +2203,53 @@ export class GlyphEditor {
     await this.runOp(which, { op: "knife", contours: which.map((ci) => this.contours[ci]), from, to, firstId: nextContourId(this.contours) }, "Knife");
   }
 
+  /**
+   * Eraser: remove every path segment the stroke passed over. Closed paths
+   * open where they were erased; open paths split.
+   */
+  erase(trail: Vec2[]): void {
+    const r = ERASER_RADIUS / this.view.scale;
+    const near = (p: Vec2) => {
+      if (trail.length === 1) return Math.hypot(p.x - trail[0].x, p.y - trail[0].y) <= r;
+      for (let i = 1; i < trail.length; i++) {
+        if (distToSegment(p, trail[i - 1], trail[i]) <= r) return true;
+      }
+      return false;
+    };
+    let freeId = nextContourId(this.contours);
+    let changed = false;
+    const next: Contour[] = [];
+    for (const c of this.contours) {
+      if (c.locked || c.hidden) {
+        next.push(c);
+        continue;
+      }
+      const touched = new Set<number>();
+      segments(c).forEach((seg, k) => {
+        for (let t = 0; t <= 1.0001; t += 1 / 16) if (near(pointAt(seg.pts, t))) return void touched.add(k);
+      });
+      if (!touched.size) {
+        next.push(c);
+        continue;
+      }
+      changed = true;
+      const pieces = eraseSegments(c, touched, freeId);
+      freeId = Math.max(freeId, ...pieces.map((p) => p.id + 1));
+      next.push(...pieces);
+    }
+    if (!changed) return this.render();
+    this.contours = next;
+    this.selection.clear();
+    this.commit("Erase");
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Merge doubled points, straighten flat curves and drop in-line points. */
+  tidyUp(): void {
+    this.editSelectedContours((c) => tidyUp(c), "Tidy up", true);
+  }
+
   /** Round or chamfer the selected corner points. */
   roundCorners(radius: number, style: "round" | "chamfer"): void {
     this.editSelectedContours((c, ids) => roundCorners(c, ids, radius, style), style === "round" ? "Round corners" : "Chamfer corners");
@@ -2641,6 +2712,7 @@ export class GlyphEditor {
       else if (k === "p") this.setTool("pen");
       else if (k === "b") this.setTool("pencil");
       else if (k === "k") this.setTool("knife");
+      else if (e.shiftKey && k === "e") this.setTool("eraser");
       else if (e.shiftKey && k === "j") this.joinSelection();
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
@@ -2940,6 +3012,12 @@ export class GlyphEditor {
       }
       const first = pts[0];
       parts.push(`<circle class="pen-start" cx="${sx(first.pos.x)}" cy="${sy(first.pos.y)}" r="8"/>`);
+    }
+
+    // Eraser trail in progress.
+    if (g?.kind === "eraser") {
+      const trail = g.pts.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ");
+      parts.push(`<polyline class="eraser-trail" points="${trail}"/>`);
     }
 
     // Knife line in progress.

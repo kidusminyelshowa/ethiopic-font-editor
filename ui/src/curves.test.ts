@@ -7,6 +7,7 @@ import {
   combTeeth,
   curvatureAt,
   endOf,
+  eraseSegments,
   fitStroke,
   harmonize,
   joinPaths,
@@ -14,6 +15,7 @@ import {
   powerNudge,
   roundCorners,
   tensions,
+  tidyUp,
   tunniPoint,
 } from "./curves";
 import { contourPath, fromNodes, rectContour, toNodes, validate, type Contour } from "./geometry";
@@ -174,5 +176,41 @@ describe("corners", () => {
     const out = roundCorners(c, new Set([c.points[0].id]), 20, "chamfer");
     expect(out.points.every((p) => p.kind === "line")).toBe(true);
     expect(toNodes(out)).toHaveLength(5);
+  });
+});
+
+describe("eraser and tidy up", () => {
+  it("erasing one side of a square leaves an open path of three sides", () => {
+    const pieces = eraseSegments(square(), new Set([1]), 5);
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].open).toBe(true);
+    expect(segments(pieces[0])).toHaveLength(3);
+    expect(validate(pieces[0])).toBeNull();
+  });
+
+  it("erasing two opposite sides leaves two open pieces with their own ids", () => {
+    const pieces = eraseSegments(square(), new Set([0, 2]), 5);
+    expect(pieces.map((p) => p.id)).toEqual([0, 5]);
+    expect(pieces.every((p) => p.open && segments(p).length === 1)).toBe(true);
+  });
+
+  it("tidy up drops doubled and in-line points", () => {
+    const nodes = toNodes(square());
+    const mid = { id: 50, pos: { x: 50, y: 0 }, smooth: false };
+    const dup = { id: 51, pos: { x: 100, y: 0.2 }, smooth: false };
+    const messy = fromNodes([nodes[0], mid, nodes[1], dup, nodes[2], nodes[3]], 0, null, 60);
+    const tidy = tidyUp(messy);
+    expect(toNodes(tidy)).toHaveLength(4);
+    expect(validate(tidy)).toBeNull();
+    expect(tidyUp(square()).points).toEqual(square().points);
+  });
+
+  it("tidy up turns a curve with retracted handles into a line", () => {
+    const nodes = toNodes(square());
+    nodes[0].out = { id: 70, pos: { ...nodes[0].pos } };
+    nodes[1].in = { id: 71, pos: { ...nodes[1].pos } };
+    const c = fromNodes(nodes, 0, null, 80);
+    expect(segments(c)[0].pts).toHaveLength(4);
+    expect(segments(tidyUp(c)).every((s) => s.pts.length === 2)).toBe(true);
   });
 });
