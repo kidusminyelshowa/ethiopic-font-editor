@@ -290,6 +290,7 @@ export const api = {
   detachFidel: (family: string, order: string) => invoke<FidelDetail>("detach_fidel", { family, order }),
   relinkFidel: (family: string, order: string) => invoke<FidelDetail>("relink_fidel", { family, order }),
   alterationImpacts: (id: string) => invoke<ImpactView[]>("alteration_impacts", { id }),
+  baseImpacts: (id: string) => invoke<ImpactView[]>("base_impacts", { id }),
   forkAlteration: (id: string, scope: Scope) => invoke<string>("fork_alteration", { id, scope }),
   rejoinAlteration: (id: string) => invoke<string>("rejoin_alteration", { id }),
   exportFont: (path: string) => invoke<ExportSummary>("export_font", { path }),

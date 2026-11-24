@@ -229,6 +229,14 @@ export function historyRows(ed: GlyphEditor): HTMLElement[] {
   const { labels, applied } = ed.steps;
   if (!labels.length) return [];
   const rows: HTMLElement[] = [el("div", { class: "tree-section" }, "History")];
+  // On a base or an alteration, each step reaches every fidel built from it.
+  if (ed.reach?.length) {
+    const live = ed.reach.filter((r) => r.effect !== "untouched");
+    const kept = ed.reach.length - live.length;
+    const chars = live.map((r) => r.codepoint ?? `${r.familyName} ${r.order}`).join(" ");
+    const text = `Reaches ${live.length} fidel${live.length === 1 ? "" : "s"}${kept ? `, ${kept} drawn by hand stay` : ""}`;
+    rows.push(el("div", { class: "history-reach", title: chars }, text));
+  }
   const opened = el("div", { class: `history-row${applied === 0 ? " current" : ""}`, role: "button", tabindex: "0" }, "Opened");
   opened.addEventListener("click", () => ed.jumpTo(0));
   rows.push(opened);

@@ -363,8 +363,17 @@ pub struct ImpactView {
 
 /// In Unicode order, which is the traditional fidel order.
 pub fn alteration_impacts(project: &Project, id: &str) -> Vec<ImpactView> {
+    impacts_of(project, &Change::Alteration(id.to_string()))
+}
+
+/// The fidel an edit to a base reaches, in Unicode order.
+pub fn base_impacts(project: &Project, id: &str) -> Vec<ImpactView> {
+    impacts_of(project, &Change::Base(id.to_string()))
+}
+
+fn impacts_of(project: &Project, change: &Change) -> Vec<ImpactView> {
     let mut out: Vec<ImpactView> = project
-        .impacts(&Change::Alteration(id.to_string()))
+        .impacts(change)
         .into_iter()
         .map(|i| ImpactView {
             family_name: project.families.get(&i.family).map(|f| f.name.clone()).unwrap_or_default(),

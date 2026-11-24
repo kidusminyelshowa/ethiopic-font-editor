@@ -2132,3 +2132,9 @@ body.editing .side-list {
   background: var(--ink);
   color: var(--card);
 }
+
+.history-reach {
+  padding: 0 10px 4px 22px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}

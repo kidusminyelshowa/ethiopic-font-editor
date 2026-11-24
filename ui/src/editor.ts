@@ -11,6 +11,7 @@ import {
   type DeformHandle,
   type DrawingTarget,
   type DrawingView,
+  type ImpactView,
   type Part,
   type PathOp,
   type StrokeJoin,
@@ -260,6 +261,8 @@ export class GlyphEditor {
   private pivot: Vec2 | null = null;
   /** The drawing's own guides and the global ones. */
   guides: { local: Guide[]; global: Guide[] } = { local: [], global: [] };
+  /** For a base or an alteration: the fidel its edits reach. */
+  reach: ImpactView[] | null = null;
   /** The guide picked on the canvas, shown in the side panel. */
   guideSel: { scope: GuideScope; id: number } | null = null;
   /** The measuring line, kept until Escape or another tool. */
@@ -338,7 +341,10 @@ export class GlyphEditor {
       this.measureLine = null;
       this.fit();
     }
-    if (!sameDrawing) void this.loadGuides();
+    if (!sameDrawing) {
+      void this.loadGuides();
+      void this.loadReach();
+    }
     this.title.textContent = this.drawing.title;
     this.subtitle.textContent = this.drawing.subtitle;
     this.render();
@@ -357,6 +363,22 @@ export class GlyphEditor {
       this.guides = { local: [], global: [] };
     }
     this.render();
+  }
+
+  /** Which fidel edits to this base or alteration reach, for the history panel. */
+  private async loadReach(): Promise<void> {
+    const t = this.target;
+    this.reach = null;
+    if (t?.kind !== "base" && t?.kind !== "alteration") return;
+    try {
+      const r = t.kind === "base" ? await api.baseImpacts(t.id) : await api.alterationImpacts(t.id);
+      if (this.target === t) {
+        this.reach = r;
+        this.host.renderSide(this);
+      }
+    } catch {
+      // Not shown; editing still works.
+    }
   }
 
   private saveGuides(): void {

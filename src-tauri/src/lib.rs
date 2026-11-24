@@ -456,6 +456,12 @@ fn alteration_impacts(state: State<'_, AppState>, id: String) -> Vec<editor::Imp
     editor::alteration_impacts(&state.project(), &id)
 }
 
+/// The fidel an edit to a base reaches.
+#[tauri::command]
+fn base_impacts(state: State<'_, AppState>, id: String) -> Vec<editor::ImpactView> {
+    editor::base_impacts(&state.project(), &id)
+}
+
 /// Give the fidel in `scope` their own copy of the alteration; returns its id.
 #[tauri::command]
 fn fork_alteration(state: State<'_, AppState>, id: String, scope: Scope) -> CmdResult<String> {
@@ -542,6 +548,7 @@ pub fn run() {
             export_font,
             proof_font,
             alteration_impacts,
+            base_impacts,
             fork_alteration,
             rejoin_alteration,
             set_built_on,
