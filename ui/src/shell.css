@@ -2138,3 +2138,80 @@ body.editing .side-list {
   font-size: 11px;
   color: var(--ink-faint);
 }
+
+/* ---------- Line of text and tabs (ETH-13) ---------- */
+
+.canvas .neighbour {
+  fill: var(--ink);
+  fill-opacity: 0.82;
+  cursor: pointer;
+}
+.canvas .neighbour-box {
+  fill: transparent;
+  cursor: pointer;
+}
+.canvas .neighbour-box:hover + .neighbour,
+.canvas .neighbour:hover {
+  fill-opacity: 1;
+}
+.editor-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.editor-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 160px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: 500 12px var(--sans), var(--ethiopic);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.editor-tab:hover {
+  background: var(--cell-hover);
+}
+.editor-tab.active {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+.editor-tab.add {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.editor-tab-close {
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1;
+}
+.editor-tab-close:hover {
+  color: var(--ink);
+}
+.text-line {
+  flex: 1 1 160px;
+  min-width: 100px;
+  max-width: 320px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: 15px var(--ethiopic);
+}
+.text-line:focus {
+  outline: none;
+  border-color: var(--orange);
+}

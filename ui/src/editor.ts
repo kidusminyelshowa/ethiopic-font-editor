@@ -197,7 +197,16 @@ export interface EditorHost {
   renderSide(editor: GlyphEditor): void;
   /** Open the canvas context menu at a screen point. */
   contextMenu(editor: GlyphEditor, at: { x: number; y: number }): void;
+  /** A character's drawing and current outline, for the line of text. */
+  glyphFor(ch: string): { target: DrawingTarget; d: string | null; advance: number } | null;
+  /** The character a drawing makes, if any. */
+  charOf(target: DrawingTarget): string | null;
+  /** Open another drawing in the editor. */
+  openTarget(target: DrawingTarget): void;
 }
+
+/** Width of a space in the line of text, as a share of the em. */
+const SPACE_EM = 0.25;
 
 const key = (ci: number, pi: number) => `${ci}:${pi}`;
 
@@ -261,6 +270,9 @@ export class GlyphEditor {
   private pivot: Vec2 | null = null;
   /** The drawing's own guides and the global ones. */
   guides: { local: Guide[]; global: Guide[] } = { local: [], global: [] };
+  /** The line of text the edited glyph sits in, and where it sits. */
+  textLine = "";
+  textIndex = -1;
   /** For a base or an alteration: the fidel its edits reach. */
   reach: ImpactView[] | null = null;
   /** The guide picked on the canvas, shown in the side panel. */
@@ -345,10 +357,76 @@ export class GlyphEditor {
       void this.loadGuides();
       void this.loadReach();
     }
+    this.placeInText();
     this.title.textContent = this.drawing.title;
     this.subtitle.textContent = this.drawing.subtitle;
     this.render();
     this.host.renderSide(this);
+  }
+
+  // ---------- Line of text ----------
+
+  /** Set the line of text; the edited glyph is shown at its place in it. */
+  setText(text: string): void {
+    this.textLine = [...text].slice(0, 80).join("");
+    this.placeInText();
+    this.render();
+  }
+
+  /** Find the edited glyph in the line: the occurrence nearest where it was. */
+  private placeInText(): void {
+    const ch = this.target ? this.host.charOf(this.target) : null;
+    const chars = [...this.textLine];
+    if (!ch) {
+      this.textIndex = -1;
+      return;
+    }
+    if (chars[this.textIndex] === ch) return;
+    let best = -1;
+    chars.forEach((c, i) => {
+      if (c === ch && (best < 0 || Math.abs(i - this.textIndex) < Math.abs(best - this.textIndex))) best = i;
+    });
+    this.textIndex = best;
+  }
+
+  /** Edit the glyph `step` places along the line (skipping spaces and characters with no drawing). */
+  stepInText(step: number): void {
+    const chars = [...this.textLine];
+    for (let i = this.textIndex + step; i >= 0 && i < chars.length; i += step) {
+      const g = this.host.glyphFor(chars[i]);
+      if (!g) continue;
+      this.textIndex = i;
+      this.host.openTarget(g.target);
+      return;
+    }
+  }
+
+  /** The other glyphs of the line, laid out around the edited one at their advances. */
+  private neighbours(): { i: number; x: number; d: string; advance: number }[] {
+    if (this.textIndex < 0 || !this.drawing) return [];
+    const chars = [...this.textLine];
+    const upm = this.drawing.metrics.units_per_em || 1000;
+    const glyph = (ch: string) => {
+      if (/\s/.test(ch)) return { d: "", advance: upm * SPACE_EM };
+      const g = this.host.glyphFor(ch);
+      return g ? { d: g.d ?? "", advance: g.advance } : null;
+    };
+    const out: { i: number; x: number; d: string; advance: number }[] = [];
+    let x = 0;
+    for (let i = this.textIndex - 1; i >= 0; i--) {
+      const g = glyph(chars[i]);
+      if (!g) continue;
+      x -= g.advance;
+      out.push({ i, x, ...g });
+    }
+    x = this.frameWidth ?? 0;
+    for (let i = this.textIndex + 1; i < chars.length; i++) {
+      const g = glyph(chars[i]);
+      if (!g) continue;
+      out.push({ i, x, ...g });
+      x += g.advance;
+    }
+    return out;
   }
 
   // ---------- Guides ----------
@@ -980,6 +1058,17 @@ export class GlyphEditor {
       this.gesture = { kind: "eraser", pts: [font] };
       this.render();
       return;
+    }
+
+    // A glyph of the line of text: edit it.
+    const ti = (e.target as Element | null)?.closest?.("[data-ti]")?.getAttribute("data-ti");
+    if (ti != null && (this.tool === "select" || this.tool === "direct")) {
+      const g = this.host.glyphFor([...this.textLine][Number(ti)] ?? "");
+      if (g) {
+        this.textIndex = Number(ti);
+        this.host.openTarget(g.target);
+        return;
+      }
     }
 
     // A guide under the pointer (and no point): pick it, and drag it unless locked.
@@ -2864,6 +2953,11 @@ export class GlyphEditor {
         else if (d) this.nudge(d[0], d[1]);
         return;
       }
+      if (k === "pagedown" || k === "pageup") {
+        e.preventDefault();
+        this.stepInText(k === "pagedown" ? 1 : -1);
+        return;
+      }
       if (k === "tab") {
         e.preventDefault();
         this.stepPoint(e.shiftKey ? -1 : 1);
@@ -3155,6 +3249,16 @@ export class GlyphEditor {
     }
     if (this.snapLines.y !== undefined) {
       parts.push(`<line class="snap-line" x1="0" x2="${W}" y1="${sy(this.snapLines.y)}" y2="${sy(this.snapLines.y)}"/>`);
+    }
+
+    // The rest of the line of text, filled, to judge the glyph in context.
+    for (const n of this.neighbours()) {
+      if (!n.d) continue;
+      // The whole advance box is clickable, not just the ink.
+      parts.push(
+        `<rect class="neighbour-box" data-ti="${n.i}" x="${sx(n.x)}" y="${sy(m.pa_top)}" width="${n.advance * scale}" height="${(m.pa_top - m.pa_bottom) * scale}"/>`,
+        `<path class="neighbour" data-ti="${n.i}" transform="matrix(${scale} 0 0 ${-scale} ${tx + n.x * scale} ${ty})" d="${n.d}"/>`,
+      );
     }
 
     // Filled outline (all visible contours together, so counters cut out),

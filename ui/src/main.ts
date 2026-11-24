@@ -963,6 +963,149 @@ const editor = new GlyphEditor(ui.editorView, {
   renderSide: (ed) => renderEditorSide(ed),
   contextMenu: (ed, at) => showContextMenu(ed, at),
   alterationName: (id) => state.alterations.find((a) => a.id === id)?.name ?? id,
+  glyphFor: (ch) => {
+    const g = glyphIndex().get(ch);
+    return g ? { target: g.target, d: g.outline?.d ?? null, advance: g.outline?.advanceWidth ?? state.grid?.metrics.units_per_em ?? 1000 } : null;
+  },
+  charOf: (target) => charOf(target),
+  openTarget: (target) => void openDrawing(target),
+});
+// The editor's line of text updates when outlines change.
+const redrawLine = () => {
+  if (state.view === "editor" && editor.textIndex >= 0) editor.render();
+};
+
+/** Every character the project draws, with its drawing and outline. */
+let glyphIndexCache: { grid: FidelGrid | null; map: Map<string, { target: DrawingTarget; outline?: { d: string; advanceWidth: number } }> } = {
+  grid: null,
+  map: new Map(),
+};
+function glyphIndex() {
+  if (glyphIndexCache.grid === state.grid) return glyphIndexCache.map;
+  const map = new Map<string, { target: DrawingTarget; outline?: { d: string; advanceWidth: number } }>();
+  for (const row of state.grid?.rows ?? []) {
+    for (const cell of row.cells) {
+      if (cell.codepoint && !map.has(cell.codepoint)) {
+        map.set(cell.codepoint, { target: { kind: "fidel", id: `${row.family}/${cell.order}` }, outline: cell.outline });
+      }
+    }
+  }
+  for (const sym of state.grid?.symbols ?? []) {
+    if (!map.has(sym.codepoint)) map.set(sym.codepoint, { target: { kind: "symbol", id: sym.id }, outline: sym.outline });
+  }
+  glyphIndexCache = { grid: state.grid, map };
+  return map;
+}
+
+/** The character a drawing makes: a fidel's, a symbol's, or a base's first order. */
+function charOf(target: DrawingTarget): string | null {
+  const grid = state.grid;
+  if (!grid) return null;
+  if (target.kind === "symbol") return grid.symbols.find((s) => s.id === target.id)?.codepoint ?? null;
+  if (target.kind === "fidel") {
+    const [family, order] = target.id.split("/");
+    return grid.rows.find((r) => r.family === family)?.cells.find((c) => c.order === order)?.codepoint ?? null;
+  }
+  if (target.kind === "base") return grid.rows.find((r) => r.family === target.id)?.cells[0]?.codepoint ?? null;
+  return null;
+}
+
+// ---------- Editor tabs ----------
+
+/** Open drawings, each with its own line of text, as in Glyphs' edit tabs. */
+interface EditorTab {
+  target: DrawingTarget | null;
+  text: string;
+}
+const tabs: EditorTab[] = [{ target: null, text: "" }];
+let currentTab = 0;
+const tabBar = document.getElementById("editor-tabs")!;
+const textInput = document.getElementById("text-line") as HTMLInputElement;
+
+function tabLabel(t: EditorTab): string {
+  if (t.text.trim()) return [...t.text.trim()].slice(0, 12).join("");
+  if (!t.target) return "New tab";
+  return charOf(t.target) ?? t.target.id.split("/")[0];
+}
+
+function renderTabs() {
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  const chips = tabs.map((t, i) => {
+    const chip = el("button", { class: `editor-tab${i === currentTab ? " active" : ""}`, role: "tab", "aria-selected": String(i === currentTab), title: "Ctrl T new tab, Ctrl W close" }, tabLabel(t));
+    chip.addEventListener("click", () => switchTab(i));
+    if (tabs.length > 1) {
+      const x = el("span", { class: "editor-tab-close", role: "button", "aria-label": "Close tab", title: "Close (Ctrl W)" }, "×");
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTab(i);
+      });
+      chip.append(x);
+    }
+    return chip;
+  });
+  const add = el("button", { class: "editor-tab add", title: "New tab (Ctrl T)", "aria-label": "New tab" }, "+");
+  add.addEventListener("click", () => newTab());
+  tabBar.replaceChildren(...chips, add);
+}
+
+function switchTab(i: number) {
+  if (i === currentTab || !tabs[i]) return;
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  currentTab = i;
+  const t = tabs[i];
+  textInput.value = t.text;
+  editor.setText(t.text);
+  if (t.target) void openDrawing(t.target);
+  renderTabs();
+}
+
+function newTab() {
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  tabs.push({ target: editor.target, text: editor.textLine });
+  currentTab = tabs.length - 1;
+  renderTabs();
+  textInput.focus();
+  textInput.select();
+}
+
+function closeTab(i: number) {
+  if (tabs.length < 2) return;
+  tabs.splice(i, 1);
+  const next = Math.min(i === currentTab ? i : currentTab > i ? currentTab - 1 : currentTab, tabs.length - 1);
+  currentTab = -1;
+  switchTab(next);
+}
+
+textInput.addEventListener("input", () => {
+  editor.setText(textInput.value);
+  // Typing a line while nothing in it is open: open its first glyph.
+  if (editor.textIndex < 0) {
+    for (const ch of textInput.value) {
+      const g = glyphIndex().get(ch);
+      if (g) {
+        void openDrawing(g.target);
+        break;
+      }
+    }
+  }
+  renderTabs();
+});
+textInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === "Escape") textInput.blur();
+});
+window.addEventListener("keydown", (e) => {
+  if (state.view !== "editor" || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "t") {
+    e.preventDefault();
+    newTab();
+  } else if (k === "w" && tabs.length > 1) {
+    e.preventDefault();
+    closeTab(currentTab);
+  }
 });
 onRefresh((ed) => renderEditorSide(ed));
 bindViewMenu(ui.editorView);
@@ -979,6 +1122,7 @@ async function openDrawing(target: DrawingTarget) {
     }
     await editor.open(target, target.kind === "alteration" ? state.contextFamily : undefined);
     ui.drawingSelect.value = `${target.kind}:${target.id}`;
+    renderTabs();
     if (target.kind === "base") side.open.add(target.id);
     markSidebar();
   } catch (err) {
@@ -1022,6 +1166,7 @@ function scheduleSideRefresh() {
     await loadParts();
     state.grid = await api.fidelGrid();
     fillDrawingSelect();
+    redrawLine();
     if (state.view === "editor") renderEditorSide(editor);
   }, 120);
 }
