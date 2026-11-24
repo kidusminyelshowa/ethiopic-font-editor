@@ -467,6 +467,7 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Part labels", "showPartLabels"),
     check("Pa-height zones", "showZones"),
     check("Guides", "showGuides"),
+    check("Background layer", "showBackground"),
     check("Rulers", "showRulers"),
     check("Outline warnings", "showWarnings"),
     check("Tunni lines", "showTunni"),
@@ -597,6 +598,35 @@ export function guideSection(ed: GlyphEditor): Node[] {
         del,
       ),
       colors,
+    ),
+  ];
+}
+
+/** The background (mask) layer and a glyph to compare with. */
+export function backgroundSection(ed: GlyphEditor): Node[] {
+  const has = ed.background.length > 0;
+  const btn = (label: string, title: string, run: () => void, disabled = false) => {
+    const b = el("button", { class: "pill small ghost", title }, label);
+    b.disabled = disabled;
+    b.addEventListener("click", run);
+    return b;
+  };
+  const cmp = el("input", { type: "text", value: ed.compare, placeholder: "Glyph", "aria-label": "Compare with", spellcheck: "false", maxlength: "2" }) as HTMLInputElement;
+  cmp.addEventListener("keydown", (e) => e.stopPropagation());
+  cmp.addEventListener("input", () => ed.setCompare(cmp.value));
+  return [
+    el("h3", { class: "section-label", title: "Outlines kept behind the drawing, saved with the project and not exported" }, "Background"),
+    el(
+      "div",
+      { class: "side-box" },
+      el(
+        "div",
+        { class: "button-row" },
+        btn("Copy to background", "Keep a copy of the selection (or the whole drawing) behind it, before a risky edit", () => ed.copyToBackground()),
+        btn("Swap", "Swap the drawing with its background", () => ed.swapBackground(), !has),
+        btn("Clear", "Empty the background layer", () => ed.clearBackground(), !has),
+      ),
+      el("label", { class: "field compare-field", title: "Show another glyph's outline behind this one" }, el("span", {}, "Compare with"), cmp),
     ),
   ];
 }

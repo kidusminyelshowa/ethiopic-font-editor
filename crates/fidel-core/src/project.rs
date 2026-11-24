@@ -162,6 +162,10 @@ pub struct Project {
     /// Guides drawn in the editor, global and per drawing.
     #[serde(default, skip_serializing_if = "crate::guides::Guides::is_empty")]
     pub guides: crate::guides::Guides,
+    /// Background (mask) layers: outlines kept behind a drawing to compare
+    /// against, keyed like local guides (`base:la`). Not exported.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub backgrounds: BTreeMap<String, Vec<Contour>>,
 }
 
 pub type SymbolId = String;

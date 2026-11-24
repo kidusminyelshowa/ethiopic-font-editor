@@ -45,6 +45,7 @@ import {
   showMenu,
   pathOpsSection,
   guideSection,
+  backgroundSection,
   transformSection,
 } from "./editorSide";
 import { checkForUpdate } from "./updater";
@@ -1010,6 +1011,9 @@ function charOf(target: DrawingTarget): string | null {
   return null;
 }
 
+/** How dark a sketch pixel must be to be traced, 0 to 255. */
+let traceThreshold = 128;
+
 // ---------- Editor tabs ----------
 
 /** Open drawings, each with its own line of text, as in Glyphs' edit tabs. */
@@ -1369,6 +1373,7 @@ function renderEditorSide(ed: GlyphEditor) {
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
   if (d.target.kind === "base") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
   sections.push(...issuesSection(ed));
+  sections.push(...backgroundSection(ed));
 
   // Sketch.
   const sk = ed.sketch;
@@ -1388,9 +1393,12 @@ function renderEditorSide(ed: GlyphEditor) {
       ed.updateSketch({ unlocked: !sk.unlocked });
       renderEditorSide(ed);
     });
+    const trace = el("button", { class: "pill small", title: "Turn the dark parts of the sketch into editable outlines" }, "Trace");
+    trace.addEventListener("click", () => void ed.traceSketch(traceThreshold));
     sketchBox.append(
       remove,
       lock,
+      trace,
       el(
         "div",
         { class: "field-row" },
@@ -1399,6 +1407,7 @@ function renderEditorSide(ed: GlyphEditor) {
       ),
       rangeField("Opacity", sk.opacity, 0.05, 1, (v) => ed.updateSketch({ opacity: v })),
       rangeField("Size", sk.h / (metrics.pa_top - metrics.pa_bottom), 0.3, 2, (v) => ed.updateSketch({ scale: v })),
+      rangeField("Trace threshold", traceThreshold / 255, 0.1, 0.95, (v) => (traceThreshold = Math.round(v * 255))),
     );
   }
   sections.push(el("h3", { class: "section-label", title: "Unlock it to drag it on the canvas. Kept for this session only." }, "Sketch"), sketchBox);

@@ -19,6 +19,7 @@ export interface CanvasPrefs {
   showWarnings: boolean;
   showZones: boolean;
   showGuides: boolean;
+  showBackground: boolean;
   showRulers: boolean;
   /** Tunni lines on selected curves. */
   showTunni: boolean;
@@ -48,6 +49,7 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   showWarnings: true,
   showZones: true,
   showGuides: true,
+  showBackground: true,
   showRulers: true,
   showTunni: true,
   showComb: false,

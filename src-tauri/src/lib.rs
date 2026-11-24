@@ -264,6 +264,25 @@ fn set_guides(
     state.mark_dirty();
 }
 
+/// A drawing's background layer.
+#[tauri::command]
+fn get_background(state: State<'_, AppState>, drawing: String) -> Vec<fidel_core::Contour> {
+    state.project().backgrounds.get(&drawing).cloned().unwrap_or_default()
+}
+
+/// Replace a drawing's background layer; empty removes it.
+#[tauri::command]
+fn set_background(state: State<'_, AppState>, drawing: String, contours: Vec<fidel_core::Contour>) {
+    let mut project = state.project();
+    if contours.is_empty() {
+        project.backgrounds.remove(&drawing);
+    } else {
+        project.backgrounds.insert(drawing, contours);
+    }
+    drop(project);
+    state.mark_dirty();
+}
+
 #[derive(serde::Serialize)]
 struct GuidesView {
     local: Vec<fidel_core::guides::Guide>,
@@ -561,6 +580,8 @@ pub fn run() {
             set_zone,
             get_guides,
             set_guides,
+            get_background,
+            set_background,
             list_components,
             add_component,
             remove_component,

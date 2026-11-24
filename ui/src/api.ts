@@ -329,6 +329,8 @@ export const api = {
   /** A drawing's own guides and the global ones. */
   getGuides: (drawing: string) => invoke<{ local: Guide[]; global: Guide[] }>("get_guides", { drawing }),
   setGuides: (drawing: string, local: Guide[], global: Guide[]) => invoke<void>("set_guides", { drawing, local, global }),
+  getBackground: (drawing: string) => invoke<Contour[]>("get_background", { drawing }),
+  setBackground: (drawing: string, contours: Contour[]) => invoke<void>("set_background", { drawing, contours }),
   listComponents: () => invoke<ComponentSummary[]>("list_components"),
   addComponent: (name: string, kind: ComponentKind) => invoke<string>("add_component", { name, kind }),
   removeComponent: (id: string) => invoke<void>("remove_component", { id }),

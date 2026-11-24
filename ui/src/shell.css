@@ -2215,3 +2215,34 @@ body.editing .side-list {
   outline: none;
   border-color: var(--orange);
 }
+
+/* ---------- Background layer and compare (ETH-14) ---------- */
+
+.canvas .background-layer {
+  fill: none;
+  stroke: var(--ink-faint);
+  stroke-width: 1.2px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.canvas .compare-layer {
+  fill: rgba(43, 108, 176, 0.06);
+  stroke: rgba(43, 108, 176, 0.6);
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.compare-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.compare-field input {
+  width: 48px;
+  font: 15px var(--ethiopic);
+  text-align: center;
+}

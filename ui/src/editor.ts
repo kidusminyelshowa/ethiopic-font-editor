@@ -90,6 +90,7 @@ import {
 import { gridStep, onPrefs, prefs } from "./prefs";
 import { clipLine, crossings, distanceToGuide, fmt, guideDir, isHorizontal, isVertical, projectOnGuide, rulerTicks, type Guide } from "./guides";
 import { importSvg, SvgImportError } from "./svgImport";
+import { inkFromPixels, traceToContours } from "./trace";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
 export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
@@ -273,6 +274,10 @@ export class GlyphEditor {
   /** The line of text the edited glyph sits in, and where it sits. */
   textLine = "";
   textIndex = -1;
+  /** The drawing's background (mask) layer: outlines kept behind it to compare against. */
+  background: Contour[] = [];
+  /** Another glyph shown behind this one, by character, per drawing. */
+  compareWith = new Map<string, string>();
   /** For a base or an alteration: the fidel its edits reach. */
   reach: ImpactView[] | null = null;
   /** The guide picked on the canvas, shown in the side panel. */
@@ -356,6 +361,7 @@ export class GlyphEditor {
     if (!sameDrawing) {
       void this.loadGuides();
       void this.loadReach();
+      void this.loadBackground();
     }
     this.placeInText();
     this.title.textContent = this.drawing.title;
@@ -427,6 +433,105 @@ export class GlyphEditor {
       x += g.advance;
     }
     return out;
+  }
+
+  // ---------- Background layer ----------
+
+  private async loadBackground(): Promise<void> {
+    const k = this.targetKey;
+    this.background = [];
+    try {
+      const bg = await api.getBackground(k);
+      if (this.targetKey !== k) return;
+      this.background = translated(bg, this.origin);
+    } catch {
+      this.background = [];
+    }
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  private saveBackground(): void {
+    const stored = translated(this.background, { x: -this.origin.x, y: -this.origin.y });
+    api.setBackground(this.targetKey, stored).catch((err) => this.host.toast(`Could not save the background: ${err}`, "error"));
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Copy the selected paths (or the whole drawing) to the background, replacing what was there. */
+  copyToBackground(): void {
+    const sel = this.selectedContours();
+    const from = sel.length ? sel.map((ci) => this.contours[ci]) : this.contours;
+    this.background = clone(from).map((c, i) => ({ ...c, id: i, locked: undefined, hidden: undefined }));
+    this.saveBackground();
+    this.host.toast(sel.length ? "Selection copied to the background." : "Drawing copied to the background.");
+  }
+
+  /** Swap the drawing and its background: go back to the copy, keeping the edit behind it. */
+  swapBackground(): void {
+    if (!this.background.length) return;
+    const front = this.contours;
+    this.contours = clone(this.background);
+    this.background = clone(front);
+    this.selection.clear();
+    this.commit("Swap with background");
+    this.saveBackground();
+  }
+
+  clearBackground(): void {
+    this.background = [];
+    this.saveBackground();
+  }
+
+  /** Show another glyph behind this one; an empty string stops. */
+  setCompare(ch: string): void {
+    const first = [...ch.trim()][0] ?? "";
+    if (first) this.compareWith.set(this.targetKey, first);
+    else this.compareWith.delete(this.targetKey);
+    this.render();
+  }
+
+  get compare(): string {
+    return this.compareWith.get(this.targetKey) ?? "";
+  }
+
+  /** Trace the sketch image into outlines, added to the drawing. */
+  async traceSketch(threshold = 128): Promise<void> {
+    const sk = this.sketch;
+    if (!sk || !this.drawing) return;
+    const img = new Image();
+    img.src = sk.href;
+    try {
+      await img.decode();
+    } catch {
+      this.host.toast("Could not read the sketch image.", "error");
+      return;
+    }
+    // Work at a size that keeps detail without taking long.
+    const k = Math.min(1, 700 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * k));
+    const h = Math.max(1, Math.round(img.naturalHeight * k));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, w, h);
+    const ink = inkFromPixels(ctx.getImageData(0, 0, w, h).data, w, h, threshold);
+    const toFont = (p: Vec2): Vec2 => ({ x: sk.x + (p.x / w) * sk.w, y: sk.y + sk.h - (p.y / h) * sk.h });
+    // Tidied the way a designer would: extremes added, kinks smoothed, flat lines made straight.
+    const traced = fixIssues(traceToContours(ink, w, h, toFont, nextContourId(this.contours)).map((c) => addExtremes(c)));
+    if (!traced.length) {
+      this.host.toast("Nothing dark enough to trace. Try a higher threshold.");
+      return;
+    }
+    roundContours(traced);
+    const start = this.contours.length;
+    this.contours = [...this.contours, ...traced];
+    this.selection = new Set(traced.flatMap((c, i) => c.points.map((_, pi) => key(start + i, pi))));
+    this.commit("Trace sketch");
+    this.changedSelection();
+    this.host.toast(`Traced ${traced.length} path${traced.length === 1 ? "" : "s"}.`);
   }
 
   // ---------- Guides ----------
@@ -3250,6 +3355,13 @@ export class GlyphEditor {
     if (this.snapLines.y !== undefined) {
       parts.push(`<line class="snap-line" x1="0" x2="${W}" y1="${sy(this.snapLines.y)}" y2="${sy(this.snapLines.y)}"/>`);
     }
+
+    // Background layer and a glyph to compare with: outlines only, behind the drawing.
+    if (prefs.showBackground && this.background.length) {
+      parts.push(`<path class="background-layer" transform="${xf}" d="${this.background.map(contourPath).join("")}"/>`);
+    }
+    const cmp = this.compare ? this.host.glyphFor(this.compare) : null;
+    if (cmp?.d) parts.push(`<path class="compare-layer" transform="${xf}" d="${cmp.d}"/>`);
 
     // The rest of the line of text, filled, to judge the glyph in context.
     for (const n of this.neighbours()) {
