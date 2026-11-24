@@ -656,6 +656,36 @@ mod tests {
     }
 }
 
+/// One master's version of a drawing, for the side-by-side view.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterDrawingView {
+    master: String,
+    d: String,
+    advance: Option<f64>,
+    problem: Option<String>,
+    is_default: bool,
+    contours: Vec<fidel_core::Contour>,
+}
+
+pub fn master_drawings(
+    project: &Project,
+    target: &fidel_core::DrawingTarget,
+) -> Result<Vec<MasterDrawingView>, String> {
+    let list = project.master_drawings(target).map_err(|e| e.to_string())?;
+    Ok(list
+        .into_iter()
+        .map(|m| MasterDrawingView {
+            master: m.master,
+            d: fidel_core::svg_path(m.contours.iter().filter(|c| !c.open)),
+            advance: m.advance,
+            problem: m.problem,
+            is_default: m.is_default,
+            contours: m.contours,
+        })
+        .collect())
+}
+
 /// The design space as the masters panel shows it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

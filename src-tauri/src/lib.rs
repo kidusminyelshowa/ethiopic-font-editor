@@ -494,6 +494,25 @@ fn export_instances(state: State<'_, AppState>, dir: String) -> CmdResult<Vec<St
     Ok(out)
 }
 
+/// A drawing in every master, with what keeps each from interpolating.
+#[tauri::command]
+fn master_drawings(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+) -> CmdResult<Vec<editor::MasterDrawingView>> {
+    editor::master_drawings(&state.project(), &target)
+}
+
+/// Line up every master's version of a drawing with the default master's.
+#[tauri::command]
+fn match_masters(state: State<'_, AppState>, target: DrawingTarget) -> CmdResult<usize> {
+    let n = state.project().match_masters(&target).map_err(err)?;
+    if n > 0 {
+        state.mark_dirty();
+    }
+    Ok(n)
+}
+
 /// Kerning classes and pairs.
 #[tauri::command]
 fn get_kerning(state: State<'_, AppState>) -> editor::KerningView {
@@ -911,6 +930,8 @@ pub fn run() {
             set_component_end,
             rule_ends,
             get_design,
+            master_drawings,
+            match_masters,
             set_axis,
             remove_axis,
             add_master,

@@ -1,7 +1,7 @@
 // Masters, axes and instances: the font properties sections, the master
 // switcher in the title bar, and the axis sliders of the proof.
 
-import { api, type Axis, type DesignData, type InstanceInfo } from "./api";
+import { api, type Axis, type DesignData, type DrawingTarget, type InstanceInfo, type Metrics } from "./api";
 import { el } from "./dom";
 import { formatMap, instancesFromMasters, masterLabel, nextAxis, nextMasterLocation, parseMap, styleName, toDesign, toUser } from "./design";
 import { showMenu, type MenuEntry } from "./editorSide";
@@ -337,4 +337,93 @@ export function proofAxes(onChange: () => void): HTMLElement {
   onDesign(render);
   render();
   return box;
+}
+
+// ---------- The drawing in every master ----------
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * The open drawing side by side in every master, with what keeps a master
+ * from interpolating, and the fixes: match order, direction and start
+ * points, or start this master over from the default's drawing.
+ */
+export function masterDrawingsSection(target: DrawingTarget, metrics: Metrics, reload: () => Promise<void>): Node[] {
+  const d = design;
+  if (!d || d.masters.length < 2) return [];
+  const strip = el("div", { class: "ds-strip" });
+  const note = el("p", { class: "side-note ds-note" });
+  const actions = el("div", { class: "button-row" });
+  void api
+    .masterDrawings(target)
+    .then((list) => {
+      strip.replaceChildren(
+        ...list.map((m, i) => {
+          const svg = document.createElementNS(SVG_NS, "svg");
+          const pad = 60;
+          const w = Math.max(m.advance ?? 600, 200);
+          svg.setAttribute("viewBox", `${-pad} ${-(metrics.pa_top + pad)} ${w + 2 * pad} ${metrics.pa_top - metrics.pa_bottom + 2 * pad}`);
+          svg.setAttribute("class", "ds-thumb-svg");
+          const path = document.createElementNS(SVG_NS, "path");
+          path.setAttribute("d", m.d);
+          path.setAttribute("transform", "scale(1 -1)");
+          svg.append(path);
+          // The start point of each contour, to see them line up.
+          for (const c of m.contours) {
+            const p0 = c.points.find((q) => q.kind !== "offcurve");
+            if (!p0) continue;
+            const dot = document.createElementNS(SVG_NS, "circle");
+            dot.setAttribute("cx", String(p0.pos.x));
+            dot.setAttribute("cy", String(-p0.pos.y));
+            dot.setAttribute("r", "16");
+            dot.setAttribute("class", "ds-start");
+            svg.append(dot);
+          }
+          const cell = el(
+            "button",
+            {
+              class: `ds-thumb${i === d.active ? " active" : ""}${m.problem ? " bad" : ""}`,
+              title: m.problem ?? (m.isDefault ? "Default master" : "Matches the default master"),
+            },
+            svg,
+            el("span", { class: "ds-thumb-name" }, m.master),
+          );
+          cell.addEventListener("click", () => i !== d.active && void switchMaster(i));
+          return cell;
+        }),
+      );
+      const bad = list.filter((m) => m.problem);
+      note.textContent = bad.length ? bad.map((m) => `${m.master}: ${m.problem}`).join(". ") : "Matches in every master.";
+      note.classList.toggle("ds-problem", bad.length > 0);
+      const match = el("button", { class: "pill small", title: "Contour order, direction and start points as in the default master" }, "Match masters");
+      match.addEventListener("click", async () => {
+        try {
+          const n = await api.matchMasters(target);
+          host.toast(n ? `Lined up ${n} ${n === 1 ? "master" : "masters"}.` : "Already lined up.");
+          await loadDesign();
+          await reload();
+          host.changed();
+        } catch (err) {
+          host.toast(String(err), "error");
+        }
+      });
+      actions.replaceChildren(match);
+      const def = list.find((m) => m.isDefault);
+      if (def && list[d.active] && !list[d.active].isDefault && list[d.active].problem) {
+        const copy = el("button", { class: "pill small ghost", title: "Replace this master's drawing with the default master's, to adjust from there" }, "Copy from default");
+        copy.addEventListener("click", async () => {
+          try {
+            await api.setDrawing(target, def.contours);
+            await loadDesign();
+            await reload();
+            host.changed();
+          } catch (err) {
+            host.toast(String(err), "error");
+          }
+        });
+        actions.append(copy);
+      }
+    })
+    .catch(() => strip.replaceChildren());
+  return [el("h3", { class: "section-label", title: "Click a master to edit it. Dots mark where each contour starts." }, "Masters"), strip, note, actions];
 }

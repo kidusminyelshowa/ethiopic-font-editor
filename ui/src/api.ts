@@ -358,6 +358,15 @@ export interface DesignData {
   incompatible: { drawing: string; masters: string[] }[];
 }
 
+export interface MasterDrawing {
+  master: string;
+  d: string;
+  advance: number | null;
+  problem: string | null;
+  isDefault: boolean;
+  contours: Contour[];
+}
+
 export interface VariableSummary {
   path: string;
   familyName: string;
@@ -400,6 +409,8 @@ export const api = {
   /** Font bytes of everything drawn so far; empty when nothing is drawn. */
   proofFont: (location?: Record<string, number> | null) => invoke<ArrayBuffer>("proof_font", { location: location ?? null }),
   getDesign: () => invoke<DesignData>("get_design"),
+  masterDrawings: (target: DrawingTarget) => invoke<MasterDrawing[]>("master_drawings", { target }),
+  matchMasters: (target: DrawingTarget) => invoke<number>("match_masters", { target }),
   setAxis: (oldTag: string | null, axis: Axis) => invoke<DesignData>("set_axis", { oldTag, axis }),
   removeAxis: (tag: string) => invoke<DesignData>("remove_axis", { tag }),
   addMaster: (name: string, location: Record<string, number>) => invoke<DesignData>("add_master", { name, location }),

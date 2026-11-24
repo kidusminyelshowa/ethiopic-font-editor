@@ -3223,3 +3223,49 @@ body.kerning .side-list {
 .proof-axes[hidden] {
   display: none;
 }
+.ds-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.ds-thumb {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  flex: 0 0 76px;
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--card);
+  cursor: pointer;
+}
+.ds-thumb.active {
+  border-color: var(--orange);
+  cursor: default;
+}
+.ds-thumb.bad .ds-thumb-svg path {
+  fill: var(--orange);
+}
+.ds-thumb-svg {
+  width: 64px;
+  height: 64px;
+}
+.ds-thumb-svg path {
+  fill: var(--ink);
+}
+.ds-start {
+  fill: var(--orange);
+  opacity: 0.8;
+}
+.ds-thumb-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.ds-note {
+  margin: 6px 0;
+}

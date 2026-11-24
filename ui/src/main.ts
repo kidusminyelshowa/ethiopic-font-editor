@@ -58,7 +58,7 @@ import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
 import { initProof, setProofFont } from "./proof";
 import { KernView } from "./kernView";
 import { resolve as resolveKern } from "./kerning";
-import { designSections, initMasters, loadDesign, onDesign, proofAxes, proofLocation } from "./mastersPanel";
+import { designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -1320,6 +1320,16 @@ function renderEditorSide(ed: GlyphEditor) {
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
   const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component";
   if (!standalone) sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
+  if (d.target.kind !== "fidel") {
+    const target = d.target;
+    sections.push(
+      ...masterDrawingsSection(target, metrics, async () => {
+        editor.reset();
+        await editor.open(target, d.context?.family);
+        renderEditorSide(editor);
+      }),
+    );
+  }
   const token = ++previewToken;
   if (standalone) {
     // A symbol or a hand-drawn fidel stands alone: nothing else follows it.
