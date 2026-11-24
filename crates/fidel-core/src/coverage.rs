@@ -73,6 +73,11 @@ impl Project {
                         contours: Vec::new(),
                         components: Vec::new(),
                         metric_keys: Default::default(),
+                        anchors: Default::default(),
+                        // Accented letters start built from their parts.
+                        built_from: charset::recipe(e.cp)
+                            .map(|(base, marks)| std::iter::once(base).chain(marks.iter().copied()).collect())
+                            .unwrap_or_default(),
                     });
                 }
             }

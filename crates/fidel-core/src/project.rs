@@ -219,6 +219,13 @@ pub struct Symbol {
     /// tabular numerals).
     #[serde(default, skip_serializing_if = "crate::metric_keys::MetricKeys::is_empty")]
     pub metric_keys: crate::metric_keys::MetricKeys,
+    /// Named points marks attach to: `top` on a letter, `_top` on an accent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub anchors: BTreeMap<String, Vec2>,
+    /// Built from other glyphs instead of drawn: a base letter, then the
+    /// accents placed on it by their anchors (À is A and ◌̀).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub built_from: Vec<char>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -397,7 +404,12 @@ impl Project {
                     .contours
             }
             DrawingTarget::Symbol(id) => {
-                &mut self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.contours
+                let s = self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?;
+                // Drawing on a built letter takes it over by hand.
+                if !contours.is_empty() {
+                    s.built_from.clear();
+                }
+                &mut s.contours
             }
             DrawingTarget::Component(id) => {
                 let (comp, state) = crate::parametric::state_ref(id);
@@ -968,6 +980,9 @@ impl Project {
     /// A symbol's outline: its own contours and the components placed on it.
     pub fn symbol_outline(&self, id: &str) -> Vec<Contour> {
         let Some(s) = self.symbols.get(id) else { return Vec::new() };
+        if !s.built_from.is_empty() {
+            return self.compose(s.built_from[0], &s.built_from[1..]).map(|g| g.contours).unwrap_or_default();
+        }
         let mut out = s.contours.clone();
         for r in &s.components {
             if let Some(comp) = self.components.get(&r.component) {
@@ -975,6 +990,17 @@ impl Project {
             }
         }
         out
+    }
+
+    /// A symbol's width: a built letter takes its base letter's.
+    pub fn symbol_advance(&self, id: &str) -> f64 {
+        let Some(s) = self.symbols.get(id) else { return 0.0 };
+        if !s.built_from.is_empty() {
+            if let Some(g) = self.compose(s.built_from[0], &s.built_from[1..]) {
+                return g.advance;
+            }
+        }
+        s.advance_width
     }
 
     /// Replace the component placements on a symbol.

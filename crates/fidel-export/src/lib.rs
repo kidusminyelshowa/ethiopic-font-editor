@@ -164,7 +164,10 @@ fn collect_items(project: &Project) -> Vec<(char, Vec<Contour>, f64)> {
             Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
         })
         .chain(
-            project.symbols.values().map(|s| (s.codepoint, project.symbol_outline(&s.id), s.advance_width)),
+            project
+                .symbols
+                .values()
+                .map(|s| (s.codepoint, project.symbol_outline(&s.id), project.symbol_advance(&s.id))),
         )
         .filter(|(ch, ..)| project.in_charset(*ch))
         .collect();

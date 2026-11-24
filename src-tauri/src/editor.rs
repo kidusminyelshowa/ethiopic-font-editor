@@ -43,6 +43,23 @@ pub struct DrawingView {
     /// with why a key does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     metric_keys: Option<KeysView>,
+    /// For bases and symbols: where accents attach (`top`) or where this
+    /// accent joins (`_top`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchors: Option<std::collections::BTreeMap<String, Vec2>>,
+    /// For a letter built from parts: the parts, and the built outline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    built: Option<BuiltView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuiltView {
+    /// The base letter, then its accents.
+    parts: Vec<char>,
+    /// The built outline, as an SVG path.
+    d: String,
+    /// Left and right edges of the built outline, when it has ink.
+    ink: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,7 +301,22 @@ impl DrawingView {
             _ => project.drawing(&target)?.to_vec(),
         };
         let metrics = project.metrics.clone();
-        Ok(match &target {
+        let anchors = match &target {
+            DrawingTarget::Base(id) => project.bases.get(id).map(|b| b.anchors.clone()),
+            DrawingTarget::Symbol(id) => project.symbols.get(id).map(|s| s.anchors.clone()),
+            _ => None,
+        };
+        let built = match &target {
+            DrawingTarget::Symbol(id) => {
+                project.symbols.get(id).filter(|s| !s.built_from.is_empty()).map(|s| {
+                    let outline = project.symbol_outline(id);
+                    let ink = fidel_core::geometry::bounds_of(&outline).map(|r| [r.min.x, r.max.x]);
+                    BuiltView { parts: s.built_from.clone(), d: fidel_core::svg_path(&outline), ink }
+                })
+            }
+            _ => None,
+        };
+        let mut view = match &target {
             DrawingTarget::Base(id) => {
                 let base = &project.bases[id];
                 let glyph = base_glyph(project, id);
@@ -321,6 +353,8 @@ impl DrawingView {
                     generated: false,
                     handles: Vec::new(),
                     rule: None,
+                    anchors: None,
+                    built: None,
                     target,
                     contours,
                     metrics,
@@ -340,6 +374,8 @@ impl DrawingView {
                     rule: None,
                     derived: None,
                     metric_keys: None,
+                    anchors: None,
+                    built: None,
                     target,
                     contours,
                     metrics,
@@ -367,6 +403,8 @@ impl DrawingView {
                     rule: None,
                     derived: None,
                     metric_keys: None,
+                    anchors: None,
+                    built: None,
                     target,
                     contours,
                     metrics,
@@ -377,7 +415,7 @@ impl DrawingView {
                 DrawingView {
                     title: format!("{} {}", sym.name, sym.codepoint),
                     subtitle: format!("Symbol · U+{:04X}", sym.codepoint as u32),
-                    advance_width: Some(sym.advance_width),
+                    advance_width: Some(project.symbol_advance(id)),
                     context: None,
                     components: Some(placed_components(project, &sym.components)),
                     zones: zone_views(&metrics),
@@ -386,6 +424,8 @@ impl DrawingView {
                     rule: None,
                     derived: None,
                     metric_keys: Some(keys_view(project, &sym.metric_keys)),
+                    anchors: None,
+                    built: None,
                     target,
                     contours,
                     metrics,
@@ -421,12 +461,17 @@ impl DrawingView {
                         corners: comp.corners,
                         uses: project.rule_uses(id),
                     }),
+                    anchors: None,
+                    built: None,
                     target,
                     contours,
                     metrics,
                 }
             }
-        })
+        };
+        view.anchors = anchors;
+        view.built = built;
+        Ok(view)
     }
 }
 
@@ -767,6 +812,36 @@ pub fn kerning_view(project: &Project) -> KerningView {
         right_classes: classes(&k.right_classes),
         pairs: k.pairs.clone(),
     }
+}
+
+/// A partner glyph placed against a drawing by their anchors, as an SVG
+/// path in the drawing's coordinates.
+pub fn mark_preview(
+    project: &Project,
+    target: &DrawingTarget,
+    contours: Vec<Contour>,
+    partner: &str,
+) -> Option<String> {
+    let partner = partner.chars().next()?;
+    let (anchors, advance, own) = match target {
+        DrawingTarget::Base(id) => {
+            let b = project.bases.get(id)?;
+            let own = project
+                .families
+                .values()
+                .find(|f| &f.base == id)
+                .and_then(|f| f.fidels.get(&Order::Giiz))
+                .and_then(|f| f.codepoint);
+            (b.anchors.clone(), b.advance_width, own)
+        }
+        DrawingTarget::Symbol(id) => {
+            let s = project.symbols.get(id)?;
+            (s.anchors.clone(), s.advance_width, Some(s.codepoint))
+        }
+        _ => return None,
+    };
+    let shape = fidel_core::marks::GlyphShape { contours, advance, anchors };
+    project.mark_preview(&shape, own, partner).map(|c| fidel_core::svg_path(&c))
 }
 
 /// The feature code, what the project generates around it, and whether it

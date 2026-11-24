@@ -337,6 +337,57 @@ fn set_component_end(
     Ok(())
 }
 
+/// Replace the anchors of a base or symbol.
+#[tauri::command]
+fn set_anchors(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    anchors: std::collections::BTreeMap<String, Vec2>,
+) -> CmdResult<()> {
+    state.project().set_anchors(&target, anchors).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Build every undrawn accented letter from its base letter and accents.
+#[tauri::command]
+fn build_accents(state: State<'_, AppState>) -> usize {
+    let n = state.project().build_accents();
+    if n > 0 {
+        state.mark_dirty();
+    }
+    n
+}
+
+/// Build a symbol from these characters (a letter, then accents), or draw
+/// it by hand when empty.
+#[tauri::command]
+fn set_built_from(state: State<'_, AppState>, id: String, parts: String) -> CmdResult<()> {
+    state.project().set_built_from(&id, parts.chars().collect()).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Turn a built letter into its own drawing.
+#[tauri::command]
+fn decompose_symbol(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().decompose_symbol(&id).ok_or("Could not build it")?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Another glyph placed against the drawing open now, by their anchors:
+/// an accent on this letter, or a letter under this accent.
+#[tauri::command]
+fn mark_preview(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    contours: Vec<fidel_core::Contour>,
+    partner: String,
+) -> Option<String> {
+    editor::mark_preview(&state.project(), &target, contours, &partner)
+}
+
 /// The feature code and whether it compiles.
 #[tauri::command]
 fn get_features(state: State<'_, AppState>) -> editor::FeaturesView {
@@ -1027,6 +1078,11 @@ pub fn run() {
             set_component_end,
             rule_ends,
             get_features,
+            set_anchors,
+            build_accents,
+            set_built_from,
+            decompose_symbol,
+            mark_preview,
             set_features,
             get_part,
             set_part_axes,

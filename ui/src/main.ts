@@ -61,6 +61,7 @@ import { FeaturesView } from "./featuresView";
 import { resolve as resolveKern } from "./kerning";
 import { designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 import { partSection, stateRef } from "./partAxes";
+import { anchorsSection, builtSection } from "./anchorSide";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -262,11 +263,16 @@ function renderGrid(grid: FidelGrid) {
     }
   }
   const nodes: Node[] = [table];
-  if (grid.symbols.length) {
-    const wrap = el("section", { class: "symbol-grid", "aria-label": "Symbols" });
-    wrap.append(el("h2", { class: "symbol-heading" }, "Punctuation, numerals and marks"));
+  const isLatin = (c: string) => (c.codePointAt(0) ?? 0) < 0x1200;
+  for (const [title, syms] of [
+    ["Punctuation, numerals and marks", grid.symbols.filter((s) => !isLatin(s.codepoint))],
+    ["Latin", grid.symbols.filter((s) => isLatin(s.codepoint))],
+  ] as const) {
+    if (!syms.length) continue;
+    const wrap = el("section", { class: "symbol-grid", "aria-label": title });
+    wrap.append(el("h2", { class: "symbol-heading" }, title));
     const list = el("div", { class: "symbol-cells" });
-    for (const s of grid.symbols) list.append(symbolButton(s, grid));
+    for (const s of syms) list.append(symbolButton(s, grid));
     wrap.append(list);
     nodes.push(wrap);
   }
@@ -1527,6 +1533,27 @@ function renderEditorSide(ed: GlyphEditor) {
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
   if (d.target.kind === "base" && d.derived) sections.unshift(...derivedSection(ed, d));
   if (d.target.kind === "base" || d.target.kind === "symbol") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  const anchorHost = {
+    charOf: (dv: DrawingView) => charOf(dv.target),
+    glyphs: () => {
+      const out: { ch: string; name: string }[] = [];
+      for (const sym of state.grid?.symbols ?? []) if (sym.outline) out.push({ ch: sym.codepoint, name: sym.name });
+      for (const row of state.grid?.rows ?? []) {
+        const c = row.cells.find((x) => x.order === "giiz");
+        if (c?.codepoint && c.outline) out.push({ ch: c.codepoint, name: row.name });
+      }
+      return out;
+    },
+    rebuilt: async () => {
+      await ed.open(d.target);
+      await refreshGrid();
+      renderEditorSide(ed);
+    },
+  };
+  sections.push(...anchorsSection(ed, d, anchorHost));
+  // Built letters lead with their parts; for others it is an option at the end.
+  if (d.built) sections.unshift(...builtSection(ed, d, anchorHost));
+  else sections.push(...builtSection(ed, d, anchorHost));
   if (d.target.kind === "component") {
     const id = stateRef(d.target.id).part;
     const kind = state.components.find((c) => c.id === id)?.kind;
@@ -1948,7 +1975,7 @@ function renderCharsetMenu() {
     });
   const group = (ids: CharSetId[]) => sets.filter((s) => ids.includes(s.id)).map(setItem);
   const all = el("button", { class: "menu-item" }, "Full Ethiopic");
-  all.addEventListener("click", () => void applyCoverage(sets.map((s) => s.id), []));
+  all.addEventListener("click", () => void applyCoverage(sets.filter((s) => !s.id.startsWith("latin") || s.enabled).map((s) => s.id), []));
   charsetMenu.replaceChildren(
     el("div", { class: "menu-label" }, "Languages"),
     ...langs.map(langItem),
@@ -1956,9 +1983,21 @@ function renderCharsetMenu() {
     ...group(["geez", "ethiopic-letters", "ethiopic-labialized", "ethiopic-marks"]),
     el("div", { class: "menu-label" }, "Supplements"),
     ...group(["supplement", "extended", "extended-a", "extended-b"]),
+    el("div", { class: "menu-label" }, "Latin"),
+    ...group(["latin", "latin-supplement", "latin-extended-a"]),
     el("div", { class: "menu-sep", role: "separator" }),
     all,
   );
+}
+
+async function buildAccents() {
+  try {
+    const n = await api.buildAccents();
+    toast(n ? `${n} accented letter${n === 1 ? "" : "s"} now built from their parts.` : "Every accented letter is already built or drawn.");
+    if (n) await refreshGrid();
+  } catch (err) {
+    toast(`Could not build the accented letters: ${err}`, "error");
+  }
 }
 
 async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
@@ -2079,6 +2118,7 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
     else if (m === "view-kerning") showView("kerning");
     else if (m === "view-features") showView("features");
     else if (m === "test-install") void testInstall();
+    else if (m === "build-accents") void buildAccents();
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
     else if (m === "toggle-left") toggleSidebars();

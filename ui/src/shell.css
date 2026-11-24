@@ -3451,3 +3451,30 @@ body.kerning .side-list {
 .fea-toggle.on { background: var(--ink); color: var(--ground); border-color: var(--ink); }
 .fea-langs { align-items: stretch; }
 .fea-langs .check-row { width: 100%; justify-content: flex-start; text-align: left; }
+
+/* ---------- Anchors and built letters (ETH-28) ---------- */
+
+.canvas .anchor { cursor: move; }
+.canvas .anchor path { fill: var(--card); stroke: #2b6cb0; stroke-width: 1.5; }
+.canvas .anchor.join path { stroke: #8a4fb0; }
+.canvas .anchor.selected path { fill: #2b6cb0; }
+.canvas .anchor.join.selected path { fill: #8a4fb0; }
+.canvas .anchor text { font: 11px var(--sans); fill: #2b6cb0; paint-order: stroke; stroke: var(--card); stroke-width: 3px; pointer-events: none; }
+.canvas .anchor.join text { fill: #8a4fb0; }
+.canvas .anchor-hit { fill: transparent; stroke: none; }
+.canvas .built-layer { fill: var(--ink); opacity: 0.18; pointer-events: none; }
+.canvas .mark-preview { fill: #2b6cb0; opacity: 0.35; pointer-events: none; }
+.anchor-row { padding: 4px 0 8px; border-bottom: 1px solid var(--hairline); margin-bottom: 6px; }
+.anchor-row.selected .anchor-name { color: #2b6cb0; }
+.anchor-name {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: var(--ink);
+}
+.anchor-name:hover, .anchor-name:focus { border-color: var(--hairline); outline: none; }
+.anchor-box .zone-select { margin-top: 6px; }
+.built-parts { font-family: var(--sans); }

@@ -69,7 +69,10 @@ export type CharSetId =
   | "supplement"
   | "extended"
   | "extended-a"
-  | "extended-b";
+  | "extended-b"
+  | "latin"
+  | "latin-supplement"
+  | "latin-extended-a";
 
 export interface CharSetInfo {
   id: CharSetId;
@@ -318,6 +321,10 @@ export interface DrawingView {
   derived?: { from: string; fromName: string; fromGlyph: string; adds: [string, string][]; follows: boolean };
   /** For bases and symbols: sidebearings and width set by other glyphs. */
   metricKeys?: { keys: MetricKeys; errors: Partial<Record<keyof MetricKeys, string>> };
+  /** For bases and symbols: `top` where accents attach, `_top` where this accent joins. */
+  anchors?: Record<string, { x: number; y: number }>;
+  /** For a letter built from parts: the base letter and accents, and the built outline. */
+  built?: { parts: string[]; d: string; ink?: [number, number] | null };
   /** For a component: where it lands by rule, and how many times. */
   rule?: { landsOn: Part[]; corners: CornerSide; uses: number };
 }
@@ -522,6 +529,13 @@ export const api = {
     invoke<void>("set_component_rule", { id, landsOn, corners }),
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
+  setAnchors: (target: DrawingTarget, anchors: Record<string, { x: number; y: number }>) =>
+    invoke<void>("set_anchors", { target, anchors }),
+  buildAccents: () => invoke<number>("build_accents"),
+  setBuiltFrom: (id: string, parts: string) => invoke<void>("set_built_from", { id, parts }),
+  decomposeSymbol: (id: string) => invoke<void>("decompose_symbol", { id }),
+  markPreview: (target: DrawingTarget, contours: Contour[], partner: string) =>
+    invoke<string | null>("mark_preview", { target, contours, partner }),
   getFeatures: () => invoke<FeaturesView>("get_features"),
   setFeatures: (features: Features) => invoke<FeaturesView>("set_features", { features }),
   getPart: (id: string) => invoke<PartView>("get_part", { id }),

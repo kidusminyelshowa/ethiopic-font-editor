@@ -36,6 +36,7 @@ pub mod geometry;
 pub mod guides;
 pub mod kerning;
 pub mod kid;
+pub mod marks;
 pub mod metric_keys;
 pub mod order;
 pub mod organize;

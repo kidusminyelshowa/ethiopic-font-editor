@@ -65,3 +65,29 @@ fn characters_become_glyph_names() {
     assert_eq!(names_for_characters("[ሀለ]"), "[uni1200 uni1208]");
     assert_eq!(feature_tags("feature kern {\n} kern;\nfeature ss02{ } ss02;"), vec!["kern", "ss02"]);
 }
+
+#[test]
+fn anchors_become_mark_positioning_and_built_letters_export() {
+    use fidel_core::charset::CharSet;
+    let mut p = project();
+    p.set_charsets([CharSet::Geez, CharSet::Latin, CharSet::LatinSupplement]);
+    let sym = |p: &mut Project, c: char| p.symbols.values_mut().find(|s| s.codepoint == c).unwrap().clone();
+    let (a, grave) = (sym(&mut p, 'A').id, sym(&mut p, '\u{0300}').id);
+    let s = p.symbols.get_mut(&a).unwrap();
+    s.contours = vec![Contour::rect(0, None, Vec2::new(0.0, 0.0), Vec2::new(500.0, 700.0))];
+    s.anchors.insert("top".into(), Vec2::new(250.0, 700.0));
+    let g = p.symbols.get_mut(&grave).unwrap();
+    g.contours = vec![Contour::rect(0, None, Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0))];
+    g.anchors.insert("_top".into(), Vec2::new(50.0, 0.0));
+    let font = export(&p, &ExportOptions::new("Test Latin")).unwrap();
+    assert!(font.exported.contains(&'À'));
+    let font = FontRef::new(&font.bytes).unwrap();
+    let gpos = font.gpos().unwrap();
+    let names =
+        tags(gpos.feature_list().unwrap().feature_records().iter().map(|r| r.feature_tag().to_string()));
+    assert!(names.contains(&"mark".to_string()), "{names:?}");
+    let gdef = font.gdef().unwrap();
+    let classes = gdef.glyph_class_def().unwrap().unwrap();
+    let mark_gid = font.charmap().map('\u{0300}').unwrap();
+    assert_eq!(classes.get(skrifa::GlyphId16::try_from(mark_gid).unwrap()), 3);
+}

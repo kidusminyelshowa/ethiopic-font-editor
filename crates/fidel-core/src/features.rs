@@ -260,6 +260,17 @@ impl Project {
             t.push_str(&format!("feature kern {{\n{kern}}} kern;\n"));
         }
 
+        let mut chars: Vec<char> = self
+            .symbols
+            .values()
+            .map(|s| s.codepoint)
+            .chain(self.families.values().flat_map(|f| f.fidels.values().filter_map(|fi| fi.codepoint)))
+            .filter(|&c| has(c))
+            .collect();
+        chars.sort_unstable();
+        chars.dedup();
+        t.push_str(&self.mark_features(&chars));
+
         t.push_str("# Your code\n");
         let code_start = t.len();
         let code_line = t.matches('\n').count();

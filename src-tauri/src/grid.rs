@@ -207,8 +207,10 @@ impl FidelGrid {
                 name: s.name.clone(),
                 outline: {
                     let outline = project.symbol_outline(&s.id);
-                    (!outline.is_empty())
-                        .then(|| Outline { d: svg_path(&outline), advance_width: s.advance_width })
+                    (!outline.is_empty()).then(|| Outline {
+                        d: svg_path(&outline),
+                        advance_width: project.symbol_advance(&s.id),
+                    })
                 },
             })
             .collect::<Vec<_>>();

@@ -227,6 +227,8 @@ pub struct SymbolLayer {
     pub contours: Vec<Contour>,
     #[serde(default)]
     pub components: Vec<ComponentRef>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub anchors: BTreeMap<String, Vec2>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -263,6 +265,7 @@ impl MasterLayer {
                         advance_width: s.advance_width,
                         contours: s.contours.clone(),
                         components: s.components.clone(),
+                        anchors: s.anchors.clone(),
                     };
                     (id.clone(), l)
                 })
@@ -312,6 +315,7 @@ impl MasterLayer {
                 s.advance_width = l.advance_width;
                 s.contours = l.contours.clone();
                 s.components = l.components.clone();
+                s.anchors = l.anchors.clone();
             }
         }
         for (id, c) in &self.components {
@@ -734,6 +738,7 @@ impl Project {
         for s in self.symbols.values_mut() {
             shear(&mut s.contours);
             s.components.iter_mut().for_each(|r| pt(&mut r.at));
+            s.anchors.values_mut().for_each(pt);
         }
         for c in self.components.values_mut() {
             shear(&mut c.contours);

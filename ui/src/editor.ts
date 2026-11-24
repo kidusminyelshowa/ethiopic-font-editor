@@ -175,6 +175,7 @@ type Gesture =
   | { kind: "measure"; start: Vec2; now: Vec2 }
   | { kind: "guide"; scope: GuideScope; id: number; start: Vec2; origin: Vec2; isNew: boolean; moved: boolean; offRuler: boolean }
   | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
+  | { kind: "anchor"; name: string; start: Vec2; origin: Vec2; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
@@ -348,6 +349,11 @@ export class GlyphEditor {
     return this.sketches.get(this.targetKey);
   }
 
+  /** The anchor picked on the canvas or in the panel. */
+  anchorSel: string | null = null;
+  /** Another glyph shown against this one by their anchors. */
+  markPreview: { partner: string; d: string | null } | null = null;
+
   async open(target: DrawingTarget, contextFamily?: string): Promise<void> {
     const sameDrawing = this.target && this.target.kind === target.kind && this.target.id === target.id;
     this.drawing = await api.getDrawing(target, contextFamily);
@@ -371,7 +377,11 @@ export class GlyphEditor {
       this.measureLine = null;
       this.fit();
     }
-    if (!sameDrawing) this.ruleSel = null;
+    if (!sameDrawing) {
+      this.ruleSel = null;
+      this.anchorSel = null;
+      this.markPreview = null;
+    } else if (this.markPreview) void this.refreshMarkPreview();
     void this.loadRuleEnds();
     if (!sameDrawing) {
       void this.loadGuides();
@@ -1123,6 +1133,40 @@ export class GlyphEditor {
   }
 
   /** Switch one rule placement on or off, or adjust it. */
+  /** Write the anchors (or these), and redraw what depends on them. */
+  async saveAnchors(next?: Record<string, { x: number; y: number }>): Promise<void> {
+    const target = this.target;
+    if (!this.drawing || !target) return;
+    if (next) this.drawing.anchors = next;
+    try {
+      await api.setAnchors(target, this.drawing.anchors ?? {});
+      this.host.changed(target);
+      if (this.markPreview) await this.refreshMarkPreview();
+      this.render();
+      this.host.renderSide(this);
+    } catch (err) {
+      this.host.toast(`Could not save the anchors: ${err}`, "error");
+    }
+  }
+
+  /** Show another glyph against this one, or stop (null). */
+  async setMarkPreview(partner: string | null): Promise<void> {
+    this.markPreview = partner ? { partner, d: null } : null;
+    await this.refreshMarkPreview();
+  }
+
+  async refreshMarkPreview(): Promise<void> {
+    const mp = this.markPreview;
+    const target = this.target;
+    if (!mp || !target) return this.render();
+    try {
+      mp.d = await api.markPreview(target, this.contours, mp.partner);
+    } catch {
+      mp.d = null;
+    }
+    this.render();
+  }
+
   async setRuleEnd(end: RuleEnd, on: boolean, tweak: Tweak): Promise<void> {
     const target = this.target;
     try {
@@ -1376,6 +1420,18 @@ export class GlyphEditor {
         this.host.openTarget(g.target);
         return;
       }
+    }
+
+    // An anchor: pick it and drag it.
+    const an = (e.target as Element | null)?.closest?.("[data-anchor]")?.getAttribute("data-anchor");
+    if (an != null && (this.tool === "select" || this.tool === "direct") && this.drawing.anchors?.[an]) {
+      const a = this.drawing.anchors[an];
+      this.anchorSel = an;
+      this.selection.clear();
+      this.gesture = { kind: "anchor", name: an, start: font, origin: { x: a.x, y: a.y }, moved: false };
+      this.render();
+      this.host.renderSide(this);
+      return;
     }
 
     // A guide under the pointer (and no point): pick it, and drag it unless locked.
@@ -1686,6 +1742,16 @@ export class GlyphEditor {
         g.now = to;
         break;
       }
+      case "anchor": {
+        const a = this.drawing?.anchors?.[g.name];
+        if (!a) break;
+        const s = this.snapped({ x: g.origin.x + font.x - g.start.x, y: g.origin.y + font.y - g.start.y }, e);
+        a.x = Math.round(s.pos.x);
+        a.y = Math.round(s.pos.y);
+        this.snapLines = s.lines;
+        g.moved ||= Math.hypot(font.x - g.start.x, font.y - g.start.y) * this.view.scale > 1;
+        break;
+      }
       case "guide": {
         const gd = this.guides[g.scope].find((x) => x.id === g.id);
         if (!gd) break;
@@ -1889,6 +1955,10 @@ export class GlyphEditor {
       const far = Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 3;
       this.measureLine = far ? { a: g.start, b: g.now } : null;
       this.render();
+    } else if (g.kind === "anchor") {
+      if (g.moved) void this.saveAnchors();
+      this.render();
+      this.host.renderSide(this);
     } else if (g.kind === "guide") {
       if (g.offRuler || (g.isNew && !g.moved)) {
         this.guides[g.scope] = this.guides[g.scope].filter((x) => x.id !== g.id);
@@ -2983,6 +3053,8 @@ export class GlyphEditor {
     const w = this.drawing?.advanceWidth;
     if (w == null) return null;
     const b = contoursBounds(this.visibleContours().length ? this.visibleContours() : this.contours);
+    const ink = this.drawing?.built?.ink;
+    if (!b && ink) return { lsb: Math.round(ink[0]), rsb: Math.round(w - ink[1]), width: w };
     if (!b) return { lsb: 0, rsb: w, width: w };
     return { lsb: Math.round(b.minX), rsb: Math.round(w - b.maxX), width: w };
   }
@@ -3241,6 +3313,12 @@ export class GlyphEditor {
           this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
         if (target.kind === "base") void this.loadRuleEnds();
+        // Drawing on a built letter draws it by hand.
+        if (this.drawing?.built && s.c.length && this.target?.kind === target.kind && this.target.id === target.id) {
+          this.drawing.built = undefined;
+          this.host.renderSide(this);
+          this.host.toast("Now drawn by hand. Type its parts in the panel to build it again.");
+        }
         // Keys on this glyph (or on ones it follows) may have moved it.
         const mk = this.drawing?.metricKeys?.keys;
         if (mk && (mk.left || mk.right || mk.width)) void this.syncFromCore();
@@ -3659,6 +3737,13 @@ export class GlyphEditor {
     if (this.drawing.context) {
       parts.push(`<path class="ghost" transform="${xf}" d="${this.drawing.context.d}"/>`);
     }
+    // A letter built from parts: the built outline, filled behind.
+    if (this.drawing.built && !this.contours.length) {
+      parts.push(`<path class="built-layer" transform="${xf}" d="${this.drawing.built.d}"/>`);
+    }
+    if (this.markPreview?.d) {
+      parts.push(`<path class="mark-preview" transform="${xf}" d="${this.markPreview.d}"/>`);
+    }
 
     // Snap guides.
     if (this.snapLines.x !== undefined) {
@@ -3758,6 +3843,18 @@ export class GlyphEditor {
       const sel = this.placementSel === id ? " selected" : "";
       parts.push(
         `<path class="component${sel}" data-pid="${id}" transform="${xf}${move}" d="${pc.d}"><title>${esc(pc.name)}</title></path>`,
+      );
+    }
+
+    // Anchors: where accents attach, or where this accent joins.
+    for (const [name, a] of Object.entries(this.drawing.anchors ?? {})) {
+      const x = sx(a.x);
+      const y = sy(a.y);
+      const r = 5;
+      const sel = this.anchorSel === name ? " selected" : "";
+      const join = name.startsWith("_") ? " join" : "";
+      parts.push(
+        `<g class="anchor${sel}${join}" data-anchor="${esc(name)}"><circle class="anchor-hit" cx="${x}" cy="${y}" r="10"/><path d="M${x} ${y - r}L${x + r} ${y}L${x} ${y + r}L${x - r} ${y}Z"/><text x="${x + 9}" y="${y - 7}">${esc(name)}</text></g>`,
       );
     }
 
