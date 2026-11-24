@@ -321,6 +321,13 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
     if (segs.lines) entries.push({ label: segs.lines > 1 ? "Make curves" : "Make curve", run: () => ed.setSegmentKind("curve") });
     if (segs.curves) entries.push({ label: segs.curves > 1 ? "Make lines" : "Make line", run: () => ed.setSegmentKind("line") });
     if (nodes.length === 1) entries.push({ label: "Set as start point", run: () => ed.setStartPoint() });
+    entries.push(
+      { label: "Break path here", run: () => ed.breakAtSelection() },
+      ...(ed.canJoin ? [{ label: "Join ends", keys: "Shift J", run: () => void ed.joinSelection() }] : []),
+      { label: "Harmonize", run: () => ed.harmonize(), disabled: !nodes.some((n) => n.type === "smooth") },
+      { label: "Balance handles", run: () => ed.balanceHandles(), disabled: !segs.curves },
+      { label: "Automatic handles", run: () => ed.autoHandles() },
+    );
     entries.push("sep", { heading: "Select" });
     entries.push(
       { label: "Select path", run: () => { for (const ci of contours) ed.selectContour(ci); ed.render(); refresh(ed); } },
@@ -338,6 +345,7 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Invert selection", keys: "Ctrl Shift I", run: () => ed.invertSelection() },
       "sep",
       { heading: contours.length === 1 ? "Path" : `${contours.length} paths` },
+      ...(ed.hasOpenSelection ? [{ label: "Close path", run: () => ed.closePaths() }] : []),
       { label: "Reverse direction", keys: "Ctrl Shift R", run: () => ed.reverseDirection() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
@@ -437,6 +445,8 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Part labels", "showPartLabels"),
     check("Pa-height zones", "showZones"),
     check("Outline warnings", "showWarnings"),
+    check("Tunni lines", "showTunni"),
+    check("Curvature comb", "showComb"),
   );
   document.body.append(menu);
   const r = menu.getBoundingClientRect();

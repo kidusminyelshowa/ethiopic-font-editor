@@ -123,7 +123,8 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     items.sort_by_key(|(ch, ..)| *ch);
     items.dedup_by_key(|(ch, ..)| *ch);
     for (ch, outline, advance) in items {
-        let contours: Vec<&Contour> = outline.iter().filter(|c| c.points.len() >= 2).collect();
+        // Open paths are working lines, not part of the glyph.
+        let contours: Vec<&Contour> = outline.iter().filter(|c| !c.open && c.points.len() >= 2).collect();
         if contours.is_empty() {
             skipped.push(ch);
             continue;

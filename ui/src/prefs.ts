@@ -17,6 +17,10 @@ export interface CanvasPrefs {
   showPartLabels: boolean;
   showWarnings: boolean;
   showZones: boolean;
+  /** Tunni lines on selected curves. */
+  showTunni: boolean;
+  /** Curvature combs on selected paths. */
+  showComb: boolean;
   /** Filled outline, or outline only. */
   fill: boolean;
   /** Shape tool options. */
@@ -39,6 +43,8 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   showPartLabels: true,
   showWarnings: true,
   showZones: true,
+  showTunni: true,
+  showComb: false,
   fill: true,
   cornerRadius: 40,
   polygonSides: 6,

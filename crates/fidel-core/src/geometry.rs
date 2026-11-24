@@ -104,11 +104,15 @@ pub struct Contour {
     /// Hidden in the editor. Still part of the glyph and still exported.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// An open path: it starts and ends on its first and last points, with no
+    /// closing segment. Kept while drawing; not exported.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
 }
 
 impl Contour {
     pub fn new(id: ContourId, part: Option<Part>, points: Vec<Point>) -> Self {
-        Contour { id, points, part, name: None, locked: false, hidden: false }
+        Contour { id, points, part, name: None, locked: false, hidden: false, open: false }
     }
 
     /// Axis-aligned rectangle with corners at `min` and `max`, drawn
@@ -192,10 +196,12 @@ pub enum ContourProblem {
     HandlesBeforeLine,
     /// A `curve` point without the two handles in front of it.
     CurveWithoutHandles,
+    /// An open path that starts or ends on a handle.
+    OpenEndsOffCurve,
 }
 
 impl Contour {
-    /// Check that the points form a closed cubic contour in UFO order: each
+    /// Check that the points form a cubic contour in UFO order: each
     /// `curve` point is preceded by exactly two handles, each `line` point by none.
     pub fn validate(&self) -> Result<(), ContourProblem> {
         let n = self.points.len();
@@ -209,8 +215,12 @@ impl Contour {
             }
         }
         let start = self.points.iter().position(Point::is_on_curve).ok_or(ContourProblem::NoOnCurvePoint)?;
+        if self.open && (start != 0 || !self.points[n - 1].is_on_curve()) {
+            return Err(ContourProblem::OpenEndsOffCurve);
+        }
         let mut handles = 0;
-        for i in 1..=n {
+        let steps = if self.open { n - 1 } else { n };
+        for i in 1..=steps {
             let p = &self.points[(start + i) % n];
             match p.kind {
                 PointKind::OffCurve => {
@@ -244,7 +254,8 @@ impl Contour {
         let first = &self.points[start];
         let mut d = format!("M{} {}", f(first.pos.x), f(first.pos.y));
         let mut pending: Vec<Vec2> = Vec::new();
-        for i in 1..=n {
+        let steps = if self.open { n - 1 } else { n };
+        for i in 1..=steps {
             let p = &self.points[(start + i) % n];
             match p.kind {
                 PointKind::OffCurve => pending.push(p.pos),
@@ -261,14 +272,16 @@ impl Contour {
                     pending.clear();
                 }
                 _ => {
-                    if i < n {
+                    if i < n || self.open {
                         d += &format!("L{} {}", f(p.pos.x), f(p.pos.y));
                     }
                     pending.clear();
                 }
             }
         }
-        d.push('Z');
+        if !self.open {
+            d.push('Z');
+        }
         d
     }
 }
@@ -320,6 +333,21 @@ mod tests {
 
         let c = Contour::new(0, None, vec![Point::off(0, 0.0, 0.0), Point::off(1, 1.0, 1.0)]);
         assert_eq!(c.validate(), Err(ContourProblem::NoOnCurvePoint));
+    }
+
+    #[test]
+    fn open_paths_validate_and_draw_without_closing() {
+        let mut c = Contour::new(
+            0,
+            None,
+            vec![Point::line(0, 0.0, 0.0), Point::line(1, 100.0, 0.0), Point::line(2, 100.0, 100.0)],
+        );
+        c.open = true;
+        assert_eq!(c.validate(), Ok(()));
+        assert_eq!(c.to_svg_path(), "M0 0L100 0L100 100");
+        // An open path cannot end on a handle.
+        c.points.push(Point::off(3, 50.0, 50.0));
+        assert_eq!(c.validate(), Err(ContourProblem::OpenEndsOffCurve));
     }
 
     #[test]

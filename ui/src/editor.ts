@@ -56,11 +56,25 @@ import {
   type Matrix,
   type OutlineIssue,
 } from "./pathops";
+import {
+  autoHandles,
+  balanceContour,
+  breakAt,
+  closePath,
+  combTeeth,
+  endOf,
+  fitStroke,
+  harmonize,
+  joinPaths,
+  moveTunni,
+  powerNudge,
+  tunniPoint,
+} from "./curves";
 import { gridStep, onPrefs, prefs } from "./prefs";
 import { importSvg, SvgImportError } from "./svgImport";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
-export type Tool = "select" | "direct" | "pen" | ShapeKind | "hand";
+export type Tool = "select" | "direct" | "pen" | "pencil" | ShapeKind | "hand";
 export type ShapeKind = "rect" | "rounded" | "ellipse" | "polygon" | "star";
 export const SHAPES: ShapeKind[] = ["rect", "rounded", "ellipse", "polygon", "star"];
 export const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -117,6 +131,8 @@ type Gesture =
   | { kind: "zone"; id: string; start: number; now: number }
   | { kind: "placement"; id: number; start: Vec2; d: Vec2; moved: boolean }
   | { kind: "deform"; i: number; start: Vec2; d: number }
+  | { kind: "pencil"; pts: Vec2[]; startScreen: Vec2 }
+  | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
@@ -210,6 +226,8 @@ export class GlyphEditor {
   private snapLines: { x?: number; y?: number } = {};
   private gesture: Gesture | null = null;
   private pen: Node[] | null = null;
+  /** When the pen carries on an open path: the path and where it sat in the list. */
+  private penFrom: { at: number; contour: Contour } | null = null;
   private cursor: Vec2 | null = null;
   private spaceHeld = false;
   /** Z held down: click zooms in, Alt-click out, drag zooms to an area. */
@@ -787,7 +805,30 @@ export class GlyphEditor {
       return;
     }
 
+    if (this.tool === "pencil") {
+      this.gesture = { kind: "pencil", pts: [font], startScreen: screen };
+      return;
+    }
+
+    // A Tunni point: drag to change both handles of its curve.
+    const tun = (e.target as Element | null)?.closest?.("[data-tunni]")?.getAttribute("data-tunni");
+    if (tun) {
+      const [ci, seg] = tun.split(":").map(Number);
+      this.gesture = { kind: "tunni", ci, seg, base: clone(this.contours), moved: false };
+      return;
+    }
+
     if (this.tool === "pen") {
+      // Clicking the end of an open path carries on drawing it.
+      if (!this.pen) {
+        const hit = this.hitPoint(screen);
+        const c = hit ? this.contours[hit[0]] : null;
+        const end = c && hit ? endOf(c, c.points[hit[1]].id) : null;
+        if (c && hit && end) {
+          this.resumePen(hit[0], end);
+          return;
+        }
+      }
       // Clicking a segment with the pen, outside a path in progress, adds a point on it.
       if (!this.pen) {
         const seg = this.hitPoint(screen) ? null : this.hitSegment(font);
@@ -1032,6 +1073,29 @@ export class GlyphEditor {
       case "lasso":
         g.pts.push(font);
         break;
+      case "pencil": {
+        const last = g.pts[g.pts.length - 1];
+        if (Math.hypot(font.x - last.x, font.y - last.y) * this.view.scale > 1.5) g.pts.push(font);
+        break;
+      }
+      case "tunni": {
+        const c = g.base[g.ci];
+        const seg = segments(c)[g.seg];
+        const res = seg ? moveTunni(seg.pts, font) : null;
+        if (!res) break;
+        const nodes = toNodes(c);
+        const a = nodes[seg.from].out;
+        const b = nodes[seg.to].in;
+        if (!a || !b) break;
+        const cur = clone(c);
+        for (const p of cur.points) {
+          if (p.id === a.id) p.pos = { x: Math.round(res[0].x), y: Math.round(res[0].y) };
+          if (p.id === b.id) p.pos = { x: Math.round(res[1].x), y: Math.round(res[1].y) };
+        }
+        this.contours[g.ci] = cur;
+        g.moved = true;
+        break;
+      }
       case "pen-drag": {
         let h = font;
         if (e.shiftKey) h = constrain45(g.node.pos, h);
@@ -1185,6 +1249,11 @@ export class GlyphEditor {
       this.host.renderSide(this);
     } else if (g.kind === "zone") {
       if (g.now !== g.start) void this.moveZone(g.id, g.now);
+    } else if (g.kind === "pencil") {
+      this.finishPencil(g.pts, g.startScreen, this.screenOf(e));
+    } else if (g.kind === "tunni") {
+      if (g.moved) this.commit("Tunni line");
+      this.render();
     } else if (g.kind === "deform") {
       const h = this.drawing?.handles[g.i];
       if (h && g.d) void this.moveDeform(h, g.d);
@@ -1601,7 +1670,7 @@ export class GlyphEditor {
     if (first && this.pen.length >= 2) {
       const s = this.toScreen(first.pos);
       if (Math.hypot(s.x - screen.x, s.y - screen.y) < HIT_PX + 2) {
-        this.finishPen();
+        this.finishPen(true);
         return;
       }
     }
@@ -1611,10 +1680,17 @@ export class GlyphEditor {
     this.render();
   }
 
-  finishPen(): void {
+  /**
+   * End the path being drawn. Clicking its first point closes it; Enter,
+   * Escape or another tool leave it open, to carry on later from either end.
+   */
+  finishPen(close = false): void {
     const nodes = this.pen;
+    const resumed = this.penFrom;
     this.pen = null;
+    this.penFrom = null;
     if (!nodes || nodes.length < 2) {
+      if (resumed) this.contours.splice(resumed.at, 0, resumed.contour);
       this.render();
       return;
     }
@@ -1624,23 +1700,50 @@ export class GlyphEditor {
       if (nd.in) nd.in = { id: id++, pos: { x: Math.round(nd.in.pos.x), y: Math.round(nd.in.pos.y) } };
       if (nd.out) nd.out = { id: id++, pos: { x: Math.round(nd.out.pos.x), y: Math.round(nd.out.pos.y) } };
     }
-    const ci = this.contours.length;
-    const contour = fromNodes(nodes, nextContourId(this.contours), null, id);
-    this.contours.push(contour);
-    this.selection = new Set(contour.points.map((_, pi) => key(ci, pi)));
-    this.commit("Pen path");
+    const at = resumed ? resumed.at : this.contours.length;
+    const contour = fromNodes(nodes, resumed?.contour.id ?? nextContourId(this.contours), resumed?.contour.part ?? null, id, !close);
+    if (resumed?.contour.name) contour.name = resumed.contour.name;
+    this.contours.splice(at, 0, contour);
+    this.selection = new Set(contour.points.map((_, pi) => key(at, pi)));
+    this.commit(close ? "Pen path" : "Open path");
+    this.render();
+  }
+
+  /** Pick up an open path at one end and keep drawing from it. */
+  private resumePen(ci: number, end: "start" | "end"): void {
+    const c = this.contours[ci];
+    let nodes = toNodes(c);
+    if (end === "start") nodes = [...nodes].reverse().map((nd) => ({ ...nd, in: nd.out, out: nd.in }));
+    this.contours.splice(ci, 1);
+    this.penFrom = { at: ci, contour: c };
+    this.selection.clear();
+    this.pen = nodes;
     this.render();
   }
 
   cancelPen(): void {
-    this.pen = null;
-    this.render();
+    this.finishPen(false);
+  }
+
+  /** Turn a freehand stroke into curves: closed when it ends where it began. */
+  private finishPencil(pts: Vec2[], startScreen: Vec2, endScreen: Vec2): void {
+    if (pts.length < 3) return this.render();
+    const closed = pts.length > 8 && Math.hypot(startScreen.x - endScreen.x, startScreen.y - endScreen.y) < HIT_PX * 2;
+    // About one screen pixel and a half of tolerance, in font units.
+    const nodes = fitStroke(pts, Math.max(1, 1.5 / this.view.scale), closed);
+    if (nodes.length < 2) return this.render();
+    const at = this.contours.length;
+    const contour = fromNodes(nodes, nextContourId(this.contours), null, undefined, !closed);
+    this.contours.push(contour);
+    this.selection = new Set(contour.points.map((_, pi) => key(at, pi)));
+    this.commit("Pencil");
+    this.changedSelection();
   }
 
   // ---------- Edits ----------
 
   setTool(tool: Tool): void {
-    if (this.pen && tool !== "pen") this.finishPen();
+    if (this.pen && tool !== "pen") this.finishPen(false);
     if (isShape(tool)) this.shape = tool;
     this.tool = tool;
     this.root.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) => {
@@ -1870,6 +1973,98 @@ export class GlyphEditor {
 
   addExtremes(): void {
     this.editSelectedContours((c) => addExtremes(c), "Add extremes", true);
+  }
+
+  // ---------- Curve tools ----------
+
+  /** Close the selected open paths with a straight segment. */
+  closePaths(): void {
+    this.editSelectedContours((c) => closePath(c), "Close path");
+  }
+
+  /** Whether any selected path is open. */
+  get hasOpenSelection(): boolean {
+    return this.selectedContours().some((ci) => this.contours[ci]?.open);
+  }
+
+  /** Selected on-curve points, as [contour index, point id]. */
+  private selectedOnCurve(): [number, number][] {
+    return [...this.selection].map(parseKey).flatMap(([ci, pi]) => {
+      const p = this.contours[ci]?.points[pi];
+      return p && isOn(p) ? [[ci, p.id] as [number, number]] : [];
+    });
+  }
+
+  /** Cut paths at the selected on-curve points. */
+  breakAtSelection(): void {
+    const picked = this.selectedOnCurve();
+    if (!picked.length) return;
+    // Work contour by contour, from the last point back, so earlier cuts keep their ids.
+    const byContour = new Map<number, number[]>();
+    for (const [ci, id] of picked) byContour.set(ci, [...(byContour.get(ci) ?? []), id]);
+    let free = nextContourId(this.contours);
+    const out: Contour[] = [];
+    const cut: number[] = [];
+    this.contours.forEach((c, ci) => {
+      const ids = byContour.get(ci);
+      if (!ids) return out.push(c);
+      let pieces = [c];
+      for (const id of ids) {
+        pieces = pieces.flatMap((pc) => (pc.points.some((p) => p.id === id && isOn(p)) ? breakAt(pc, id, free++) : [pc]));
+      }
+      for (const pc of pieces) {
+        cut.push(out.length);
+        out.push(pc);
+      }
+    });
+    this.contours = out;
+    this.selection = new Set(cut.flatMap((ci) => this.contours[ci].points.map((_, pi) => key(ci, pi))));
+    this.commit("Break path");
+    this.changedSelection();
+  }
+
+  /** Join two selected open ends (or close a path whose two ends are selected). */
+  joinSelection(): boolean {
+    const ends = this.selectedOnCurve().flatMap(([ci, id]) => {
+      const e = endOf(this.contours[ci], id);
+      return e ? [{ ci, e }] : [];
+    });
+    if (ends.length !== 2) return false;
+    const [a, b] = ends;
+    const joined = joinPaths(this.contours[a.ci], a.e, this.contours[b.ci], b.e);
+    this.contours[a.ci] = joined;
+    if (b.ci !== a.ci) this.contours.splice(b.ci, 1);
+    const ci = b.ci !== a.ci && b.ci < a.ci ? a.ci - 1 : a.ci;
+    this.selection = new Set(this.contours[ci].points.map((_, pi) => key(ci, pi)));
+    this.commit(b.ci === a.ci ? "Close path" : "Join paths");
+    this.changedSelection();
+    return true;
+  }
+
+  /** Whether the selection is two open ends that can be joined. */
+  get canJoin(): boolean {
+    return this.selectedOnCurve().filter(([ci, id]) => endOf(this.contours[ci], id)).length === 2;
+  }
+
+  /** Move the selected smooth points so curvature matches on both sides. */
+  harmonize(): void {
+    this.editSelectedContours((c, ids) => harmonize(c, ids), "Harmonize");
+  }
+
+  /** Even out handle tension on the curves between selected points. */
+  balanceHandles(): void {
+    this.editSelectedContours((c, ids) => balanceContour(c, ids.size ? ids : new Set(c.points.map((p) => p.id))), "Balance handles");
+  }
+
+  /** Let the selected points set their own handles (Hobby curves). */
+  autoHandles(): void {
+    this.editSelectedContours((c, ids) => autoHandles(c, ids), "Automatic handles");
+  }
+
+  /** Move the selected on-curve points, reshaping the curves next to them proportionally. */
+  powerNudge(dx: number, dy: number): void {
+    if (!this.selectedOnCurve().length) return this.nudge(dx, dy);
+    this.editSelectedContours((c, ids) => powerNudge(c, ids, { x: dx, y: dy }), "Power nudge");
   }
 
   /** Round the selected points (or the whole drawing) to whole units. */
@@ -2265,7 +2460,9 @@ export class GlyphEditor {
         const [small, medium, large] = prefs.nudge;
         const step = mod ? large : e.shiftKey ? medium : small;
         const d = { arrowleft: [-step, 0], arrowright: [step, 0], arrowup: [0, step], arrowdown: [0, -step] }[k];
-        if (d) this.nudge(d[0], d[1]);
+        // Alt: power nudge, which brings the curves along proportionally.
+        if (d && e.altKey) this.powerNudge(d[0], d[1]);
+        else if (d) this.nudge(d[0], d[1]);
         return;
       }
       if (k === "tab") {
@@ -2316,6 +2513,8 @@ export class GlyphEditor {
       else if (k === "v") this.setTool("select");
       else if (k === "a") this.setTool("direct");
       else if (k === "p") this.setTool("pen");
+      else if (k === "b") this.setTool("pencil");
+      else if (e.shiftKey && k === "j") this.joinSelection();
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
       else if (k === "h") this.setTool("hand");
@@ -2338,14 +2537,14 @@ export class GlyphEditor {
           this.svg.dataset.zoom = "out";
         }
       } else if (k === "escape") {
-        if (this.pen) this.cancelPen();
+        if (this.pen) this.finishPen(false);
         else {
           this.selection.clear();
           this.pivot = null;
           this.render();
           this.host.renderSide(this);
         }
-      } else if (k === "enter" && this.pen) this.finishPen();
+      } else if (k === "enter" && this.pen) this.finishPen(false);
       else if (k === "delete" || k === "backspace") {
         e.preventDefault();
         this.deleteSelection(!e.altKey);
@@ -2550,12 +2749,12 @@ export class GlyphEditor {
     // Filled outline (all visible contours together, so counters cut out),
     // then each contour for hit testing and part colour.
     const visible = this.visibleContours();
-    const all = visible.map(contourPath).join("");
+    const all = visible.filter((c) => !c.open).map(contourPath).join("");
     parts.push(`<path class="outline-fill${prefs.fill ? "" : " no-fill"}" transform="${xf}" d="${all}"/>`);
     this.contours.forEach((c, ci) => {
       if (c.hidden) return;
       const color = c.part ? PART_COLORS[c.part] : null;
-      const cls = `contour${color ? " tagged" : ""}${c.locked ? " locked" : ""}`;
+      const cls = `contour${color ? " tagged" : ""}${c.locked ? " locked" : ""}${c.open ? " open" : ""}`;
       parts.push(
         `<path class="${cls}"${c.locked ? "" : ` data-ci="${ci}"`} transform="${xf}" d="${contourPath(c)}"${color ? ` style="--part:${color}"` : ""}/>`,
       );
@@ -2614,6 +2813,59 @@ export class GlyphEditor {
       }
       const first = pts[0];
       parts.push(`<circle class="pen-start" cx="${sx(first.pos.x)}" cy="${sy(first.pos.y)}" r="8"/>`);
+    }
+
+    // Freehand stroke in progress.
+    if (g?.kind === "pencil" && g.pts.length > 1) {
+      parts.push(`<polyline class="pen-path" points="${g.pts.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ")}"/>`);
+    }
+
+    // Curvature combs on the selected paths.
+    if (prefs.showComb && !this.pen) {
+      const curves = this.selectedContours().flatMap((ci) => (this.contours[ci].hidden ? [] : segments(this.contours[ci]).filter((sg) => sg.pts.length === 4)));
+      // Scale so the longest tooth is about 60 px, whatever the zoom.
+      let maxK = 0;
+      const raw = curves.map((sg) => combTeeth(sg.pts, 1));
+      for (const teeth of raw) for (const t of teeth) maxK = Math.max(maxK, Math.hypot(t.tip.x - t.at.x, t.tip.y - t.at.y));
+      if (maxK > 1e-9) {
+        const k = 60 / this.view.scale / maxK;
+        for (const sg of curves) {
+          const teeth = combTeeth(sg.pts, k);
+          const tips = teeth.map((t) => `${sx(t.tip.x)},${sy(t.tip.y)}`).join(" ");
+          parts.push(`<g class="comb">${teeth.map((t) => `<line x1="${sx(t.at.x)}" y1="${sy(t.at.y)}" x2="${sx(t.tip.x)}" y2="${sy(t.tip.y)}"/>`).join("")}<polyline points="${tips}"/></g>`);
+        }
+      }
+    }
+
+    // Tunni lines on curves with a selected point: drag the dot to change both handles.
+    if (prefs.showTunni && this.tool === "direct" && !this.pen) {
+      const byContour = new Map<number, Set<number>>();
+      for (const k of this.selection) {
+        const [ci, pi] = parseKey(k);
+        const p = this.contours[ci]?.points[pi];
+        if (!p) continue;
+        if (!byContour.has(ci)) byContour.set(ci, new Set());
+        byContour.get(ci)!.add(p.id);
+      }
+      for (const [ci, ids] of byContour) {
+        const c = this.contours[ci];
+        if (c.hidden || c.locked) continue;
+        const nodes = toNodes(c);
+        segments(c).forEach((sg, si) => {
+          if (sg.pts.length !== 4) return;
+          const a = nodes[sg.from];
+          const b = nodes[sg.to];
+          const touched = [a.id, b.id, a.out?.id, b.in?.id].some((id) => id !== undefined && ids.has(id));
+          if (!touched) return;
+          const t = tunniPoint(sg.pts);
+          if (!t) return;
+          const [, h0, h1] = sg.pts;
+          parts.push(
+            `<line class="tunni-line" x1="${sx(h0.x)}" y1="${sy(h0.y)}" x2="${sx(h1.x)}" y2="${sy(h1.y)}"/>`,
+            `<circle class="tunni-pt" data-tunni="${ci}:${si}" cx="${sx(t.x)}" cy="${sy(t.y)}" r="4"><title>Tunni point: drag to change both handles</title></circle>`,
+          );
+        });
+      }
     }
 
     // Outline problems, as small markers with the problem as a tooltip.
