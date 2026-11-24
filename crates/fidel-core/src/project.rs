@@ -123,6 +123,17 @@ pub struct FontInfo {
     pub style_name: String,
     pub version: f64,
     pub designer: String,
+    /// Width of the word space, in font units. `None` uses a third of the em
+    /// less a little (0.3 em), close to the reference Ethiopic fonts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_width: Option<f64>,
+}
+
+impl FontInfo {
+    /// The space's advance for this em size.
+    pub fn space_advance(&self, units_per_em: u16) -> f64 {
+        self.space_width.filter(|w| *w >= 0.0).unwrap_or(f64::from(units_per_em) * 0.3)
+    }
 }
 
 impl Default for FontInfo {
@@ -132,6 +143,7 @@ impl Default for FontInfo {
             style_name: "Regular".into(),
             version: 1.0,
             designer: String::new(),
+            space_width: None,
         }
     }
 }
@@ -183,6 +195,9 @@ pub struct Symbol {
     pub advance_width: f64,
     #[serde(default)]
     pub contours: Vec<Contour>,
+    /// Components placed on it: a numeral frame, a shared dot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<crate::component::ComponentRef>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -332,9 +347,17 @@ impl Project {
                 return self.set_generated_outline(&family, order, &contours);
             }
         }
+        let refresh = matches!(target, DrawingTarget::Base(_) | DrawingTarget::Alteration(_));
         let slot = match target {
             DrawingTarget::Base(id) => {
-                &mut self.bases.get_mut(id).ok_or_else(|| ModelError::UnknownBase(id.clone()))?.contours
+                let b = self.bases.get_mut(id).ok_or_else(|| ModelError::UnknownBase(id.clone()))?;
+                // Drawing on a derived base makes it its own.
+                if let Some(d) = b.derived.as_mut() {
+                    if b.contours != contours {
+                        d.own = true;
+                    }
+                }
+                &mut b.contours
             }
             DrawingTarget::Alteration(id) => {
                 &mut self
@@ -362,6 +385,79 @@ impl Project {
             }
         };
         *slot = contours;
+        if refresh {
+            self.refresh_derived();
+        }
+        Ok(())
+    }
+
+    /// Rebuild every base that follows another (ሸ from ሰ + cap). Call after
+    /// any change to a base or an alteration.
+    pub fn refresh_derived(&mut self) {
+        // Twice, so a base derived from a derived base catches up.
+        for _ in 0..2 {
+            let ids: Vec<String> =
+                self.bases.values().filter(|b| b.follows()).map(|b| b.id.clone()).collect();
+            for id in ids {
+                if let Some((contours, advance, components, anchors)) = self.derived_outline(&id) {
+                    let b = self.bases.get_mut(&id).expect("listed above");
+                    b.contours = contours;
+                    b.advance_width = advance;
+                    b.components = components;
+                    b.anchors = anchors;
+                }
+            }
+        }
+    }
+
+    /// A derived base's outline: its source base with the added marks placed
+    /// on it, the advance grown to keep the right sidebearing. `None` when the
+    /// base is not derived or its source is missing.
+    #[allow(clippy::type_complexity)]
+    pub fn derived_outline(
+        &self,
+        id: &str,
+    ) -> Option<(Vec<Contour>, f64, Vec<crate::component::ComponentRef>, BTreeMap<String, Vec2>)> {
+        let d = self.bases.get(id)?.derived.as_ref()?;
+        let src = self.bases.get(&d.from).filter(|s| s.id != id)?;
+        let mut contours = src.contours.clone();
+        let mut next = contours.iter().map(|c| c.id + 1).max().unwrap_or(0);
+        let family = self.families.values().find(|f| f.base == id).map(|f| f.id.clone()).unwrap_or_default();
+        for alt_id in &d.adds {
+            let Some(alt) = self.alterations.get(alt_id) else { continue };
+            if !alt.verb.is_additive() || alt.contours.is_empty() {
+                continue;
+            }
+            let Some(attach) = alt.placement.attach_point(src) else { continue };
+            let mut at = attach.at;
+            if let Some(y) = alt.zone.as_deref().and_then(|z| self.metrics.zone_y(z)) {
+                at.y = y;
+            }
+            let shift = at + self.attach_offset(&family, alt_id);
+            for c in &alt.contours {
+                let mut c = c.clone();
+                c.translate(shift);
+                c.id = next;
+                next += 1;
+                contours.push(c);
+            }
+        }
+        let mut advance = src.advance_width;
+        if let (Some(sb), Some(all)) =
+            (crate::geometry::bounds_of(&src.contours), crate::geometry::bounds_of(&contours))
+        {
+            advance = advance.max(all.max.x + (src.advance_width - sb.max.x));
+        }
+        Some((contours, advance, src.components.clone(), src.anchors.clone()))
+    }
+
+    /// Make a derived base follow its source again, or keep its own drawing.
+    pub fn set_base_follows(&mut self, id: &str, follows: bool) -> Result<(), ModelError> {
+        let b = self.bases.get_mut(id).ok_or_else(|| ModelError::UnknownBase(id.into()))?;
+        if let Some(d) = b.derived.as_mut() {
+            d.own = !follows;
+        }
+        self.refresh_derived();
         Ok(())
     }
 
@@ -565,10 +661,14 @@ impl Project {
     /// itself, or is built on a fidel that does.
     fn depends_on(&self, change: &Change, family: &str, order: Order, chain: &mut Vec<Order>) -> bool {
         let Some(fam) = self.families.get(family) else { return false };
+        // A base that follows another (ሸ from ሰ) changes with it, and with
+        // the marks added to it.
+        let derived = self.bases.get(&fam.base).and_then(|b| b.derived.as_ref().filter(|_| b.follows()));
         let direct = match change {
-            Change::Base(id) => &fam.base == id,
+            Change::Base(id) => &fam.base == id || derived.is_some_and(|d| &d.from == id),
             Change::Alteration(id) => {
                 self.effective_alterations(family, order).map(|a| a.contains(id)).unwrap_or(false)
+                    || derived.is_some_and(|d| d.adds.contains(id))
             }
         };
         if direct {
@@ -644,6 +744,7 @@ impl Project {
         } else {
             fam.attach_offsets.insert(alteration.into(), offset);
         }
+        self.refresh_derived();
         Ok(())
     }
 
@@ -734,6 +835,9 @@ impl Project {
         for b in self.bases.values_mut() {
             b.components.retain(|r| r.component != id);
         }
+        for s in self.symbols.values_mut() {
+            s.components.retain(|r| r.component != id);
+        }
         Ok(())
     }
 
@@ -795,6 +899,38 @@ impl Project {
             .sum()
     }
 
+    /// A symbol's outline: its own contours and the components placed on it.
+    pub fn symbol_outline(&self, id: &str) -> Vec<Contour> {
+        let Some(s) = self.symbols.get(id) else { return Vec::new() };
+        let mut out = s.contours.clone();
+        for r in &s.components {
+            if let Some(comp) = self.components.get(&r.component) {
+                out.extend(r.place(comp));
+            }
+        }
+        out
+    }
+
+    /// Replace the component placements on a symbol.
+    pub fn set_symbol_components(
+        &mut self,
+        symbol: &str,
+        refs: Vec<crate::component::ComponentRef>,
+    ) -> Result<(), ModelError> {
+        let mut ids = std::collections::HashSet::new();
+        for r in &refs {
+            if !self.components.contains_key(&r.component) {
+                return Err(ModelError::UnknownComponent(r.component.clone()));
+            }
+            if !ids.insert(r.id) {
+                return Err(ModelError::DuplicatePlacementId(r.id));
+            }
+        }
+        self.symbols.get_mut(symbol).ok_or_else(|| ModelError::UnknownSymbol(symbol.into()))?.components =
+            refs;
+        Ok(())
+    }
+
     /// Replace the component placements on a base.
     pub fn set_base_components(
         &mut self,
@@ -811,6 +947,7 @@ impl Project {
             }
         }
         self.bases.get_mut(base).ok_or_else(|| ModelError::UnknownBase(base.into()))?.components = refs;
+        self.refresh_derived();
         Ok(())
     }
 }

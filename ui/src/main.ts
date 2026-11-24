@@ -14,6 +14,7 @@ import {
   type ImpactView,
   type Scope,
   type DrawingTarget,
+  type DrawingView,
   type FidelDetail,
   type FidelGrid,
   type FidelPreview,
@@ -604,7 +605,16 @@ function renderFontProperties(p: FontProperties) {
         num("Pa-top", paTop, (v) => (paTop = v)),
         num("Pa-bottom", paBottom, (v) => (paBottom = v)),
       ),
-      el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
+      el(
+        "div",
+        { class: "field-row" },
+        num(
+          "Word space",
+          Math.round(info.space_width ?? p.metrics.units_per_em * 0.3),
+          (v) => (info.space_width = v >= 0 ? v : null),
+        ),
+        el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
+      ),
     ),
   );
 }
@@ -886,6 +896,42 @@ function renderSidebar() {
   if (!rows.length) rows.push(el("p", { class: "side-empty" }, side.query ? "Nothing matches." : "Loading…"));
   side.list.replaceChildren(...rows);
   markSidebar();
+}
+
+/** For a base made from another (ሸ from ሰ): where it comes from, and following it again. */
+function derivedSection(ed: GlyphEditor, d: DrawingView): Node[] {
+  const dv = d.derived!;
+  const base = d.target.id;
+  const family = state.grid?.rows.find((r) => r.base === base)?.family;
+  const box = el("div", { class: "side-box derived-box" });
+  const from = el("button", { class: "chip recipe-step clickable", title: `Edit ${dv.fromName}: this base follows it` }, el("span", { class: "step-glyph", lang: "gez" }, dv.fromGlyph), el("span", {}, dv.fromName), el("span", { class: "step-edit" }, "Edit"));
+  from.addEventListener("click", () => void openDrawing({ kind: "base", id: dv.from }));
+  const steps = el("ul", { class: "recipe" }, el("li", {}, from));
+  for (const [id, name] of dv.adds) {
+    const add = el("button", { class: "chip recipe-step clickable", title: "Drawn once for every row that adds it" }, el("span", { class: "step-plus", "aria-hidden": "true" }, "+"), el("span", {}, name), el("span", { class: "step-edit" }, "Edit"));
+    add.addEventListener("click", () => {
+      state.contextFamily = family;
+      void openDrawing({ kind: "alteration", id });
+    });
+    steps.append(el("li", {}, add));
+  }
+  box.append(steps);
+  if (!dv.follows) {
+    const again = el("button", { class: "pill small", title: `Rebuild it from ${dv.fromName} and its marks, replacing this drawing` }, `Follow ${dv.fromName} again`);
+    again.addEventListener("click", async () => {
+      const ok = await ask(`Replace this drawing with ${dv.fromName} and its marks?`, { title: "Follow again", kind: "warning", okLabel: "Replace", cancelLabel: "Keep my drawing" });
+      if (!ok) return;
+      try {
+        await api.setBaseFollows(base, true);
+        await ed.open(d.target);
+        await refreshGrid();
+      } catch (err) {
+        toast(`Could not follow it again: ${err}`, "error");
+      }
+    });
+    box.append(el("div", { class: "button-row" }, again));
+  }
+  return [el("h3", { class: "section-label", title: dv.follows ? `Rebuilt whenever ${dv.fromName} or its marks change. Drawing here makes it its own.` : "Drawn by hand" }, "Built from"), box];
 }
 
 async function newComponent(kind: ComponentKind) {
@@ -1362,7 +1408,8 @@ function renderEditorSide(ed: GlyphEditor) {
 
   // Metrics: sidebearings and width, for bases and symbols.
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
-  if (d.target.kind === "base") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  if (d.target.kind === "base" && d.derived) sections.unshift(...derivedSection(ed, d));
+  if (d.target.kind === "base" || d.target.kind === "symbol") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
   if (d.target.kind === "component") {
     const id = d.target.id;
     const kind = state.components.find((c) => c.id === id)?.kind;

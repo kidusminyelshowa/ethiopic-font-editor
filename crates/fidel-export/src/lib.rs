@@ -101,7 +101,7 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
         GlyphOut {
             name: "space".into(),
             codepoint: Some(' '),
-            advance: (upm_f * 0.3).round() as u16,
+            advance: project.info.space_advance(upm).round() as u16,
             glyph: Glyph::Empty,
         },
     ];
@@ -117,7 +117,9 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
             let ch = f.codepoint?;
             Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
         })
-        .chain(project.symbols.values().map(|s| (s.codepoint, s.contours.clone(), s.advance_width)))
+        .chain(
+            project.symbols.values().map(|s| (s.codepoint, project.symbol_outline(&s.id), s.advance_width)),
+        )
         .filter(|(ch, ..)| project.in_charset(*ch))
         .collect();
     items.sort_by_key(|(ch, ..)| *ch);

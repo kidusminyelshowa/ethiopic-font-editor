@@ -25,6 +25,23 @@ pub struct Base {
     /// outline in every fidel built from it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentRef>,
+    /// For a base made from another row's base (ሸ from ሰ, ጀ from ደ): where
+    /// it comes from and what is added. While it follows, its outline is
+    /// rebuilt whenever the source or the added marks change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived: Option<Derived>,
+}
+
+/// A base built from another base plus marks such as a cap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Derived {
+    pub from: BaseId,
+    /// Additive alterations placed on the source base.
+    #[serde(default)]
+    pub adds: Vec<crate::alteration::AlterationId>,
+    /// Drawn by hand: no longer rebuilt from the source.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own: bool,
 }
 
 impl Base {
@@ -36,6 +53,12 @@ impl Base {
             contours: Vec::new(),
             anchors: BTreeMap::new(),
             components: Vec::new(),
+            derived: None,
         }
+    }
+
+    /// Whether the outline is rebuilt from another base.
+    pub fn follows(&self) -> bool {
+        self.derived.as_ref().is_some_and(|d| !d.own)
     }
 }

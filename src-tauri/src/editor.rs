@@ -36,6 +36,33 @@ pub struct DrawingView {
     /// For a component: where it lands by rule.
     #[serde(skip_serializing_if = "Option::is_none")]
     rule: Option<ComponentRule>,
+    /// For a base made from another row's base (ሸ from ሰ).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    derived: Option<DerivedView>,
+}
+
+/// Where a derived base comes from.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedView {
+    from: String,
+    from_name: String,
+    from_glyph: String,
+    /// The added marks, by id and name.
+    adds: Vec<(String, String)>,
+    follows: bool,
+}
+
+/// The 1st-order fidel of the family drawn from a base, for labels.
+fn base_glyph(project: &Project, base: &str) -> String {
+    project
+        .families
+        .values()
+        .filter(|f| f.base == base)
+        .filter_map(|f| f.fidels.get(&Order::Giiz).and_then(|g| g.codepoint))
+        .min()
+        .map(String::from)
+        .unwrap_or_default()
 }
 
 /// Where a component lands by rule, and how often it does.
@@ -132,10 +159,8 @@ pub struct PlacedComponent {
     d: String,
 }
 
-fn placed_components(project: &Project, base: &str) -> Vec<PlacedComponent> {
-    project.bases[base]
-        .components
-        .iter()
+fn placed_components(project: &Project, refs: &[ComponentRef]) -> Vec<PlacedComponent> {
+    refs.iter()
         .map(|r| {
             let comp = project.components.get(&r.component);
             PlacedComponent {
@@ -169,7 +194,12 @@ pub fn component_summaries(project: &Project) -> Vec<ComponentSummary> {
             name: c.name.clone(),
             kind: c.kind,
             drawn: !c.contours.is_empty(),
-            uses: project.bases.values().filter(|b| b.components.iter().any(|r| r.component == c.id)).count(),
+            uses: project.bases.values().filter(|b| b.components.iter().any(|r| r.component == c.id)).count()
+                + project
+                    .symbols
+                    .values()
+                    .filter(|s| s.components.iter().any(|r| r.component == c.id))
+                    .count(),
         })
         .collect()
 }
@@ -223,20 +253,35 @@ impl DrawingView {
         Ok(match &target {
             DrawingTarget::Base(id) => {
                 let base = &project.bases[id];
-                let glyph = project
-                    .families
-                    .values()
-                    .find(|f| &f.base == id)
-                    .and_then(|f| f.fidels.get(&Order::Giiz))
-                    .and_then(|f| f.codepoint)
-                    .map(String::from)
-                    .unwrap_or_default();
+                let glyph = base_glyph(project, id);
+                let derived = base.derived.as_ref().map(|d| DerivedView {
+                    from_name: project.bases.get(&d.from).map(|b| b.name.clone()).unwrap_or_default(),
+                    from_glyph: base_glyph(project, &d.from),
+                    adds: d
+                        .adds
+                        .iter()
+                        .map(|a| {
+                            (
+                                a.clone(),
+                                project.alterations.get(a).map(|x| x.name.clone()).unwrap_or_default(),
+                            )
+                        })
+                        .collect(),
+                    follows: !d.own,
+                    from: d.from.clone(),
+                });
+                let subtitle = match &derived {
+                    Some(d) if d.follows => format!("Base · from {} {}", d.from_name, d.from_glyph),
+                    Some(_) => "Base · drawn by hand".into(),
+                    None => "Base · 1st order".into(),
+                };
                 DrawingView {
                     title: format!("{} {glyph}", base.name).trim().to_string(),
-                    subtitle: "Base · 1st order".into(),
+                    subtitle: subtitle.trim().to_string(),
+                    derived,
                     advance_width: Some(base.advance_width),
                     context: None,
-                    components: Some(placed_components(project, id)),
+                    components: Some(placed_components(project, &base.components)),
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
@@ -258,6 +303,7 @@ impl DrawingView {
                     generated: false,
                     handles: Vec::new(),
                     rule: None,
+                    derived: None,
                     target,
                     contours,
                     metrics,
@@ -283,6 +329,7 @@ impl DrawingView {
                     generated,
                     handles: if generated { r.handles.clone() } else { Vec::new() },
                     rule: None,
+                    derived: None,
                     target,
                     contours,
                     metrics,
@@ -295,11 +342,12 @@ impl DrawingView {
                     subtitle: format!("Symbol · U+{:04X}", sym.codepoint as u32),
                     advance_width: Some(sym.advance_width),
                     context: None,
-                    components: None,
+                    components: Some(placed_components(project, &sym.components)),
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
                     rule: None,
+                    derived: None,
                     target,
                     contours,
                     metrics,
@@ -321,6 +369,7 @@ impl DrawingView {
                     zones: zone_views(&metrics),
                     generated: false,
                     handles: Vec::new(),
+                    derived: None,
                     rule: Some(ComponentRule {
                         lands_on: comp.lands_on.clone(),
                         corners: comp.corners,

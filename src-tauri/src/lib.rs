@@ -142,6 +142,7 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
                 return Err("this drawing has no advance width of its own".into())
             }
         }
+        project.refresh_derived();
     }
     state.mark_dirty();
     Ok(())
@@ -342,6 +343,14 @@ fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
     editor::rule_ends(&state.project(), &base)
 }
 
+/// Make a derived base (ሸ from ሰ) follow its source again, or keep its own drawing.
+#[tauri::command]
+fn set_base_follows(state: State<'_, AppState>, base: String, follows: bool) -> CmdResult<()> {
+    state.project().set_base_follows(&base, follows).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
 /// Marks, tags, notes and saved filters.
 #[tauri::command]
 fn get_organize(state: State<'_, AppState>) -> editor::OrganizeView {
@@ -376,6 +385,18 @@ fn set_smart_filters(
     };
     state.mark_dirty();
     view
+}
+
+/// Replace the components placed on a symbol (a numeral's frame).
+#[tauri::command]
+fn set_symbol_components(
+    state: State<'_, AppState>,
+    symbol: String,
+    placements: Vec<ComponentRef>,
+) -> CmdResult<()> {
+    state.project().set_symbol_components(&symbol, placements).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
 }
 
 /// Replace the components placed on a base.
@@ -694,7 +715,9 @@ pub fn run() {
             get_organize,
             set_mark,
             set_smart_filters,
-            test_install
+            test_install,
+            set_base_follows,
+            set_symbol_components
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

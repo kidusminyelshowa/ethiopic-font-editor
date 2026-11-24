@@ -205,8 +205,11 @@ impl FidelGrid {
                 id: s.id.clone(),
                 codepoint: s.codepoint,
                 name: s.name.clone(),
-                outline: (!s.contours.is_empty())
-                    .then(|| Outline { d: svg_path(&s.contours), advance_width: s.advance_width }),
+                outline: {
+                    let outline = project.symbol_outline(&s.id);
+                    (!outline.is_empty())
+                        .then(|| Outline { d: svg_path(&outline), advance_width: s.advance_width })
+                },
             })
             .collect::<Vec<_>>();
         let mut symbols = symbols;

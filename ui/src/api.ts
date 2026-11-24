@@ -91,6 +91,8 @@ export interface FontInfo {
   style_name: string;
   version: number;
   designer: string;
+  /** Word space in font units; null for 0.3 em. */
+  space_width?: number | null;
 }
 
 export interface FontProperties {
@@ -247,6 +249,8 @@ export interface DrawingView {
   generated: boolean;
   /** Ends of deformed strokes on a generated fidel, to drag. */
   handles: DeformHandle[];
+  /** For a base made from another row's base (ሸ from ሰ). */
+  derived?: { from: string; fromName: string; fromGlyph: string; adds: [string, string][]; follows: boolean };
   /** For a component: where it lands by rule, and how many times. */
   rule?: { landsOn: Part[]; corners: CornerSide; uses: number };
 }
@@ -366,10 +370,13 @@ export const api = {
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
   ruleEnds: (base: string) => invoke<RuleEnd[]>("rule_ends", { base }),
+  setBaseFollows: (base: string, follows: boolean) => invoke<void>("set_base_follows", { base, follows }),
   testInstall: () => invoke<{ path: string; familyName: string; exported: number }>("test_install"),
   getOrganize: () => invoke<OrganizeView>("get_organize"),
   setMark: (key: string, mark: GlyphMark) => invoke<OrganizeView>("set_mark", { key, mark }),
   setSmartFilters: (filters: SmartFilter[]) => invoke<OrganizeView>("set_smart_filters", { filters }),
+  setSymbolComponents: (symbol: string, placements: ComponentRef[]) =>
+    invoke<void>("set_symbol_components", { symbol, placements }),
   setBaseComponents: (base: string, placements: ComponentRef[]) =>
     invoke<void>("set_base_components", { base, placements }),
 };

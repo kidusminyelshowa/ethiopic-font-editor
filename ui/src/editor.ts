@@ -551,8 +551,8 @@ export class GlyphEditor {
   /** Turn the selected paths into a new component, placed where they were. */
   async makeComponent(kind: ComponentKind = "corner"): Promise<void> {
     const t = this.target;
-    if (t?.kind !== "base") {
-      this.host.toast("Components are placed on bases. Open a base to make one.");
+    if (t?.kind !== "base" && t?.kind !== "symbol") {
+      this.host.toast("Components are placed on bases and symbols. Open one to make a component.");
       return;
     }
     const sel = this.selectedContours();
@@ -585,7 +585,7 @@ export class GlyphEditor {
   /** Turn one placed component (or all of them) back into plain paths on the base. */
   async decompose(id?: number): Promise<void> {
     const t = this.target;
-    if (t?.kind !== "base") return;
+    if (t?.kind !== "base" && t?.kind !== "symbol") return;
     const refs = this.placements;
     const which = id === undefined ? refs : refs.filter((r) => r.id === id);
     if (!which.length) return;
@@ -1127,9 +1127,10 @@ export class GlyphEditor {
 
   async setPlacements(refs: ComponentRef[]): Promise<void> {
     const target = this.target;
-    if (target?.kind !== "base" || !this.drawing) return;
+    if ((target?.kind !== "base" && target?.kind !== "symbol") || !this.drawing) return;
     try {
-      await api.setBaseComponents(target.id, refs);
+      if (target.kind === "symbol") await api.setSymbolComponents(target.id, refs);
+      else await api.setBaseComponents(target.id, refs);
       const fresh = await api.getDrawing(target);
       if (this.target?.kind === target.kind && this.target.id === target.id && this.drawing) {
         this.drawing.components = fresh.components;
@@ -3199,6 +3200,14 @@ export class GlyphEditor {
           this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
         if (target.kind === "base") void this.loadRuleEnds();
+        // Drawing on a base made from another one makes it its own.
+        const dv = this.drawing?.derived;
+        if (dv?.follows && this.target?.kind === "base" && this.target.id === target.id) {
+          dv.follows = false;
+          this.drawing!.subtitle = "Base · drawn by hand";
+          this.subtitle.textContent = this.drawing!.subtitle;
+          this.host.renderSide(this);
+        }
         this.host.changed(target);
       })
       .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
