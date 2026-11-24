@@ -93,6 +93,7 @@ import { clipLine, crossings, distanceToGuide, fmt, guideDir, isHorizontal, isVe
 import { importSvg, SvgImportError } from "./svgImport";
 import { inkFromPixels, traceToContours } from "./trace";
 import { placeContours, unplaceContours } from "./components";
+import { isFigmaClipboard, svgFromHtml, vectorFileToSvg } from "./vectorImport";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
 export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
@@ -2314,10 +2315,15 @@ export class GlyphEditor {
     clipboard = picked;
     const b = contoursBounds(picked)!;
     const d = picked.map(contourPath).join("");
+    const w = b.maxX - b.minX;
+    const h = b.maxY - b.minY;
+    // Plain SVG that Figma and Illustrator paste as shapes, carrying our own
+    // paths too so pasting back here is exact.
+    const data = esc(JSON.stringify({ [CLIP_TAG]: picked }));
     const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.minX} ${-b.maxY} ${b.maxX - b.minX} ${b.maxY - b.minY}">` +
-      `<path transform="scale(1 -1)" d="${d}"/></svg>`;
-    return { json: JSON.stringify({ [CLIP_TAG]: picked }), svg };
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${b.minX} ${-b.maxY} ${w} ${h}">` +
+      `<metadata>${data}</metadata><path transform="scale(1 -1)" d="${d}"/></svg>`;
+    return { json: svg, svg };
   }
 
   cut(): { json: string; svg: string } | null {
@@ -2337,7 +2343,10 @@ export class GlyphEditor {
     let picked = clipboard;
     if (text) {
       try {
-        const parsed = JSON.parse(text);
+        // Our paths come inside an SVG's metadata, or (from older copies) as bare JSON.
+        const meta = /<metadata>([\s\S]*?)<\/metadata>/.exec(text)?.[1];
+        const json = meta ? unesc(meta) : text;
+        const parsed = JSON.parse(json);
         if (parsed && Array.isArray(parsed[CLIP_TAG])) picked = parsed[CLIP_TAG];
         else return false;
       } catch {
@@ -3093,8 +3102,13 @@ export class GlyphEditor {
     this.root.querySelector<HTMLInputElement>(".svg-file")!.addEventListener("change", async (e) => {
       const input = e.target as HTMLInputElement;
       const file = input.files?.[0];
-      if (file) this.pasteSvg(await file.text());
       input.value = "";
+      if (!file) return;
+      try {
+        this.pasteSvg(await vectorFileToSvg(file));
+      } catch (err) {
+        this.host.toast(err instanceof Error ? err.message : String(err), "error");
+      }
     });
     const toClipboard = (e: ClipboardEvent, out: { json: string; svg: string } | null) => {
       if (!out) return;
@@ -3116,10 +3130,18 @@ export class GlyphEditor {
         e.preventDefault();
         return;
       }
-      const text = e.clipboardData?.getData("image/svg+xml") || plain;
+      // Vectors from other apps: SVG on the clipboard, as text or inside HTML.
+      const html = e.clipboardData?.getData("text/html") ?? "";
+      const text = e.clipboardData?.getData("image/svg+xml") || (plain.includes("<svg") ? plain : "") || svgFromHtml(html) || "";
       if (text.trim()) {
         e.preventDefault();
         this.pasteSvg(text);
+      } else if (isFigmaClipboard(html)) {
+        e.preventDefault();
+        this.host.toast("Figma keeps its own copies to itself. In Figma, use Copy as SVG (Ctrl Shift C), then paste here.");
+      } else if (plain.trim() && !clipboard) {
+        e.preventDefault();
+        this.host.toast("Nothing to paste as outlines. Copy shapes as SVG, or import a PDF, AI or EPS file.");
       } else if (clipboard) {
         e.preventDefault();
         this.pastePaths();
@@ -3824,6 +3846,10 @@ function seg(a: Node, b: Node, sx: (x: number) => number, sy: (y: number) => num
 
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+}
+
+function unesc(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot);/g, (_, n: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"' })[n]!);
 }
 
 function isTyping(target: EventTarget | null): boolean {
