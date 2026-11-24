@@ -356,6 +356,7 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { heading: contours.length === 1 ? "Path" : `${contours.length} paths` },
       ...(ed.hasOpenSelection ? [{ label: "Close path", run: () => ed.closePaths() }] : []),
       { label: "Reverse direction", keys: "Ctrl Shift R", run: () => ed.reverseDirection() },
+      ...(ed.target?.kind === "base" ? [{ label: "Make component", run: () => void ed.makeComponent() }] : []),
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
       { label: "Tidy up", run: () => ed.tidyUp() },

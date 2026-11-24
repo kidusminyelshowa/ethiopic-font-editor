@@ -7,6 +7,7 @@ import {
   api,
   PARTS,
   type BooleanKind,
+  type ComponentKind,
   type ComponentRef,
   type DeformHandle,
   type DrawingTarget,
@@ -91,6 +92,7 @@ import { gridStep, onPrefs, prefs } from "./prefs";
 import { clipLine, crossings, distanceToGuide, fmt, guideDir, isHorizontal, isVertical, projectOnGuide, rulerTicks, type Guide } from "./guides";
 import { importSvg, SvgImportError } from "./svgImport";
 import { inkFromPixels, traceToContours } from "./trace";
+import { placeContours, unplaceContours } from "./components";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
 export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
@@ -276,6 +278,8 @@ export class GlyphEditor {
   textIndex = -1;
   /** The drawing's background (mask) layer: outlines kept behind it to compare against. */
   background: Contour[] = [];
+  /** A component opened from a base: that base, drawn behind it in the component's own space. */
+  private hostBehind = new Map<string, Contour[]>();
   /** Another glyph shown behind this one, by character, per drawing. */
   compareWith = new Map<string, string>();
   /** For a base or an alteration: the fidel its edits reach. */
@@ -532,6 +536,78 @@ export class GlyphEditor {
     this.commit("Trace sketch");
     this.changedSelection();
     this.host.toast(`Traced ${traced.length} path${traced.length === 1 ? "" : "s"}.`);
+  }
+
+  // ---------- Components on the canvas ----------
+
+  /** Turn the selected paths into a new component, placed where they were. */
+  async makeComponent(kind: ComponentKind = "corner"): Promise<void> {
+    const t = this.target;
+    if (t?.kind !== "base") {
+      this.host.toast("Components are placed on bases. Open a base to make one.");
+      return;
+    }
+    const sel = this.selectedContours();
+    if (!sel.length) {
+      this.host.toast("Select the paths to turn into a component first.");
+      return;
+    }
+    const picked = sel.map((ci) => this.contours[ci]);
+    const b = contoursBounds(picked)!;
+    // The component's origin: the bottom middle of the selection.
+    const at = { x: Math.round((b.minX + b.maxX) / 2), y: Math.round(b.minY) };
+    const local = translated(picked, { x: -at.x, y: -at.y }).map((c, i) => ({ ...c, id: i, locked: undefined, hidden: undefined }));
+    try {
+      const id = await api.addComponent(`${this.drawing?.title ?? "Component"} part`, kind);
+      await api.setDrawing({ kind: "component", id }, local);
+      const set = new Set(sel);
+      this.contours = this.contours.filter((_, ci) => !set.has(ci));
+      this.selection.clear();
+      this.commit("Make component");
+      await this.saving;
+      const pid = Math.max(-1, ...this.placements.map((r) => r.id)) + 1;
+      this.placementSel = pid;
+      await this.setPlacements([...this.placements, { id: pid, component: id, at, on: null }]);
+      this.host.toast("Made a component from the selection. Double-click it to edit it in place.");
+    } catch (err) {
+      this.host.toast(`Could not make the component: ${err}`, "error");
+    }
+  }
+
+  /** Turn one placed component (or all of them) back into plain paths on the base. */
+  async decompose(id?: number): Promise<void> {
+    const t = this.target;
+    if (t?.kind !== "base") return;
+    const refs = this.placements;
+    const which = id === undefined ? refs : refs.filter((r) => r.id === id);
+    if (!which.length) return;
+    try {
+      let next = nextContourId(this.contours);
+      const added: Contour[] = [];
+      for (const r of which) {
+        const d = await api.getDrawing({ kind: "component", id: r.component });
+        for (const c of placeContours(r, d.contours)) added.push({ ...c, id: next++ });
+      }
+      roundContours(added);
+      const start = this.contours.length;
+      this.contours = [...this.contours, ...added];
+      this.selection = new Set(added.flatMap((c, i) => c.points.map((_, pi) => key(start + i, pi))));
+      this.commit(which.length > 1 ? "Decompose all" : "Decompose");
+      await this.saving;
+      this.placementSel = null;
+      await this.setPlacements(refs.filter((r) => !which.includes(r)));
+      this.changedSelection();
+    } catch (err) {
+      this.host.toast(`Could not decompose: ${err}`, "error");
+    }
+  }
+
+  /** Open a placed component, with this base drawn behind it where the component sits. */
+  async editComponentInPlace(id: number): Promise<void> {
+    const r = this.placements.find((x) => x.id === id);
+    if (!r) return;
+    this.hostBehind.set(`component:${r.component}`, unplaceContours(r, this.contours));
+    this.host.openTarget({ kind: "component", id: r.component });
   }
 
   // ---------- Guides ----------
@@ -1774,6 +1850,12 @@ export class GlyphEditor {
       return;
     }
     const screen = this.screenOf(e);
+    // Double-clicking a placed component edits it in place.
+    const pid = (e.target as Element | null)?.closest?.("[data-pid]")?.getAttribute("data-pid");
+    if (pid != null) {
+      void this.editComponentInPlace(Number(pid));
+      return;
+    }
     if (this.tool === "select") {
       // Double-clicking a shape goes into its points, like Figma.
       const ci = this.hitShape(e);
@@ -3360,6 +3442,8 @@ export class GlyphEditor {
     if (prefs.showBackground && this.background.length) {
       parts.push(`<path class="background-layer" transform="${xf}" d="${this.background.map(contourPath).join("")}"/>`);
     }
+    const host = this.hostBehind.get(this.targetKey);
+    if (host?.length) parts.push(`<path class="host-layer" transform="${xf}" d="${host.map(contourPath).join("")}"/>`);
     const cmp = this.compare ? this.host.glyphFor(this.compare) : null;
     if (cmp?.d) parts.push(`<path class="compare-layer" transform="${xf}" d="${cmp.d}"/>`);
 

@@ -184,6 +184,18 @@ export function componentsSection(
       on.addEventListener("change", () => update(r.id, (x) => (x.on = on.value === "" ? null : Number(on.value))));
       const remove = el("button", { class: "pill small ghost" }, "Remove");
       remove.addEventListener("click", () => void ed.setPlacements(refs().filter((x) => x.id !== r.id)));
+      const decompose = el("button", { class: "pill small ghost", title: "Turn it into plain paths on this base" }, "Decompose");
+      decompose.addEventListener("click", () => void ed.decompose(r.id));
+      const edit = el("button", { class: "pill small ghost", title: "Open it with this base behind it (or double-click it)" }, "Edit in place");
+      edit.addEventListener("click", () => void ed.editComponentInPlace(r.id));
+      // Swap for another component, keeping where and how it sits.
+      const swap = el("select", { class: "zone-select", "aria-label": "Component" }) as HTMLSelectElement;
+      for (const c of components) {
+        const o = el("option", { value: c.id }, c.name) as HTMLOptionElement;
+        o.selected = c.id === r.component;
+        swap.append(o);
+      }
+      swap.addEventListener("change", () => update(r.id, (x) => (x.component = swap.value)));
       row.append(
         el(
           "div",
@@ -205,9 +217,22 @@ export function componentsSection(
           el("label", { class: "field grow", title: "The path it sits on: a shortened leg or crick carries it along" }, el("span", {}, "Sits on"), on),
           remove,
         ),
+        el("label", { class: "field", title: "Swap it for another component" }, el("span", {}, "Component"), swap),
+        el("div", { class: "button-row" }, edit, decompose),
       );
     }
     box.append(row);
   }
+  const tools = el("div", { class: "button-row" });
+  const make = el("button", { class: "pill small ghost", title: "Turn the selected paths into a component placed where they were" }, "Make from selection");
+  make.disabled = !ed.selectedContours().length;
+  make.addEventListener("click", () => void ed.makeComponent());
+  tools.append(make);
+  if (placed.length > 1) {
+    const all = el("button", { class: "pill small ghost", title: "Turn every placed component into plain paths" }, "Decompose all");
+    all.addEventListener("click", () => void ed.decompose());
+    tools.append(all);
+  }
+  box.append(tools);
   return [el("h3", { class: "section-label", title: "Leaves, caps and corners drawn once and placed here" }, "Components"), box];
 }

@@ -1020,6 +1020,7 @@ let traceThreshold = 128;
 interface EditorTab {
   target: DrawingTarget | null;
   text: string;
+  title?: string;
 }
 const tabs: EditorTab[] = [{ target: null, text: "" }];
 let currentTab = 0;
@@ -1029,12 +1030,13 @@ const textInput = document.getElementById("text-line") as HTMLInputElement;
 function tabLabel(t: EditorTab): string {
   if (t.text.trim()) return [...t.text.trim()].slice(0, 12).join("");
   if (!t.target) return "New tab";
-  return charOf(t.target) ?? t.target.id.split("/")[0];
+  return charOf(t.target) ?? t.title ?? t.target.id.split("/")[0];
 }
 
 function renderTabs() {
   tabs[currentTab].target = editor.target;
   tabs[currentTab].text = editor.textLine;
+  tabs[currentTab].title = editor.drawing?.title;
   const chips = tabs.map((t, i) => {
     const chip = el("button", { class: `editor-tab${i === currentTab ? " active" : ""}`, role: "tab", "aria-selected": String(i === currentTab), title: "Ctrl T new tab, Ctrl W close" }, tabLabel(t));
     chip.addEventListener("click", () => switchTab(i));

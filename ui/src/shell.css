@@ -2246,3 +2246,12 @@ body.editing .side-list {
   font: 15px var(--ethiopic);
   text-align: center;
 }
+
+.canvas .host-layer {
+  fill: var(--ink);
+  fill-opacity: 0.12;
+  stroke: var(--ink-faint);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
