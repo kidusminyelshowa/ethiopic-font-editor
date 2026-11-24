@@ -324,6 +324,27 @@ export interface ExportSummary {
   skipped: number;
 }
 
+export type KernSide = "left" | "right";
+
+/** One kerning value. A side is a character, or `@` and a class name. */
+export interface KernPair {
+  left: string;
+  right: string;
+  value: number;
+}
+
+export interface KernClass {
+  name: string;
+  /** Members as one string. */
+  members: string;
+}
+
+export interface KerningData {
+  leftClasses: KernClass[];
+  rightClasses: KernClass[];
+  pairs: KernPair[];
+}
+
 export const api = {
   setBuiltOn: (family: string, order: string, on: string | null) =>
     invoke<FidelDetail>("set_built_on", { family, order, on }),
@@ -382,6 +403,11 @@ export const api = {
   setMetricKeys: (target: DrawingTarget, keys: MetricKeys) => invoke<void>("set_metric_keys", { target, keys }),
   setBaseFollows: (base: string, follows: boolean) => invoke<void>("set_base_follows", { base, follows }),
   testInstall: () => invoke<{ path: string; familyName: string; exported: number }>("test_install"),
+  getKerning: () => invoke<KerningData>("get_kerning"),
+  setKernPair: (left: string, right: string, value: number | null) =>
+    invoke<KerningData>("set_kern_pair", { left, right, value }),
+  setKernClass: (side: KernSide, name: string, members: string, rename?: string) =>
+    invoke<KerningData>("set_kern_class", { side, name, members, rename: rename ?? null }),
   getOrganize: () => invoke<OrganizeView>("get_organize"),
   setMark: (key: string, mark: GlyphMark) => invoke<OrganizeView>("set_mark", { key, mark }),
   setSmartFilters: (filters: SmartFilter[]) => invoke<OrganizeView>("set_smart_filters", { filters }),

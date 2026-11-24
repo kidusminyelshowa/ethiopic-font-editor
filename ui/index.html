@@ -48,6 +48,7 @@
         <nav class="tabs" aria-label="Views">
           <button class="tab active" data-view="grid">Grid</button>
           <button class="tab" data-view="editor">Editor</button>
+          <button class="tab" data-view="kerning">Kerning</button>
         </nav>
       </div>
 
@@ -198,6 +199,30 @@
             </div>
 
             <span class="coords" aria-live="off"></span>
+          </div>
+        </div>
+        <div id="kern-view" class="view kern-view" hidden>
+          <div class="stage-bar">
+            <div class="stage-title">
+              <h1 class="stage-heading">Kerning</h1>
+              <span class="subtle kern-subtitle" lang="gez"></span>
+            </div>
+            <input
+              id="kern-text"
+              class="text-line"
+              type="text"
+              placeholder="Type glyphs to kern"
+              aria-label="Kerning text"
+              title="Click a glyph to select the pair before it, drag it to kern"
+              spellcheck="false"
+              autocomplete="off"
+              lang="gez"
+            />
+            <button id="kern-strings" class="stage-btn" aria-haspopup="menu" title="Fill the line with kerning strings">Strings</button>
+            <input id="kern-size" class="kern-size" type="range" min="32" max="320" step="4" aria-label="Text size" title="Text size" />
+          </div>
+          <div class="kern-wrap">
+            <svg class="kern-canvas" role="img" aria-label="Kerning text"></svg>
           </div>
         </div>
       </section>

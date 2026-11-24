@@ -56,6 +56,8 @@ import { keysFor, onShortcuts, showKeys } from "./shortcuts";
 import { applyFind, find, initFind, loadOrganize, markSection } from "./findBar";
 import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
 import { initProof, setProofFont } from "./proof";
+import { KernView } from "./kernView";
+import { resolve as resolveKern } from "./kerning";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -87,13 +89,14 @@ const ui = {
   inspector: document.getElementById("inspector")!,
   gridView: document.getElementById("grid-view")!,
   editorView: document.getElementById("editor-view")!,
+  kernView: document.getElementById("kern-view")!,
   drawingSelect: document.getElementById("drawing-select") as HTMLSelectElement,
   toasts: document.getElementById("toasts")!,
   projectName: document.getElementById("project-name")!,
   projectMeta: document.getElementById("project-meta")!,
 };
 
-type ViewName = "grid" | "editor";
+type ViewName = "grid" | "editor" | "kerning";
 
 const state = {
   view: "grid" as ViewName,
@@ -110,6 +113,7 @@ const state = {
 /** Alterations and components, for the Parts list and the editor. */
 async function loadParts() {
   [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
+  kernView.data = await api.getKerning();
 }
 
 // ---------- Toasts ----------
@@ -127,13 +131,17 @@ function showView(view: ViewName) {
   state.view = view;
   ui.gridView.hidden = view !== "grid";
   ui.editorView.hidden = view !== "editor";
+  ui.kernView.hidden = view !== "kerning";
+  document.body.classList.toggle("kerning", view === "kerning");
   document.querySelectorAll<HTMLElement>(".tab[data-view]").forEach((t) => {
     const on = t.dataset.view === view;
     t.classList.toggle("active", on);
     if (on) t.setAttribute("aria-current", "page");
     else t.removeAttribute("aria-current");
   });
-  if (view === "grid") {
+  if (view === "kerning") {
+    void refreshGrid().then(() => kernView.show());
+  } else if (view === "grid") {
     void refreshGrid().then(() => {
       if (state.selected) void select(state.selected.family, state.selected.order);
       else renderEmptyInspector();
@@ -776,6 +784,10 @@ function renderLayers() {
 
 function renderSidebar() {
   document.body.classList.toggle("editing", state.view === "editor");
+  if (state.view === "kerning") {
+    kernView.renderSidebar();
+    return;
+  }
   if (state.view === "editor") {
     renderLayers();
     return;
@@ -1004,8 +1016,40 @@ const editor = new GlyphEditor(ui.editorView, {
     return g ? { target: g.target, d: g.outline?.d ?? null, advance: g.outline?.advanceWidth ?? state.grid?.metrics.units_per_em ?? 1000 } : null;
   },
   charOf: (target) => charOf(target),
+  kern: (l, r) => resolveKern(kernView.data, l, r)?.value ?? 0,
   openTarget: (target) => void openDrawing(target),
 });
+const kernView = new KernView(ui.kernView, {
+  metrics: () => state.grid?.metrics ?? null,
+  glyph: (ch) => {
+    const g = glyphIndex().get(ch);
+    return g ? { d: g.outline?.d ?? null, advance: g.outline?.advanceWidth ?? state.grid?.metrics.units_per_em ?? 1000 } : null;
+  },
+  partners: () => {
+    const out: string[] = [];
+    for (const row of state.grid?.rows ?? []) {
+      const c = row.cells.find((x) => x.order === "giiz");
+      if (c?.codepoint && c.outline) out.push(c.codepoint);
+    }
+    for (const sym of state.grid?.symbols ?? []) if (sym.outline) out.push(sym.codepoint);
+    return out;
+  },
+  toast,
+  openGlyph: (ch) => {
+    const g = glyphIndex().get(ch);
+    if (!g) return;
+    showView("editor");
+    void openDrawing(g.target);
+  },
+  query: () => side.query,
+  changed: () => {
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  sideList: side.list,
+  inspector: ui.inspector,
+});
+
 // The editor's line of text updates when outlines change.
 const redrawLine = () => {
   if (state.view === "editor" && editor.textIndex >= 0) editor.render();
@@ -1907,8 +1951,8 @@ window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
     e.preventDefault();
     toggleSidebars();
-  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2")) {
-    showView(e.key === "1" ? "grid" : "editor");
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
+    showView(e.key === "1" ? "grid" : e.key === "2" ? "editor" : "kerning");
   }
 });
 window.addEventListener("keydown", (e) => {

@@ -181,6 +181,9 @@ pub struct Project {
     /// Colour marks, tags, notes and saved filters. Not exported.
     #[serde(default, skip_serializing_if = "crate::organize::Organize::is_empty")]
     pub organize: crate::organize::Organize,
+    /// Kerning pairs and classes.
+    #[serde(default, skip_serializing_if = "crate::kerning::Kerning::is_empty")]
+    pub kerning: crate::kerning::Kerning,
 }
 
 pub type SymbolId = String;

@@ -363,6 +363,49 @@ fn set_metric_keys(
     Ok(())
 }
 
+/// Kerning classes and pairs.
+#[tauri::command]
+fn get_kerning(state: State<'_, AppState>) -> editor::KerningView {
+    editor::kerning_view(&state.project())
+}
+
+/// Set or remove (`value: null`) the kerning between two sides: a character
+/// or `@class`.
+#[tauri::command]
+fn set_kern_pair(
+    state: State<'_, AppState>,
+    left: String,
+    right: String,
+    value: Option<i32>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut project = state.project();
+        project.kerning.set_pair(&left, &right, value).map_err(err)?;
+        editor::kerning_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Create, change, rename or remove (no members) a kerning class.
+#[tauri::command]
+fn set_kern_class(
+    state: State<'_, AppState>,
+    side: fidel_core::kerning::KernSide,
+    name: String,
+    members: String,
+    rename: Option<String>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut project = state.project();
+        let members: Vec<char> = members.chars().collect();
+        project.kerning.set_class(side, &name, &members, rename.as_deref()).map_err(err)?;
+        editor::kerning_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
 /// Marks, tags, notes and saved filters.
 #[tauri::command]
 fn get_organize(state: State<'_, AppState>) -> editor::OrganizeView {
@@ -724,6 +767,9 @@ pub fn run() {
             set_component_rule,
             set_component_end,
             rule_ends,
+            get_kerning,
+            set_kern_pair,
+            set_kern_class,
             get_organize,
             set_mark,
             set_smart_filters,

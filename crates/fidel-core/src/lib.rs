@@ -31,6 +31,7 @@ pub mod ethiopic;
 pub mod fidel;
 pub mod geometry;
 pub mod guides;
+pub mod kerning;
 pub mod kid;
 pub mod metric_keys;
 pub mod order;

@@ -11,6 +11,7 @@
 //! alterations/<id>.json         one alteration: drawn parts and placement rule
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! components/<id>.json          one leaf, cap or corner, drawn once
+//! kerning.json                  kerning pairs and classes
 //! ```
 //!
 //! `project.json` also lists the character sets the project covers. Files
@@ -115,6 +116,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     if !project.organize.is_empty() {
         entries.insert("organize.json".into(), to_json("organize.json", &project.organize)?);
     }
+    if !project.kerning.is_empty() {
+        entries.insert("kerning.json".into(), to_json("kerning.json", &project.kerning)?);
+    }
 
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -161,6 +165,9 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
     }
     if names.iter().any(|n| n == "organize.json") {
         project.organize = read_entry(&mut zip, "organize.json")?;
+    }
+    if names.iter().any(|n| n == "kerning.json") {
+        project.kerning = read_entry(&mut zip, "kerning.json")?;
     }
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {

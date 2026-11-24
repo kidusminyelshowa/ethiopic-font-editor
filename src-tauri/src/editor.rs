@@ -656,6 +656,36 @@ mod tests {
     }
 }
 
+/// Kerning classes and pairs, as the kerning view shows them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KerningView {
+    left_classes: Vec<KernClassView>,
+    right_classes: Vec<KernClassView>,
+    pairs: Vec<fidel_core::kerning::KernPair>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KernClassView {
+    name: String,
+    /// Members as one string, in order.
+    members: String,
+}
+
+pub fn kerning_view(project: &Project) -> KerningView {
+    let k = &project.kerning;
+    let classes = |m: &std::collections::BTreeMap<String, Vec<char>>| {
+        m.iter()
+            .map(|(name, members)| KernClassView { name: name.clone(), members: members.iter().collect() })
+            .collect()
+    };
+    KerningView {
+        left_classes: classes(&k.left_classes),
+        right_classes: classes(&k.right_classes),
+        pairs: k.pairs.clone(),
+    }
+}
+
 /// Marks, tags, notes and saved filters for the grid, with which drawings
 /// have a background layer.
 #[derive(Debug, Serialize)]

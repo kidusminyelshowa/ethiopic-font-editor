@@ -211,6 +211,8 @@ export interface EditorHost {
   glyphFor(ch: string): { target: DrawingTarget; d: string | null; advance: number } | null;
   /** The character a drawing makes, if any. */
   charOf(target: DrawingTarget): string | null;
+  /** Kerning between two characters of the line of text. */
+  kern?(left: string, right: string): number;
   /** Open another drawing in the editor. */
   openTarget(target: DrawingTarget): void;
 }
@@ -431,17 +433,23 @@ export class GlyphEditor {
       return g ? { d: g.d ?? "", advance: g.advance } : null;
     };
     const out: { i: number; x: number; d: string; advance: number }[] = [];
+    const kern = (l: string, r: string) => this.host.kern?.(l, r) ?? 0;
     let x = 0;
+    let next = chars[this.textIndex];
     for (let i = this.textIndex - 1; i >= 0; i--) {
       const g = glyph(chars[i]);
       if (!g) continue;
-      x -= g.advance;
+      x -= g.advance + kern(chars[i], next);
+      next = chars[i];
       out.push({ i, x, ...g });
     }
     x = this.frameWidth ?? 0;
+    let prev = chars[this.textIndex];
     for (let i = this.textIndex + 1; i < chars.length; i++) {
       const g = glyph(chars[i]);
       if (!g) continue;
+      x += kern(prev, chars[i]);
+      prev = chars[i];
       out.push({ i, x, ...g });
       x += g.advance;
     }
@@ -3326,7 +3334,8 @@ export class GlyphEditor {
       if (!this.isActive() || isTyping(e.target)) return;
       // Rebindable shortcuts first.
       const combo = comboOf(e);
-      const action = actionFor(combo);
+      // Kerning keys belong to the kerning view; here Alt+arrows power-nudge.
+      const action = actionFor(combo)?.startsWith("kern.") ? null : actionFor(combo);
       if (action) {
         e.preventDefault();
         if (!e.repeat || action.startsWith("view.zoom") || action === "view.preview") this.runAction(action);

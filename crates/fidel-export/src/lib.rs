@@ -11,17 +11,25 @@
 use fidel_core::geometry::{Contour, PointKind, Vec2};
 use fidel_core::{Order, Project};
 use kurbo::{BezPath, CubicBez, Point};
+use write_fonts::read::collections::IntSet;
 use write_fonts::tables::cmap::Cmap;
 use write_fonts::tables::glyf::{Bbox, GlyfLocaBuilder, Glyph, SimpleGlyph};
+use write_fonts::tables::gpos::builders::{PairPosBuilder, ValueRecordBuilder};
+use write_fonts::tables::gpos::{Gpos, PositionLookup, PositionLookupList};
 use write_fonts::tables::head::{Flags, Head, MacStyle};
 use write_fonts::tables::hhea::Hhea;
 use write_fonts::tables::hmtx::{Hmtx, LongMetric};
+use write_fonts::tables::layout::builders::{Builder, LookupBuilder};
+use write_fonts::tables::layout::{
+    Feature, FeatureList, FeatureRecord, LangSys, LookupFlag, Script, ScriptList, ScriptRecord,
+};
 use write_fonts::tables::loca::LocaFormat;
 use write_fonts::tables::maxp::Maxp;
 use write_fonts::tables::name::{Name, NameRecord};
 use write_fonts::tables::os2::{Os2, SelectionFlags};
 use write_fonts::tables::post::Post;
-use write_fonts::types::{FWord, Fixed, GlyphId, LongDateTime, NameId, Tag, UfWord};
+use write_fonts::tables::variations::ivs_builder::VariationStoreBuilder;
+use write_fonts::types::{FWord, Fixed, GlyphId, GlyphId16, LongDateTime, NameId, Tag, UfWord};
 use write_fonts::{FontBuilder, OffsetMarker};
 
 /// Largest distance, in font units, between a cubic and its quadratic stand-in.
@@ -260,6 +268,7 @@ fn build(
         .collect();
     let first_char = mappings.iter().map(|(c, _)| *c as u32).min().unwrap_or(0x20);
     let last_char = mappings.iter().map(|(c, _)| *c as u32).max().unwrap_or(0x20);
+    let gpos = kern_table(project, &mappings);
     let cmap = Cmap::from_mappings(mappings).map_err(|e| write_err(&e))?;
 
     let avg_width = {
@@ -341,7 +350,46 @@ fn build(
         .and_then(|f| f.add_table(&loca))
         .and_then(|f| f.add_table(&glyf))
         .map_err(|e| write_err(&e))?;
+    if let Some(gpos) = &gpos {
+        font.add_table(gpos).map_err(|e| write_err(&e))?;
+    }
     Ok(font.build())
+}
+
+/// The `kern` feature: glyph pairs (exceptions included) first, then class
+/// pairs, in one lookup, so a glyph pair wins over its class pair. Pairs whose
+/// glyphs are not exported are left out. `None` when nothing is kerned.
+fn kern_table(project: &Project, mappings: &[(char, GlyphId)]) -> Option<Gpos> {
+    let gid =
+        |c: char| mappings.iter().find(|(m, _)| *m == c).and_then(|(_, g)| GlyphId16::try_from(*g).ok());
+    let advance =
+        |v: i32| ValueRecordBuilder::new().with_x_advance(v.clamp(i16::MIN.into(), i16::MAX.into()) as i16);
+    let (glyph_pairs, class_pairs) = project.kerning.flatten();
+    let mut pairs = PairPosBuilder::default();
+    for (l, r, v) in glyph_pairs {
+        if let (Some(l), Some(r)) = (gid(l), gid(r)) {
+            pairs.insert_pair(l, advance(v), r, ValueRecordBuilder::new());
+        }
+    }
+    for (l, r, v) in class_pairs {
+        let set = |m: &[char]| m.iter().filter_map(|&c| gid(c)).collect::<IntSet<GlyphId16>>();
+        let (l, r) = (set(l), set(r));
+        if !l.is_empty() && !r.is_empty() {
+            pairs.insert_classes(l, advance(v), r, ValueRecordBuilder::new());
+        }
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    let lookup = LookupBuilder::new_with_lookups(LookupFlag::empty(), None, vec![pairs]);
+    let lookup = lookup.build(&mut VariationStoreBuilder::new(0));
+    let lang = || Script::new(Some(LangSys::new(vec![0])), Vec::new());
+    let scripts = ScriptList::new(vec![
+        ScriptRecord::new(Tag::new(b"DFLT"), lang()),
+        ScriptRecord::new(Tag::new(b"ethi"), lang()),
+    ]);
+    let features = FeatureList::new(vec![FeatureRecord::new(Tag::new(b"kern"), Feature::new(None, vec![0]))]);
+    Some(Gpos::new(scripts, features, PositionLookupList::new(vec![PositionLookup::Pair(lookup)])))
 }
 
 /// A box with a hole: the usual .notdef.

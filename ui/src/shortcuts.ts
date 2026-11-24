@@ -4,7 +4,7 @@
 export interface ShortcutAction {
   id: string;
   label: string;
-  group: "Tools" | "Edit" | "Paths" | "View";
+  group: "Tools" | "Edit" | "Paths" | "View" | "Kerning";
   /** Default keys, written as `Ctrl+Shift+O`. Ctrl means Cmd on a Mac. */
   keys: string;
 }
@@ -37,6 +37,11 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "view.preview", label: "Preview (hold)", group: "View", keys: "`" },
   { id: "text.next", label: "Next glyph in the line", group: "View", keys: "PageDown" },
   { id: "text.prev", label: "Previous glyph in the line", group: "View", keys: "PageUp" },
+  { id: "kern.tighter", label: "Tighten pair by 1", group: "Kerning", keys: "Alt+ArrowLeft" },
+  { id: "kern.looser", label: "Loosen pair by 1", group: "Kerning", keys: "Alt+ArrowRight" },
+  { id: "kern.tighter10", label: "Tighten pair by 10", group: "Kerning", keys: "Alt+Shift+ArrowLeft" },
+  { id: "kern.looser10", label: "Loosen pair by 10", group: "Kerning", keys: "Alt+Shift+ArrowRight" },
+  { id: "kern.exception", label: "Toggle exception", group: "Kerning", keys: "Alt+E" },
 ];
 
 const KEY = "efe.shortcuts";

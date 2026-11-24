@@ -58,6 +58,8 @@ fn sample() -> Project {
         query: String::new(),
         rules: vec!["tag:review".into()],
     }]);
+    p.kerning.set_class(fidel_core::kerning::KernSide::Left, "ha", &['ሀ', 'ሁ'], None).unwrap();
+    p.kerning.set_pair("@ha", "ለ", Some(-30)).unwrap();
     p
 }
 
