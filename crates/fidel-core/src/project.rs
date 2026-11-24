@@ -195,6 +195,9 @@ pub struct Project {
     /// Axes, masters and instances.
     #[serde(default, skip_serializing_if = "crate::designspace::Designspace::is_empty")]
     pub design: crate::designspace::Designspace,
+    /// OpenType feature code, glyph classes and language systems.
+    #[serde(default, skip_serializing_if = "crate::features::Features::is_default")]
+    pub features: crate::features::Features,
 }
 
 pub type SymbolId = String;

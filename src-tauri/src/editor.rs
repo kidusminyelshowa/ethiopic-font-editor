@@ -769,6 +769,52 @@ pub fn kerning_view(project: &Project) -> KerningView {
     }
 }
 
+/// The feature code, what the project generates around it, and whether it
+/// compiles.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeaturesView {
+    features: fidel_core::features::Features,
+    /// The generated part of the feature file, read-only.
+    generated: String,
+    /// Script, language tag and name of each language system on offer.
+    languages: Vec<(String, String, String)>,
+    /// Kerning classes as the code names them: `@L.ha`, and their members.
+    kern_classes: Vec<(String, String)>,
+    /// Feature tags in the compiled font.
+    tags: Vec<String>,
+    messages: Vec<fidel_export::features::FeatureMessage>,
+    ok: bool,
+}
+
+pub fn features_view(project: &Project) -> FeaturesView {
+    use fidel_core::features::{kern_class_name, LANGUAGES};
+    use fidel_core::kerning::KernSide;
+    let chars = fidel_export::exported_chars(project);
+    let names = fidel_export::features::glyph_order(&chars);
+    let has = |c: char| chars.contains(&c);
+    let src = project.feature_source(&has);
+    let (tags, messages, ok) = match fidel_export::features::compile(project, &names, 256) {
+        Ok(l) => (l.tags, l.warnings, true),
+        Err(e) => (fidel_core::features::feature_tags(&src.text), e, false),
+    };
+    let mut kern_classes = Vec::new();
+    for side in [KernSide::Left, KernSide::Right] {
+        for (n, m) in project.kerning.classes(side) {
+            kern_classes.push((format!("@{}", kern_class_name(side, n)), m.iter().collect()));
+        }
+    }
+    FeaturesView {
+        features: project.features.clone(),
+        generated: src.text[..src.code_start].to_string(),
+        languages: LANGUAGES.iter().map(|(s, l, n)| (s.to_string(), l.to_string(), n.to_string())).collect(),
+        kern_classes,
+        tags,
+        messages,
+        ok,
+    }
+}
+
 /// Marks, tags, notes and saved filters for the grid, with which drawings
 /// have a background layer.
 #[derive(Debug, Serialize)]

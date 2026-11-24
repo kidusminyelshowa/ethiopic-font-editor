@@ -188,6 +188,34 @@ export interface ComponentRef {
   values?: Record<string, number>;
 }
 
+export interface Features {
+  code: string;
+  classes: Record<string, string[]>;
+  /** `script/language`, as `ethi/AMH`. */
+  languages: string[];
+  set_names: Record<string, string>;
+}
+
+export interface FeatureMessage {
+  /** Line and column in the hand-written code; null in the generated part. */
+  line: number | null;
+  column: number | null;
+  message: string;
+  error: boolean;
+}
+
+export interface FeaturesView {
+  features: Features;
+  generated: string;
+  /** Script, language tag, name. */
+  languages: [string, string, string][];
+  /** `@L.ha` and its members. */
+  kernClasses: [string, string][];
+  tags: string[];
+  messages: FeatureMessage[];
+  ok: boolean;
+}
+
 /** One way a part varies inside a master, such as a leaf's size. */
 export interface PartAxis {
   name: string;
@@ -494,6 +522,8 @@ export const api = {
     invoke<void>("set_component_rule", { id, landsOn, corners }),
   setComponentEnd: (id: string, key: string, on: boolean, tweak: Tweak) =>
     invoke<void>("set_component_end", { id, key, on, tweak }),
+  getFeatures: () => invoke<FeaturesView>("get_features"),
+  setFeatures: (features: Features) => invoke<FeaturesView>("set_features", { features }),
   getPart: (id: string) => invoke<PartView>("get_part", { id }),
   setPartAxes: (id: string, axes: PartAxis[]) => invoke<PartView>("set_part_axes", { id, axes }),
   addPartState: (id: string, location: Record<string, number>) => invoke<PartView>("add_part_state", { id, location }),

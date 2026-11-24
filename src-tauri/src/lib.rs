@@ -337,6 +337,27 @@ fn set_component_end(
     Ok(())
 }
 
+/// The feature code and whether it compiles.
+#[tauri::command]
+fn get_features(state: State<'_, AppState>) -> editor::FeaturesView {
+    editor::features_view(&state.project())
+}
+
+/// Save the feature code, classes, languages and set names, and check them.
+#[tauri::command]
+fn set_features(
+    state: State<'_, AppState>,
+    features: fidel_core::features::Features,
+) -> editor::FeaturesView {
+    let view = {
+        let mut project = state.project();
+        project.features = features;
+        editor::features_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
 /// A part's own axes and states.
 #[tauri::command]
 fn get_part(state: State<'_, AppState>, id: String) -> CmdResult<fidel_core::parametric::PartView> {
@@ -868,7 +889,10 @@ fn proof_font(
     state: State<'_, AppState>,
     location: Option<std::collections::BTreeMap<String, f64>>,
 ) -> tauri::ipc::Response {
-    let options = fidel_export::ExportOptions::new("Fidel Proof");
+    let options = fidel_export::ExportOptions {
+        skip_bad_features: true,
+        ..fidel_export::ExportOptions::new("Fidel Proof")
+    };
     let project = match &location {
         Some(at) => state.project().instance_at(at).ok(),
         None => None,
@@ -1002,6 +1026,8 @@ pub fn run() {
             set_component_rule,
             set_component_end,
             rule_ends,
+            get_features,
+            set_features,
             get_part,
             set_part_axes,
             add_part_state,

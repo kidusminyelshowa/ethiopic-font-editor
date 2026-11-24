@@ -12,6 +12,7 @@
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! components/<id>.json          one leaf, cap or corner, drawn once
 //! kerning.json                  kerning pairs and classes
+//! features.json                 feature code, glyph classes, language systems
 //! designspace.json              axes, instances, and the masters other than
 //!                               the active one, each with its drawings
 //! ```
@@ -121,6 +122,9 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     if !project.kerning.is_empty() {
         entries.insert("kerning.json".into(), to_json("kerning.json", &project.kerning)?);
     }
+    if !project.features.is_default() {
+        entries.insert("features.json".into(), to_json("features.json", &project.features)?);
+    }
     if !project.design.is_empty() {
         entries.insert("designspace.json".into(), to_json("designspace.json", &project.design)?);
     }
@@ -173,6 +177,9 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
     }
     if names.iter().any(|n| n == "kerning.json") {
         project.kerning = read_entry(&mut zip, "kerning.json")?;
+    }
+    if names.iter().any(|n| n == "features.json") {
+        project.features = read_entry(&mut zip, "features.json")?;
     }
     if names.iter().any(|n| n == "designspace.json") {
         project.design = read_entry(&mut zip, "designspace.json")?;

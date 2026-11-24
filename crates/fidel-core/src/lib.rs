@@ -30,6 +30,7 @@ pub mod defaults;
 pub mod deform;
 pub mod designspace;
 pub mod ethiopic;
+pub mod features;
 pub mod fidel;
 pub mod geometry;
 pub mod guides;

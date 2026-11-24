@@ -57,6 +57,7 @@ import { applyFind, find, initFind, loadOrganize, markSection } from "./findBar"
 import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
 import { initProof, setProofFont } from "./proof";
 import { KernView } from "./kernView";
+import { FeaturesView } from "./featuresView";
 import { resolve as resolveKern } from "./kerning";
 import { designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 import { partSection, stateRef } from "./partAxes";
@@ -92,13 +93,14 @@ const ui = {
   gridView: document.getElementById("grid-view")!,
   editorView: document.getElementById("editor-view")!,
   kernView: document.getElementById("kern-view")!,
+  feaView: document.getElementById("fea-view")!,
   drawingSelect: document.getElementById("drawing-select") as HTMLSelectElement,
   toasts: document.getElementById("toasts")!,
   projectName: document.getElementById("project-name")!,
   projectMeta: document.getElementById("project-meta")!,
 };
 
-type ViewName = "grid" | "editor" | "kerning";
+type ViewName = "grid" | "editor" | "kerning" | "features";
 
 const state = {
   view: "grid" as ViewName,
@@ -117,6 +119,7 @@ async function loadParts() {
   [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
   kernView.data = await api.getKerning();
   await loadDesign();
+  if (state.view === "features") void featuresView.show();
 }
 
 // ---------- Toasts ----------
@@ -135,7 +138,8 @@ function showView(view: ViewName) {
   ui.gridView.hidden = view !== "grid";
   ui.editorView.hidden = view !== "editor";
   ui.kernView.hidden = view !== "kerning";
-  document.body.classList.toggle("kerning", view === "kerning");
+  ui.feaView.hidden = view !== "features";
+  document.body.classList.toggle("kerning", view === "kerning" || view === "features");
   document.querySelectorAll<HTMLElement>(".tab[data-view]").forEach((t) => {
     const on = t.dataset.view === view;
     t.classList.toggle("active", on);
@@ -144,6 +148,8 @@ function showView(view: ViewName) {
   });
   if (view === "kerning") {
     void refreshGrid().then(() => kernView.show());
+  } else if (view === "features") {
+    void featuresView.show();
   } else if (view === "grid") {
     void refreshGrid().then(() => {
       if (state.selected) void select(state.selected.family, state.selected.order);
@@ -830,6 +836,10 @@ function renderSidebar() {
     kernView.renderSidebar();
     return;
   }
+  if (state.view === "features") {
+    featuresView.renderSidebar();
+    return;
+  }
   if (state.view === "editor") {
     renderLayers();
     return;
@@ -1088,6 +1098,17 @@ const kernView = new KernView(ui.kernView, {
     void refreshProof();
     void refreshProjectInfo();
   },
+  sideList: side.list,
+  inspector: ui.inspector,
+});
+
+const featuresView = new FeaturesView(ui.feaView, {
+  toast,
+  changed: () => {
+    void refreshProof().then(() => featuresView.renderInspector());
+    void refreshProjectInfo();
+  },
+  proofFamily: () => proofFace?.family ?? null,
   sideList: side.list,
   inspector: ui.inspector,
 });
@@ -2056,6 +2077,7 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
     else if (m === "export-instances") void exportInstances();
     else if (m === "masters") showProperties();
     else if (m === "view-kerning") showView("kerning");
+    else if (m === "view-features") showView("features");
     else if (m === "test-install") void testInstall();
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
@@ -2074,8 +2096,8 @@ window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
     e.preventDefault();
     toggleSidebars();
-  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
-    showView(e.key === "1" ? "grid" : e.key === "2" ? "editor" : "kerning");
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4")) {
+    showView(e.key === "1" ? "grid" : e.key === "2" ? "editor" : e.key === "3" ? "kerning" : "features");
   }
 });
 window.addEventListener("keydown", (e) => {

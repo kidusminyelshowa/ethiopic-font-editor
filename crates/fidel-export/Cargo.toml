@@ -10,6 +10,8 @@ fidel-core = { path = "../fidel-core" }
 kurbo = "0.13"
 thiserror.workspace = true
 write-fonts = { version = "0.56", features = ["read"] }
+fea-rs = { version = "2.0", default-features = false }
+serde.workspace = true
 
 [dev-dependencies]
 read-fonts = "0.47"
