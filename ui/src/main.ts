@@ -47,9 +47,11 @@ import {
   guideSection,
   backgroundSection,
   transformSection,
+  showShortcuts,
 } from "./editorSide";
 import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
+import { keysFor, onShortcuts, showKeys } from "./shortcuts";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
@@ -1762,6 +1764,20 @@ function toggleSidebars() {
   document.body.classList.toggle("panels-hidden");
 }
 
+/** Tool tooltips show the keys each tool runs on now. */
+function refreshToolTitles(): void {
+  document.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) => {
+    const keys = keysFor(`tool.${b.dataset.tool}`);
+    if (!b.title || b.dataset.tool === "shape") return;
+    const label = b.title.replace(/\s*\([^)]*\)/, "");
+    const [name, ...rest] = label.split(":");
+    const space = b.dataset.tool === "hand" ? (keys ? ", or hold Space" : " (hold Space)") : "";
+    b.title = `${name}${keys ? ` (${showKeys(keys)}${space})` : space}${rest.length ? ":" + rest.join(":") : ""}`;
+  });
+}
+refreshToolTitles();
+onShortcuts(refreshToolTitles);
+
 document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
   b.addEventListener("click", () => {
     const m = b.dataset.menu;
@@ -1769,6 +1785,7 @@ document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
     else if (m === "toggle-left") toggleSidebars();
+    else if (m === "shortcuts") showShortcuts();
     else if (m === "charsets") {
       showView("grid");
       setTimeout(() => toggleCharsetMenu(true), 0);

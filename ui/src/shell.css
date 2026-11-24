@@ -2255,3 +2255,131 @@ body.editing .side-list {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+
+/* ---------- Shortcuts and display options (ETH-17) ---------- */
+
+.canvas[data-preview] > *:not(.outline-fill):not(.neighbour) {
+  display: none;
+}
+.canvas[data-preview] .outline-fill,
+.canvas[data-preview] .outline-fill.no-fill {
+  fill: var(--ink);
+  fill-opacity: 1;
+}
+.canvas[data-point-colors] .pt-on.corner {
+  stroke: #2b6cb0;
+}
+.canvas[data-point-colors] .pt-on.smooth {
+  stroke: #2f855a;
+}
+.canvas[data-point-colors] .pt-on.tangent {
+  stroke: #b7791f;
+}
+.canvas .pt-coords {
+  font: 10px var(--mono, ui-monospace, monospace);
+  fill: var(--ink-soft);
+  pointer-events: none;
+}
+.menu-segment {
+  display: flex;
+  gap: 2px;
+  margin: 2px 8px 6px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--panel-line);
+}
+.menu-segment .segment {
+  flex: 1;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.menu-segment .segment.on {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.shortcuts-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.28);
+}
+.shortcuts-panel {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 10px;
+  box-shadow: var(--float-shadow);
+  overflow: hidden;
+}
+.shortcuts-panel .shortcuts-list {
+  overflow: auto;
+  padding: 4px 16px 12px;
+}
+.shortcuts-note {
+  margin: 0 16px;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.shortcuts-note:empty {
+  display: none;
+}
+.shortcuts-list .menu-label {
+  margin: 12px 0 2px;
+}
+.shortcuts-panel h2 {
+  margin: 0;
+  padding: 14px 16px 8px;
+  font-size: 14px;
+}
+.shortcuts-panel h3 {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--row-h);
+  font-size: 13px;
+}
+.shortcut-keys {
+  min-width: 96px;
+  padding: 2px 8px;
+  border: 1px solid var(--panel-line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: 12px var(--mono, ui-monospace, monospace);
+  text-align: center;
+  cursor: pointer;
+}
+.shortcut-keys.changed {
+  border-color: var(--select-strong);
+}
+.shortcut-keys.capturing {
+  background: var(--select);
+  border-color: var(--select-strong);
+}
+.shortcuts-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--panel-line);
+}

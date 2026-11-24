@@ -94,6 +94,7 @@ import { importSvg, SvgImportError } from "./svgImport";
 import { inkFromPixels, traceToContours } from "./trace";
 import { placeContours, unplaceContours } from "./components";
 import { isFigmaClipboard, svgFromHtml, vectorFileToSvg } from "./vectorImport";
+import { actionFor, comboOf, isFreedDefault } from "./shortcuts";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
 export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
@@ -110,6 +111,8 @@ const isShape = (t: Tool): t is ShapeKind => (SHAPES as string[]).includes(t);
 
 /** Snap distance, in screen pixels. */
 const SNAP_PX = 6;
+/** Point sizes for the "Point size" display option. */
+const NODE_SCALE: Record<string, number> = { small: 0.8, medium: 1, large: 1.35 };
 const HIT_PX = 8;
 /** Half the width of the eraser stroke, in screen pixels. */
 const ERASER_RADIUS = 6;
@@ -609,6 +612,67 @@ export class GlyphEditor {
     if (!r) return;
     this.hostBehind.set(`component:${r.component}`, unplaceContours(r, this.contours));
     this.host.openTarget({ kind: "component", id: r.component });
+  }
+
+  // ---------- Shortcuts ----------
+
+  private previewHeld = false;
+
+  /** Run a rebindable shortcut's action. */
+  runAction(id: string): void {
+    const tools: Record<string, Tool> = {
+      "tool.select": "select",
+      "tool.direct": "direct",
+      "tool.pen": "pen",
+      "tool.pencil": "pencil",
+      "tool.knife": "knife",
+      "tool.eraser": "eraser",
+      "tool.measure": "measure",
+      "tool.rect": "rect",
+      "tool.ellipse": "ellipse",
+      "tool.hand": "hand",
+    };
+    if (tools[id]) return this.setTool(tools[id]);
+    switch (id) {
+      case "edit.selectAll":
+        return this.selectAll();
+      case "edit.invert":
+        return this.invertSelection();
+      case "edit.duplicate":
+        return this.duplicate();
+      case "edit.lock":
+        return this.setLayerFlag("locked", this.selectedContours());
+      case "edit.hide":
+        return this.setLayerFlag("hidden", this.selectedContours());
+      case "path.reverse":
+        return this.reverseDirection();
+      case "path.removeOverlap":
+        return void this.removeOverlap();
+      case "path.join":
+        this.joinSelection();
+        return;
+      case "path.cycleNode":
+        return this.cycleNodeType();
+      case "view.fit":
+        return this.fit();
+      case "view.selection":
+        return this.zoomToSelection();
+      case "view.actual":
+        return this.actualSize();
+      case "view.zoomIn":
+        return this.zoom(1.25);
+      case "view.zoomOut":
+        return this.zoom(0.8);
+      case "view.preview":
+        // Held down: the glyph alone, filled, as it will print.
+        this.previewHeld = true;
+        this.svg.dataset.preview = "true";
+        return;
+      case "text.next":
+        return this.stepInText(1);
+      case "text.prev":
+        return this.stepInText(-1);
+    }
   }
 
   // ---------- Guides ----------
@@ -3150,6 +3214,15 @@ export class GlyphEditor {
 
     window.addEventListener("keydown", (e) => {
       if (!this.isActive() || isTyping(e.target)) return;
+      // Rebindable shortcuts first.
+      const combo = comboOf(e);
+      const action = actionFor(combo);
+      if (action) {
+        e.preventDefault();
+        if (!e.repeat || action.startsWith("view.zoom") || action === "view.preview") this.runAction(action);
+        return;
+      }
+      if (isFreedDefault(combo)) return;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       if (k.startsWith("arrow")) {
@@ -3265,10 +3338,16 @@ export class GlyphEditor {
       }
     });
     window.addEventListener("blur", () => {
+      this.previewHeld = false;
+      delete this.svg.dataset.preview;
       this.zoomHeld = false;
       delete this.svg.dataset.zoom;
     });
     window.addEventListener("keyup", (e) => {
+      if (this.previewHeld && actionFor(comboOf(e)) === "view.preview") {
+        this.previewHeld = false;
+        delete this.svg.dataset.preview;
+      }
       if (e.key === "Alt" && this.zoomHeld) this.svg.dataset.zoom = "in";
       if (e.key.toLowerCase() === "z") {
         this.zoomHeld = false;
@@ -3375,6 +3454,8 @@ export class GlyphEditor {
 
   render(): void {
     if (!this.drawing) return;
+    if (prefs.pointColors) this.svg.dataset.pointColors = "true";
+    else delete this.svg.dataset.pointColors;
     const r = this.svg.getBoundingClientRect();
     const W = r.width;
     const H = r.height;
@@ -3417,13 +3498,15 @@ export class GlyphEditor {
     }
     const guide = (y: number, label: string, cls = "guide") =>
       `<line class="${cls}" x1="0" x2="${W}" y1="${sy(y)}" y2="${sy(y)}"/><text class="guide-label" x="${prefs.showRulers ? RULER_PX + 8 : 12}" y="${sy(y) - 6}">${label}</text>`;
-    parts.push(guide(m.pa_top, `Pa-top ${m.pa_top}`));
-    parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
-    if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
+    if (prefs.showMetrics) {
+      parts.push(guide(m.pa_top, `Pa-top ${m.pa_top}`));
+      parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
+      if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
+    }
 
     const frame = this.frameWidth;
     const g = this.gesture;
-    if (frame !== null) {
+    if (frame !== null && (prefs.showMetrics || g?.kind === "metric")) {
       const own = this.drawing.advanceWidth !== null;
       const dragging = g?.kind === "metric" ? g.side : null;
       for (const [x, side] of [[0, "left"], [frame, "right"]] as const) {
@@ -3687,14 +3770,18 @@ export class GlyphEditor {
           );
         });
         const start = c.points.findIndex(isOn);
+        const k = NODE_SCALE[prefs.nodeSize] ?? 1;
         c.points.forEach((p, pi) => {
           const x = sx(p.pos.x);
           const y = sy(p.pos.y);
-          const sel = this.selection.has(key(ci, pi)) ? " selected" : "";
-          if (pi === start) parts.push(`<circle class="start-ring" cx="${x}" cy="${y}" r="8"/>`);
+          const picked = this.selection.has(key(ci, pi));
+          const sel = picked ? " selected" : "";
+          if (pi === start) parts.push(`<circle class="start-ring" cx="${x}" cy="${y}" r="${8 * k}"/>`);
           const type = pointType(c, pi);
-          if (type === "handle") parts.push(`<circle class="pt-off${sel}" cx="${x}" cy="${y}" r="3.5"/>`);
-          else if (type === "smooth") parts.push(`<circle class="pt-on${sel}" cx="${x}" cy="${y}" r="4.5"/>`);
+          // Coordinates next to selected points, when asked for.
+          if (prefs.showCoords && picked) parts.push(`<text class="pt-coords" x="${x + 8 * k}" y="${y - 8 * k}">${fmt(p.pos.x)}, ${fmt(p.pos.y)}</text>`);
+          if (type === "handle") parts.push(`<circle class="pt-off${sel}" cx="${x}" cy="${y}" r="${3.5 * k}"/>`);
+          else if (type === "smooth") parts.push(`<circle class="pt-on smooth${sel}" cx="${x}" cy="${y}" r="${4.5 * k}"/>`);
           else if (type === "tangent") {
             // A triangle pointing along the straight side.
             const prev = c.points[(pi - 1 + n) % n];
@@ -3702,9 +3789,9 @@ export class GlyphEditor {
             const l = Math.hypot(toward.x, toward.y) || 1;
             const d = { x: toward.x / l, y: -toward.y / l };
             const q = { x: -d.y, y: d.x };
-            const pt = (a: number, b: number) => `${x + d.x * a + q.x * b},${y + d.y * a + q.y * b}`;
-            parts.push(`<polygon class="pt-on${sel}" points="${pt(6, 0)} ${pt(-4, 5)} ${pt(-4, -5)}"/>`);
-          } else parts.push(`<rect class="pt-on${sel}" x="${x - 4}" y="${y - 4}" width="8" height="8" rx="1.5"/>`);
+            const pt = (a: number, b: number) => `${x + (d.x * a + q.x * b) * k},${y + (d.y * a + q.y * b) * k}`;
+            parts.push(`<polygon class="pt-on tangent${sel}" points="${pt(6, 0)} ${pt(-4, 5)} ${pt(-4, -5)}"/>`);
+          } else parts.push(`<rect class="pt-on corner${sel}" x="${x - 4 * k}" y="${y - 4 * k}" width="${8 * k}" height="${8 * k}" rx="1.5"/>`);
         });
       });
     }

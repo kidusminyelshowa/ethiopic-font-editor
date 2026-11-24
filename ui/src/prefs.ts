@@ -27,6 +27,13 @@ export interface CanvasPrefs {
   showComb: boolean;
   /** Filled outline, or outline only. */
   fill: boolean;
+  showMetrics: boolean;
+  /** Point size on the canvas. */
+  nodeSize: "small" | "medium" | "large";
+  /** Corner, smooth and tangent points in their own colours. */
+  pointColors: boolean;
+  /** Coordinates next to selected points. */
+  showCoords: boolean;
   /** Shape tool options. */
   cornerRadius: number;
   polygonSides: number;
@@ -54,6 +61,10 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   showTunni: true,
   showComb: false,
   fill: true,
+  showMetrics: true,
+  nodeSize: "medium",
+  pointColors: false,
+  showCoords: false,
   cornerRadius: 40,
   polygonSides: 6,
   starPoints: 5,

@@ -7,6 +7,7 @@ import type { StrokeJoin } from "./api";
 import { SHAPE_LABEL, SHAPES, type GlyphEditor, type ShapeKind } from "./editor";
 import { evalNumber, ISSUE_LABEL, rotateAbout, scaleAbout, skewAbout, type IssueKind } from "./pathops";
 import { prefs, setPref, type CanvasPrefs } from "./prefs";
+import { ACTIONS, comboOf, keysFor, resetBindings, setBinding, showKeys } from "./shortcuts";
 
 /** A number field that also takes simple arithmetic (120/6, 500+20). */
 export function numberField(label: string, value: number, onChange: (v: number) => void, title?: string): HTMLElement {
@@ -397,6 +398,98 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
 }
 
 /** The canvas view menu: snapping, grid, nudge steps and what is shown. */
+/** Small, medium or large points. */
+function sizePicker(): HTMLElement {
+  const row = el("div", { class: "menu-segment", role: "group", "aria-label": "Point size" });
+  for (const size of ["small", "medium", "large"] as const) {
+    const b = el("button", { class: `segment${prefs.nodeSize === size ? " on" : ""}`, "aria-pressed": String(prefs.nodeSize === size) }, size[0].toUpperCase() + size.slice(1));
+    b.addEventListener("click", () => {
+      setPref("nodeSize", size);
+      row.querySelectorAll(".segment").forEach((x) => x.classList.toggle("on", x === b));
+    });
+    row.append(b);
+  }
+  return el("label", { class: "menu-field" }, el("span", {}, "Point size"), row);
+}
+
+function shortcutsItem(): HTMLElement {
+  const b = el("button", { class: "menu-item", role: "menuitem" }, "Keyboard shortcuts…");
+  b.addEventListener("click", () => {
+    closeMenu();
+    showShortcuts();
+  });
+  return b;
+}
+
+/** The list of rebindable shortcuts: click one, then press the new keys. */
+export function showShortcuts(): void {
+  document.querySelector(".shortcuts-dialog")?.remove();
+  const close = () => {
+    dialog.remove();
+    window.removeEventListener("keydown", onKey, true);
+  };
+  let capturing: { id: string; button: HTMLElement } | null = null;
+  const note = el("p", { class: "side-note shortcuts-note" }, "");
+  const list = el("div", { class: "shortcuts-list" });
+  const fill = () => {
+    list.replaceChildren();
+    let group = "";
+    for (const a of ACTIONS) {
+      if (a.group !== group) {
+        group = a.group;
+        list.append(el("div", { class: "menu-label" }, group));
+      }
+      const keys = keysFor(a.id);
+      const b = el("button", { class: `shortcut-keys${keys !== a.keys ? " changed" : ""}`, title: keys !== a.keys ? `Default: ${showKeys(a.keys)}` : "Click, then press new keys" }, showKeys(keys));
+      b.addEventListener("click", () => {
+        capturing?.button.classList.remove("capturing");
+        capturing = { id: a.id, button: b };
+        b.classList.add("capturing");
+        b.textContent = "Press keys…";
+      });
+      list.append(el("div", { class: "shortcut-row" }, el("span", {}, a.label), b));
+    }
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (!capturing) {
+      if (e.key === "Escape") close();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      capturing = null;
+      fill();
+      return;
+    }
+    const combo = comboOf(e);
+    if (!combo) return;
+    const lost = setBinding(capturing.id, combo);
+    capturing = null;
+    note.textContent = lost ? `${showKeys(combo)} was ${lost}'s shortcut; ${lost} has none now.` : "Saved.";
+    fill();
+  };
+  window.addEventListener("keydown", onKey, true);
+  const reset = el("button", { class: "pill small ghost" }, "Reset all");
+  reset.addEventListener("click", () => {
+    resetBindings();
+    note.textContent = "Back to the defaults.";
+    fill();
+  });
+  const done = el("button", { class: "pill small" }, "Done");
+  done.addEventListener("click", close);
+  const dialog = el(
+    "div",
+    { class: "shortcuts-dialog", role: "dialog", "aria-label": "Keyboard shortcuts" },
+    el("div", { class: "shortcuts-panel" }, el("h2", { class: "shortcuts-title" }, "Keyboard shortcuts"), note, list, el("div", { class: "shortcuts-foot" }, reset, done)),
+  );
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) close();
+  });
+  fill();
+  document.body.append(dialog);
+}
+
 export function bindViewMenu(root: HTMLElement) {
   const btn = root.querySelector<HTMLButtonElement>(".view-btn");
   if (!btn) return;
@@ -473,6 +566,14 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Outline warnings", "showWarnings"),
     check("Tunni lines", "showTunni"),
     check("Curvature comb", "showComb"),
+    check("Metric lines", "showMetrics"),
+    el("div", { class: "menu-sep", role: "separator" }),
+    el("div", { class: "menu-label" }, "Points"),
+    check("Colour by point type", "pointColors"),
+    check("Coordinates of selected points", "showCoords"),
+    sizePicker(),
+    el("div", { class: "menu-sep", role: "separator" }),
+    shortcutsItem(),
   );
   document.body.append(menu);
   const r = menu.getBoundingClientRect();
