@@ -451,6 +451,27 @@ impl DrawingView {
                     metrics,
                 }
             }
+            DrawingTarget::Alternate(id) => {
+                let a = project.alternates.get(id).ok_or_else(|| ModelError::UnknownAlternate(id.clone()))?;
+                DrawingView {
+                    title: a.label(),
+                    subtitle: format!("Alternate · {}", a.glyph_name()),
+                    advance_width: Some(a.advance_width),
+                    context: None,
+                    components: None,
+                    zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
+                    rule: None,
+                    derived: None,
+                    metric_keys: None,
+                    anchors: Some(a.anchors.clone()),
+                    built: None,
+                    target,
+                    contours,
+                    metrics,
+                }
+            }
             DrawingTarget::Brace(id) => {
                 let b = project.brace(id)?;
                 let name = match &b.of {
@@ -531,7 +552,9 @@ impl DrawingView {
                 }
             }
         };
-        view.anchors = anchors;
+        if anchors.is_some() {
+            view.anchors = anchors;
+        }
         view.built = built;
         Ok(view)
     }

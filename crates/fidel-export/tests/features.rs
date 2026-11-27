@@ -91,3 +91,28 @@ fn anchors_become_mark_positioning_and_built_letters_export() {
     let mark_gid = font.charmap().map('\u{0300}').unwrap();
     assert_eq!(classes.get(skrifa::GlyphId16::try_from(mark_gid).unwrap()), 3);
 }
+
+#[test]
+fn alternates_become_glyphs_and_features() {
+    let mut p = project();
+    let ss = p.add_alternate('ሀ', "ss01").unwrap();
+    p.add_alternate('ሀ', "locl.AMH").unwrap();
+    assert!(p.add_alternate('ሀ', "ss01").is_err());
+    assert!(p.add_alternate('ሀ', "not a tag").is_err());
+    p.set_drawing(
+        &DrawingTarget::Alternate(ss),
+        vec![Contour::rect(0, None, Vec2::new(0.0, 0.0), Vec2::new(300.0, 700.0))],
+    )
+    .unwrap();
+    let out = export(&p, &ExportOptions::new("Test Geez")).unwrap();
+    let font = FontRef::new(&out.bytes).unwrap();
+    let names: Vec<String> = (0..font.maxp().unwrap().num_glyphs())
+        .filter_map(|g| font.glyph_names().get(skrifa::GlyphId::new(g.into())).map(|n| n.to_string()))
+        .collect();
+    assert!(names.contains(&"uni1200.ss01".to_string()), "{names:?}");
+    assert!(names.contains(&"uni1200.locl.AMH".to_string()));
+    let gsub = font.gsub().unwrap();
+    let list = gsub.feature_list().unwrap();
+    let tags = tags(list.feature_records().iter().map(|r| r.feature_tag().to_string()));
+    assert!(tags.contains(&"ss01".to_string()) && tags.contains(&"locl".to_string()), "{tags:?}");
+}

@@ -62,6 +62,7 @@ import { FeaturesView } from "./featuresView";
 import { resolve as resolveKern } from "./kerning";
 import { design, designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 import { partSection, stateRef } from "./partAxes";
+import { alternatesSection } from "./alternates";
 import { anchorsSection, builtSection } from "./anchorSide";
 
 setupChrome();
@@ -1663,6 +1664,13 @@ function renderEditorSide(ed: GlyphEditor) {
     },
   };
   sections.push(...anchorsSection(ed, d, anchorHost));
+  sections.push(
+    ...alternatesSection(d.target, {
+      open: (t) => void openDrawing(t),
+      toast,
+      changed: () => void refreshGrid(),
+    }),
+  );
   // Built letters lead with their parts; for others it is an option at the end.
   if (d.built) sections.unshift(...builtSection(ed, d, anchorHost));
   else sections.push(...builtSection(ed, d, anchorHost));

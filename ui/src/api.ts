@@ -161,7 +161,7 @@ export interface OrderRef {
   codepoint: string | null;
 }
 
-export type DrawingKind = "base" | "alteration" | "symbol" | "fidel" | "component" | "brace";
+export type DrawingKind = "base" | "alteration" | "symbol" | "fidel" | "component" | "brace" | "alternate";
 export type DrawingTarget = { kind: DrawingKind; id: string };
 
 /** A Pa-height zone: the height where a kind of alteration lands (shortened legs end, cricks bend). */
@@ -559,6 +559,11 @@ export const api = {
   getFeatures: () => invoke<FeaturesView>("get_features"),
   setFeatures: (features: Features) => invoke<FeaturesView>("set_features", { features }),
   getPart: (id: string) => invoke<PartView>("get_part", { id }),
+  alternatesOf: (target: DrawingTarget) =>
+    invoke<{ of: string | null; list: [string, string][]; duplicates: [string, string[]][] }>("alternates_of", { target }),
+  addAlternate: (of: string, suffix: string) => invoke<string>("add_alternate", { of, suffix }),
+  removeAlternate: (id: string) => invoke<void>("remove_alternate", { id }),
+  setSymbolCodepoint: (id: string, codepoint: string) => invoke<void>("set_symbol_codepoint", { id, codepoint }),
   addBrace: (of: DrawingTarget, location: Record<string, number>) => invoke<string>("add_brace", { of, location }),
   removeBrace: (id: string) => invoke<void>("remove_brace", { id }),
   drawingAt: (target: DrawingTarget, location: Record<string, number>) => invoke<string>("drawing_at", { target, location }),

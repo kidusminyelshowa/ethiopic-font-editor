@@ -327,6 +327,12 @@ impl Project {
                 self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.anchors =
                     anchors;
             }
+            DrawingTarget::Alternate(id) => {
+                self.alternates
+                    .get_mut(id)
+                    .ok_or_else(|| ModelError::UnknownAlternate(id.clone()))?
+                    .anchors = anchors;
+            }
             DrawingTarget::Fidel(id) => {
                 let (family, order) = DrawingTarget::fidel_ref(id)?;
                 self.fidel_mut(&family, order)?.anchors = Some(anchors);

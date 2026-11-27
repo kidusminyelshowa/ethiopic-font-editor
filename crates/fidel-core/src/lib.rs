@@ -21,6 +21,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod alteration;
+pub mod alternates;
 pub mod base;
 pub mod braces;
 pub mod charset;

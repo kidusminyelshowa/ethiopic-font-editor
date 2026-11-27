@@ -170,6 +170,10 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
     if exported.is_empty() {
         return Err(ExportError::NothingDrawn);
     }
+    for g in super::alternate_glyphs(base, &exported)? {
+        glyphs.push(g);
+        variations.push(None);
+    }
 
     // gvar: one tuple per master other than the default, in model order.
     let axis_count = design.axes.len() as u16;

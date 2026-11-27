@@ -176,6 +176,9 @@ pub struct Project {
     /// Standalone glyphs: punctuation, numerals, combining marks.
     #[serde(default)]
     pub symbols: BTreeMap<SymbolId, Symbol>,
+    /// Other drawings of characters, for features to swap in.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub alternates: BTreeMap<String, crate::alternates::Alternate>,
     /// Leaves, caps and corners, drawn once and placed on bases.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<ComponentId, Component>,
@@ -233,6 +236,18 @@ pub struct Symbol {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ModelError {
+    #[error("no alternate `{0}`")]
+    UnknownAlternate(String),
+    #[error(
+        "“{0}” is not a feature suffix: use a tag such as ss01, salt or cv01, or locl.TIR for a language"
+    )]
+    BadSuffix(String),
+    #[error("{0} already exists")]
+    AlternateTaken(String),
+    #[error("{0} has no glyph to start from")]
+    NoGlyph(char),
+    #[error("{0} already belongs to another glyph")]
+    CodepointTaken(char),
     #[error("no brace layer `{0}`")]
     UnknownBrace(String),
     #[error("Only bases and symbols take brace layers")]
@@ -287,6 +302,8 @@ pub enum DrawingTarget {
     Component(ComponentId),
     /// An intermediate drawing of a base or symbol at one location.
     Brace(String),
+    /// Another drawing of a character, for a feature to swap in.
+    Alternate(String),
 }
 
 impl DrawingTarget {
@@ -356,6 +373,11 @@ impl Project {
                 .get(id)
                 .map(|s| s.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
+            DrawingTarget::Alternate(id) => self
+                .alternates
+                .get(id)
+                .map(|a| a.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownAlternate(id.clone())),
             DrawingTarget::Brace(id) => self
                 .design
                 .braces
@@ -428,6 +450,13 @@ impl Project {
                     s.built_from.clear();
                 }
                 &mut s.contours
+            }
+            DrawingTarget::Alternate(id) => {
+                &mut self
+                    .alternates
+                    .get_mut(id)
+                    .ok_or_else(|| ModelError::UnknownAlternate(id.clone()))?
+                    .contours
             }
             DrawingTarget::Brace(id) => {
                 &mut self

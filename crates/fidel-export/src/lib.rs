@@ -125,6 +125,7 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     if exported.is_empty() {
         return Err(ExportError::NothingDrawn);
     }
+    glyphs.extend(alternate_glyphs(project, &exported)?);
     let bytes = build(project, options, family, &glyphs, None)?;
     Ok(ExportedFont { bytes, exported, skipped })
 }
@@ -154,6 +155,22 @@ fn fixed_glyphs(project: &Project) -> Vec<GlyphOut> {
 
 /// Every fidel and symbol in the project's character sets, by codepoint,
 /// with its outline and advance.
+/// Alternates of exported characters, as unencoded glyphs.
+fn alternate_glyphs(project: &Project, exported: &[char]) -> Result<Vec<GlyphOut>, ExportError> {
+    let mut out = Vec::new();
+    for a in project.alternates.values().filter(|a| exported.contains(&a.of)) {
+        let contours: Vec<&Contour> = a.contours.iter().filter(|c| !c.open && c.points.len() >= 2).collect();
+        if contours.is_empty() {
+            continue;
+        }
+        let name = a.glyph_name();
+        let glyph = simple_glyph(&contours)
+            .map_err(|reason| ExportError::BadOutline { glyph: format!("{} ({name})", a.label()), reason })?;
+        out.push(GlyphOut { name, codepoint: None, advance: to_u16(a.advance_width), glyph });
+    }
+    Ok(out)
+}
+
 fn collect_items(project: &Project) -> Vec<(char, Vec<Contour>, f64)> {
     let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
         .iter()

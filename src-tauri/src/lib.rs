@@ -119,6 +119,45 @@ fn get_drawing(
         .map_err(err)
 }
 
+/// The character a drawing is for, and its alternates.
+#[derive(serde::Serialize)]
+struct AlternatesView {
+    of: Option<char>,
+    list: Vec<(String, String)>,
+    duplicates: Vec<(char, Vec<String>)>,
+}
+
+#[tauri::command]
+fn alternates_of(state: State<'_, AppState>, target: DrawingTarget) -> AlternatesView {
+    let p = state.project();
+    let of = p.char_of(&target);
+    let list = of
+        .map(|c| p.alternates_of(c).iter().map(|a| (a.id.clone(), a.label())).collect())
+        .unwrap_or_default();
+    AlternatesView { of, list, duplicates: p.duplicate_codepoints() }
+}
+
+#[tauri::command]
+fn add_alternate(state: State<'_, AppState>, of: char, suffix: String) -> CmdResult<String> {
+    let id = state.project().add_alternate(of, &suffix).map_err(err)?;
+    state.mark_dirty();
+    Ok(id)
+}
+
+#[tauri::command]
+fn remove_alternate(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().remove_alternate(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+#[tauri::command]
+fn set_symbol_codepoint(state: State<'_, AppState>, id: String, codepoint: char) -> CmdResult<()> {
+    state.project().set_symbol_codepoint(&id, codepoint).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
 /// Add a brace layer of a base or symbol at a location in user units.
 #[tauri::command]
 fn add_brace(
@@ -169,6 +208,10 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
                 project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
             }
             DrawingTarget::Brace(id) => project.set_brace_advance(id, w).map_err(err)?,
+            DrawingTarget::Alternate(id) => {
+                project.alternates.get_mut(id).ok_or_else(|| format!("no alternate `{id}`"))?.advance_width =
+                    w
+            }
             DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) | DrawingTarget::Component(_) => {
                 return Err("this drawing has no advance width of its own".into())
             }
@@ -1214,6 +1257,10 @@ pub fn run() {
             get_part,
             drawing_at,
             add_brace,
+            alternates_of,
+            add_alternate,
+            remove_alternate,
+            set_symbol_codepoint,
             remove_brace,
             part_preview,
             set_part_axes,

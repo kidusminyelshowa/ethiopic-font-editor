@@ -11,6 +11,7 @@
 //! alterations/<id>.json         one alteration: drawn parts and placement rule
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! components/<id>.json          one leaf, cap or corner, drawn once
+//! alternates/<id>.json          another drawing of a character (ሀ.ss01)
 //! kerning.json                  kerning pairs and classes
 //! features.json                 feature code, glyph classes, language systems
 //! spacing.json                  automatic spacing settings and corpus counts
@@ -98,6 +99,10 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     for (id, family) in &project.families {
         let name = entry("families", id)?;
         entries.insert(name.clone(), to_json(&name, family)?);
+    }
+    for (id, a) in &project.alternates {
+        let name = entry("alternates", id)?;
+        entries.insert(name.clone(), to_json(&name, a)?);
     }
     for (id, alt) in &project.alterations {
         let name = entry("alterations", id)?;
@@ -223,6 +228,11 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
                 let comp: crate::component::Component = read_entry(&mut zip, &name)?;
                 check_id(&name, id, &comp.id)?;
                 project.components.insert(comp.id.clone(), comp);
+            }
+            "alternates" => {
+                let a: crate::alternates::Alternate = read_entry(&mut zip, &name)?;
+                check_id(&name, id, &a.id)?;
+                project.alternates.insert(a.id.clone(), a);
             }
             // Unknown folders are left alone, for files from later versions.
             _ => {}

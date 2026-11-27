@@ -270,6 +270,12 @@ impl Project {
         chars.sort_unstable();
         chars.dedup();
         t.push_str(&self.mark_features(&chars));
+        let declared: Vec<(String, String)> = langs
+            .iter()
+            .filter_map(|s| s.split_once('/'))
+            .map(|(sc, l)| (sc.to_string(), l.to_string()))
+            .collect();
+        t.push_str(&self.alternate_features(has, &declared));
 
         t.push_str("# Your code\n");
         let code_start = t.len();
