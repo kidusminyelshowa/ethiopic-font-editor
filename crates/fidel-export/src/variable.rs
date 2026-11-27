@@ -347,9 +347,8 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
 
 /// Each brace layer's location, and the glyphs it changes there.
 fn brace_items(project: &Project) -> Vec<(Vec<f64>, Items)> {
-    let items = |p: &Project| -> Items {
-        collect_items(p).into_iter().map(|(c, o, a)| (c, (o, a))).collect()
-    };
+    let items =
+        |p: &Project| -> Items { collect_items(p).into_iter().map(|(c, o, a)| (c, (o, a))).collect() };
     project
         .design
         .braces
@@ -366,8 +365,7 @@ fn brace_items(project: &Project) -> Vec<(Vec<f64>, Items)> {
             }
             with.after_edit();
             let before = items(&plain);
-            let changed: Items =
-                items(&with).into_iter().filter(|(c, v)| before.get(c) != Some(v)).collect();
+            let changed: Items = items(&with).into_iter().filter(|(c, v)| before.get(c) != Some(v)).collect();
             Some((loc, changed))
         })
         .collect()
