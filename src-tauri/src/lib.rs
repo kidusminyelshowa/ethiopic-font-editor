@@ -158,6 +158,25 @@ fn set_symbol_codepoint(state: State<'_, AppState>, id: String, codepoint: char)
     Ok(())
 }
 
+/// Open a font, UFO or designspace into the project.
+#[tauri::command]
+fn import_font(
+    state: State<'_, AppState>,
+    path: String,
+    mode: fidel_export::import::ImportMode,
+) -> CmdResult<fidel_export::import::ImportReport> {
+    let imported = fidel_export::import::read_any(std::path::Path::new(&path))?;
+    let report = fidel_export::import::apply(&mut state.project(), &imported, mode);
+    state.mark_dirty();
+    Ok(report)
+}
+
+/// Save as UFO, or a designspace with a UFO per master. Returns the files.
+#[tauri::command]
+fn export_ufo(state: State<'_, AppState>, path: String, family: String) -> CmdResult<Vec<String>> {
+    fidel_export::ufo::write_designspace(&state.project(), std::path::Path::new(&path), &family)
+}
+
 /// Add a brace layer of a base or symbol at a location in user units.
 #[tauri::command]
 fn add_brace(
@@ -1257,6 +1276,8 @@ pub fn run() {
             get_part,
             drawing_at,
             add_brace,
+            import_font,
+            export_ufo,
             alternates_of,
             add_alternate,
             remove_alternate,

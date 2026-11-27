@@ -1890,6 +1890,31 @@ async function afterProjectChanged(info: ProjectInfo) {
   showView("grid");
 }
 
+/** Save as UFO for other editors; with masters, a designspace beside one UFO each. */
+async function exportUfo() {
+  const family = projectInfo.name || "Untitled";
+  const masters = (design?.masters.length ?? 0) > 1;
+  const path = await saveDialog({
+    defaultPath: `${family}.${masters ? "designspace" : "ufo"}`,
+    filters: [masters ? { name: "Designspace", extensions: ["designspace"] } : { name: "UFO", extensions: ["ufo"] }],
+  });
+  if (!path) return;
+  try {
+    const files = await api.exportUfo(path, family);
+    toast(`Saved ${files.length === 1 ? files[0] : `${files.length} files`}.`);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
+
+async function afterImport() {
+  editor.reset();
+  await loadDesign();
+  await loadParts();
+  await refreshGrid();
+  showView("grid");
+}
+
 async function newProject() {
   if (!(await confirmDiscard("Start a new project"))) return;
   await afterProjectChanged(await api.newProject());
@@ -1902,6 +1927,34 @@ async function openProject() {
   try {
     await afterProjectChanged(await api.openProject(path));
     toast(`Opened ${projectInfo.name}.`);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
+
+/** Bring in an existing font: fill empty bases and symbols, or only backgrounds. */
+async function importFont(ufo: boolean) {
+  const path = ufo
+    ? await openDialog({ directory: true, title: "A .ufo folder" })
+    : await openDialog({ multiple: false, directory: false, filters: [{ name: "Fonts", extensions: ["otf", "ttf", "woff", "designspace"] }] });
+  if (typeof path !== "string") return;
+  const fill = await ask("Fill the empty bases and symbols with its outlines? Every other letter goes behind its drawing as a background to rebuild from.", {
+    title: "Import font",
+    okLabel: "Fill drawings",
+    cancelLabel: "Backgrounds only",
+  });
+  try {
+    const r = await api.importFont(path, fill ? "drawings" : "backgrounds");
+    const parts = [
+      r.drawn && `${r.drawn} drawn`,
+      r.backgrounds && `${r.backgrounds} as backgrounds`,
+      r.kept && `${r.kept} kept as they were`,
+      r.kerning && `${r.kerning} kerning pairs`,
+      r.masters && `${r.masters} more masters`,
+      r.unused && `${r.unused} with no place here`,
+    ].filter(Boolean);
+    toast(`Imported: ${parts.join(", ") || "nothing new"}.`);
+    await afterImport();
   } catch (err) {
     toast(String(err), "error");
   }
@@ -1929,6 +1982,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((b) =>
     const action = b.dataset.file;
     if (action === "new") void newProject();
     else if (action === "open") void openProject();
+    else if (action === "import" || action === "import-ufo") void importFont(action === "import-ufo");
+    else if (action === "export-ufo") void exportUfo();
     else void saveProject(action === "saveas" || e.shiftKey);
   }),
 );

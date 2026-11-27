@@ -25,6 +25,8 @@ use write_fonts::types::{FWord, Fixed, GlyphId, LongDateTime, NameId, Tag, UfWor
 use write_fonts::{FontBuilder, OffsetMarker};
 
 pub mod features;
+pub mod import;
+pub mod ufo;
 mod variable;
 pub use variable::{export_instance, export_variable, VariableFont};
 

@@ -564,6 +564,9 @@ export const api = {
   addAlternate: (of: string, suffix: string) => invoke<string>("add_alternate", { of, suffix }),
   removeAlternate: (id: string) => invoke<void>("remove_alternate", { id }),
   setSymbolCodepoint: (id: string, codepoint: string) => invoke<void>("set_symbol_codepoint", { id, codepoint }),
+  exportUfo: (path: string, family: string) => invoke<string[]>("export_ufo", { path, family }),
+  importFont: (path: string, mode: "drawings" | "backgrounds") =>
+    invoke<{ drawn: number; backgrounds: number; kept: number; unused: number; kerning: number; masters: number }>("import_font", { path, mode }),
   addBrace: (of: DrawingTarget, location: Record<string, number>) => invoke<string>("add_brace", { of, location }),
   removeBrace: (id: string) => invoke<void>("remove_brace", { id }),
   drawingAt: (target: DrawingTarget, location: Record<string, number>) => invoke<string>("drawing_at", { target, location }),
