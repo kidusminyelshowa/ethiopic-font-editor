@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 
+use crate::compat_points::{add_points_to_match, start_near};
 use crate::component::reverse;
 use crate::geometry::{Contour, PointKind, Vec2};
 use crate::project::{DrawingTarget, ModelError, Project};
@@ -156,29 +157,59 @@ impl Project {
     }
 
     /// Line up every master's version of a drawing with the default
-    /// master's: contour order, direction and start points. Returns how many
-    /// masters changed.
+    /// master's: contour order, direction and start points, and points
+    /// added where one has a point the other lacks. Returns how many masters
+    /// changed.
     pub fn match_masters(&mut self, target: &DrawingTarget) -> Result<usize, ModelError> {
         if self.design.masters.len() < 2 {
             return Ok(0);
         }
         let def = self.design.default_master().unwrap_or(0);
-        let reference = self.master_project(def).drawing(target)?.to_vec();
         let back = self.design.active;
-        let mut changed = 0;
-        for m in 0..self.design.masters.len() {
-            if m == def {
-                continue;
+        let differs = |a: &Contour, b: &Contour| a.open != b.open || kinds(a) != kinds(b);
+        let mut changed = std::collections::BTreeSet::new();
+        // Adding points to the default master undoes the masters matched
+        // before it, so go round again until nothing needs points.
+        for _ in 0..=self.design.masters.len() {
+            let _ = self.switch_master(def);
+            let mut reference = self.drawing(target)?.to_vec();
+            let mut grown = false;
+            for m in 0..self.design.masters.len() {
+                if m == def {
+                    continue;
+                }
+                let _ = self.switch_master(m);
+                let now = self.drawing(target)?.to_vec();
+                let mut fixed = match_contours(&reference, &now);
+                for (r, c) in reference.iter_mut().zip(fixed.iter_mut()) {
+                    if !differs(r, c) {
+                        continue;
+                    }
+                    if let Some(p) = r.points.iter().find(|p| p.is_on_curve()) {
+                        start_near(c, p.pos, center(r));
+                    }
+                    if let Some((nr, nc)) = add_points_to_match(r, c) {
+                        if nr != *r {
+                            *r = nr;
+                            grown = true;
+                        }
+                        *c = nc;
+                    }
+                    restart(r, c);
+                }
+                if fixed != now {
+                    self.set_drawing(target, fixed)?;
+                    changed.insert(m);
+                }
             }
-            let _ = self.switch_master(m);
-            let now = self.drawing(target)?.to_vec();
-            let fixed = match_contours(&reference, &now);
-            if fixed != now {
-                self.set_drawing(target, fixed)?;
-                changed += 1;
+            if !grown {
+                break;
             }
+            let _ = self.switch_master(def);
+            self.set_drawing(target, reference)?;
+            changed.insert(def);
         }
         let _ = self.switch_master(back);
-        Ok(changed)
+        Ok(changed.len())
     }
 }

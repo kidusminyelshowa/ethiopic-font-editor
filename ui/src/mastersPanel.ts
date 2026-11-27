@@ -395,7 +395,7 @@ export function masterDrawingsSection(target: DrawingTarget, metrics: Metrics, r
       const bad = list.filter((m) => m.problem);
       note.textContent = bad.length ? bad.map((m) => `${m.master}: ${m.problem}`).join(". ") : "Matches in every master.";
       note.classList.toggle("ds-problem", bad.length > 0);
-      const match = el("button", { class: "pill small", title: "Contour order, direction and start points as in the default master" }, "Match masters");
+      const match = el("button", { class: "pill small", title: "Contour order, direction and start points as in the default master, and points added where one master has a point the others lack" }, "Match masters");
       match.addEventListener("click", async () => {
         try {
           const n = await api.matchMasters(target);

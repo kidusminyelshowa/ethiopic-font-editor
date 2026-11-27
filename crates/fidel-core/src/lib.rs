@@ -24,6 +24,7 @@ pub mod alteration;
 pub mod base;
 pub mod charset;
 pub mod compat;
+pub mod compat_points;
 pub mod component;
 pub mod coverage;
 pub mod defaults;
