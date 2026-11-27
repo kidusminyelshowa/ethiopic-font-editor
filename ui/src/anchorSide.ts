@@ -18,7 +18,7 @@ export interface AnchorHost {
 
 /** For bases and symbols: anchors, and another glyph shown against this one. */
 export function anchorsSection(ed: GlyphEditor, d: DrawingView, host: AnchorHost): Node[] {
-  if (d.target.kind !== "base" && d.target.kind !== "symbol") return [];
+  if (d.target.kind !== "base" && d.target.kind !== "symbol" && d.target.kind !== "fidel") return [];
   const anchors = { ...(d.anchors ?? {}) };
   const box = el("div", { class: "side-box anchor-box" });
   const save = (next: Record<string, { x: number; y: number }>) => void ed.saveAnchors(next);

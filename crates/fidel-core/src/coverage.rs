@@ -144,6 +144,7 @@ impl Project {
                     alteration_overrides: BTreeMap::new(),
                     built_on: None,
                     components: Vec::new(),
+                    anchors: None,
                 },
             );
             // Only the new fidel takes its default form: choices made on the

@@ -51,6 +51,10 @@ pub struct Fidel {
     /// leaf on a hand-drawn fidel, a dot on one order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<crate::component::ComponentRef>,
+    /// Anchors of this order alone, in place of its base's: the 5th order's
+    /// ring moves `bottom`. None takes the base's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchors: Option<std::collections::BTreeMap<String, crate::geometry::Vec2>>,
 }
 
 /// Where a contour in a resolved fidel came from. Nudges use it to find their

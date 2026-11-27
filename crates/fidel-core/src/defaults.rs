@@ -219,6 +219,7 @@ pub fn geez_project(metrics: Metrics) -> Project {
                         Order::ALL.into_iter().find(|o| f.codepoint(*o) == parent).expect("same family")
                     }),
                     components: Vec::new(),
+                    anchors: None,
                 },
             );
         }

@@ -243,6 +243,9 @@ pub struct FamilyLayer {
     /// Components placed on single fidels.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<Order, Vec<ComponentRef>>,
+    /// Anchors set on single orders.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub anchors: BTreeMap<Order, BTreeMap<String, Vec2>>,
 }
 
 impl MasterLayer {
@@ -295,6 +298,11 @@ impl MasterLayer {
                             .iter()
                             .filter(|(_, fi)| !fi.components.is_empty())
                             .map(|(o, fi)| (*o, fi.components.clone()))
+                            .collect(),
+                        anchors: f
+                            .fidels
+                            .iter()
+                            .filter_map(|(o, fi)| fi.anchors.clone().map(|a| (*o, a)))
                             .collect(),
                     };
                     (id.clone(), l)
@@ -349,6 +357,7 @@ impl MasterLayer {
                     if let Some(fi) = f.fidels.get_mut(o) {
                         fi.state = s.clone();
                         fi.components = l.components.get(o).cloned().unwrap_or_default();
+                        fi.anchors = l.anchors.get(o).cloned();
                     }
                 }
             }

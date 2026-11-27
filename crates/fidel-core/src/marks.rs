@@ -76,9 +76,15 @@ impl Project {
             }
             return s.anchors.clone();
         }
-        self.fidel_of(c)
-            .and_then(|(f, _)| self.bases.get(&f.base))
-            .map(|b| b.anchors.clone())
+        self.fidel_of(c).map(|(f, o)| self.fidel_anchors(f, o)).unwrap_or_default()
+    }
+
+    /// A fidel's anchors: its own when set, else its base's.
+    pub fn fidel_anchors(&self, f: &crate::fidel::Family, order: Order) -> BTreeMap<String, Vec2> {
+        f.fidels
+            .get(&order)
+            .and_then(|fi| fi.anchors.clone())
+            .or_else(|| self.bases.get(&f.base).map(|b| b.anchors.clone()))
             .unwrap_or_default()
     }
 
@@ -106,7 +112,7 @@ impl Project {
         Some(GlyphShape {
             contours: r.contours.into_iter().map(|c| c.contour).collect(),
             advance: r.advance_width,
-            anchors: self.bases.get(&f.base).map(|b| b.anchors.clone()).unwrap_or_default(),
+            anchors: self.fidel_anchors(f, order),
         })
     }
 
@@ -320,6 +326,10 @@ impl Project {
             DrawingTarget::Symbol(id) => {
                 self.symbols.get_mut(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?.anchors =
                     anchors;
+            }
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                self.fidel_mut(&family, order)?.anchors = Some(anchors);
             }
             _ => return Err(ModelError::NoMetrics),
         }

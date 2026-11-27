@@ -319,6 +319,10 @@ impl DrawingView {
         let anchors = match &target {
             DrawingTarget::Base(id) => project.bases.get(id).map(|b| b.anchors.clone()),
             DrawingTarget::Symbol(id) => project.symbols.get(id).map(|s| s.anchors.clone()),
+            DrawingTarget::Fidel(id) => {
+                let (family, order) = DrawingTarget::fidel_ref(id)?;
+                project.families.get(&family).map(|f| project.fidel_anchors(f, order))
+            }
             _ => None,
         };
         let built = match &target {

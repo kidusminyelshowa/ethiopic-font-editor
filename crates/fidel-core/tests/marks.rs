@@ -112,3 +112,14 @@ fn anchors_make_mark_and_mkmk_features() {
     // Nothing anchored, nothing written.
     assert_eq!(geez_project(Metrics::default()).mark_features(&['ሀ']), "");
 }
+
+#[test]
+fn an_order_can_have_anchors_of_its_own() {
+    let mut p = geez_project(Metrics::default());
+    p.bases.get_mut("ha").unwrap().anchors.insert("bottom".into(), Vec2::new(100.0, 0.0));
+    assert_eq!(p.glyph_anchors('ሁ')["bottom"], Vec2::new(100.0, 0.0));
+    let t = DrawingTarget::fidel("ha", order::Order::Kaib);
+    p.set_anchors(&t, [("bottom".to_string(), Vec2::new(250.0, -20.0))].into()).unwrap();
+    assert_eq!(p.glyph_anchors('ሁ')["bottom"], Vec2::new(250.0, -20.0));
+    assert_eq!(p.glyph_anchors('ሀ')["bottom"], Vec2::new(100.0, 0.0));
+}
