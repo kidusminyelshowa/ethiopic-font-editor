@@ -447,6 +447,48 @@ impl DrawingView {
                     metrics,
                 }
             }
+            DrawingTarget::Brace(id) => {
+                let b = project.brace(id)?;
+                let name = match &b.of {
+                    DrawingTarget::Base(base) => {
+                        format!("{} {}", project.bases[base].name, base_glyph(project, base))
+                            .trim()
+                            .to_string()
+                    }
+                    DrawingTarget::Symbol(sym) => project
+                        .symbols
+                        .get(sym)
+                        .map(|s| format!("{} {}", s.name, s.codepoint))
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
+                let at: Vec<String> = project
+                    .design
+                    .axes
+                    .iter()
+                    .map(|a| {
+                        format!("{} {}", a.name, b.location.get(&a.tag).copied().unwrap_or(a.default).round())
+                    })
+                    .collect();
+                DrawingView {
+                    title: name,
+                    subtitle: format!("Brace layer · {}", at.join(", ")),
+                    advance_width: Some(b.advance_width),
+                    context: None,
+                    components: None,
+                    zones: zone_views(&metrics),
+                    generated: false,
+                    handles: Vec::new(),
+                    rule: None,
+                    derived: None,
+                    metric_keys: None,
+                    anchors: None,
+                    built: None,
+                    target,
+                    contours,
+                    metrics,
+                }
+            }
             DrawingTarget::Component(full) => {
                 let (id, state) = fidel_core::parametric::state_ref(full);
                 let id = &id.to_string();
@@ -739,6 +781,8 @@ pub struct MasterDrawingView {
     problem: Option<String>,
     is_default: bool,
     contours: Vec<fidel_core::Contour>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brace: Option<String>,
 }
 
 pub fn master_drawings(
@@ -755,6 +799,7 @@ pub fn master_drawings(
             problem: m.problem,
             is_default: m.is_default,
             contours: m.contours,
+            brace: m.brace,
         })
         .collect())
 }

@@ -1478,16 +1478,21 @@ function renderEditorSide(ed: GlyphEditor) {
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
-  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component";
+  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component" || d.target.kind === "brace";
   if (!standalone) sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
   if (d.target.kind !== "fidel") {
     const target = d.target;
     sections.push(
-      ...masterDrawingsSection(target, metrics, async () => {
-        editor.reset();
-        await editor.open(target, d.context?.family);
-        renderEditorSide(editor);
-      }),
+      ...masterDrawingsSection(
+        target,
+        metrics,
+        async () => {
+          editor.reset();
+          await editor.open(target, d.context?.family);
+          renderEditorSide(editor);
+        },
+        (t) => void openDrawing(t),
+      ),
     );
   }
   if (design && design.masters.length > 1 && design.axes.length) {

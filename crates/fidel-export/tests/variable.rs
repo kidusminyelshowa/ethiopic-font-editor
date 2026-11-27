@@ -183,3 +183,23 @@ fn stat_links_roman_and_italic() {
     let italic = export_variable(&p, &ExportOptions::new("Test Geez")).unwrap();
     assert_eq!(ital(&FontRef::new(&italic.bytes).unwrap()), (1, 1.0));
 }
+
+#[test]
+fn brace_layer_shapes_the_middle() {
+    let mut p = project();
+    let id = p.add_brace(DrawingTarget::Base("ha".into()), &loc(550.0)).unwrap();
+    // It starts as the interpolation: the bowl's radius halfway, 130.
+    let start = p.drawing(&DrawingTarget::Brace(id.clone())).unwrap().to_vec();
+    assert_eq!(start[1].points[0].pos.x, 430.0);
+    p.set_drawing(&DrawingTarget::Brace(id), ha(120.0, 200.0)).unwrap();
+    // The instance there is the brace, and halfway to it in between.
+    let mid = p.instance_at(&loc(550.0)).unwrap();
+    assert_eq!(mid.bases["ha"].contours[1].points[0].pos.x, 500.0);
+    let v = export_variable(&p, &ExportOptions::new("Test Geez")).unwrap();
+    assert!(v.fixed.is_empty(), "{:?}", v.fixed);
+    let font = FontRef::new(&v.bytes).unwrap();
+    for (w, want) in [(400.0, 400.0), (550.0, 500.0), (700.0, 460.0)] {
+        let (right, _) = max_at(&font, 'ሀ', w);
+        assert!((right - want).abs() < 1.0, "{w}: {right}");
+    }
+}

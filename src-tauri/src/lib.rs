@@ -119,6 +119,25 @@ fn get_drawing(
         .map_err(err)
 }
 
+/// Add a brace layer of a base or symbol at a location in user units.
+#[tauri::command]
+fn add_brace(
+    state: State<'_, AppState>,
+    of: DrawingTarget,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<String> {
+    let id = state.project().add_brace(of, &location).map_err(err)?;
+    state.mark_dirty();
+    Ok(id)
+}
+
+#[tauri::command]
+fn remove_brace(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().remove_brace(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
 /// A drawing at a location in the design space, for the canvas preview.
 #[tauri::command]
 fn drawing_at(
@@ -149,6 +168,7 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
             DrawingTarget::Symbol(id) => {
                 project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
             }
+            DrawingTarget::Brace(id) => project.set_brace_advance(id, w).map_err(err)?,
             DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) | DrawingTarget::Component(_) => {
                 return Err("this drawing has no advance width of its own".into())
             }
@@ -1193,6 +1213,8 @@ pub fn run() {
             set_features,
             get_part,
             drawing_at,
+            add_brace,
+            remove_brace,
             part_preview,
             set_part_axes,
             add_part_state,

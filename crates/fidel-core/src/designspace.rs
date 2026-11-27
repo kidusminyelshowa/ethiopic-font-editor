@@ -139,6 +139,9 @@ pub struct Designspace {
     /// Which master's drawings are in the project now.
     #[serde(default)]
     pub active: usize,
+    /// Extra drawings of single glyphs between the masters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub braces: Vec<crate::braces::Brace>,
     /// For an instance: where it sits, normalized per axis. Parts that
     /// follow a font axis read it.
     #[serde(skip)]
@@ -877,13 +880,18 @@ impl Project {
     /// The project at a location in user units: every master's drawings
     /// interpolated, the default master's wherever they do not match.
     pub fn instance_at(&self, user: &BTreeMap<String, f64>) -> Result<Project, DesignError> {
+        self.instance_at_loc(self.design.user_location(user), true)
+    }
+
+    /// The project at a normalized location; brace layers count when
+    /// `braces` is set.
+    pub fn instance_at_loc(&self, loc: Vec<f64>, braces: bool) -> Result<Project, DesignError> {
         if self.design.masters.len() < 2 {
             let mut p = self.clone();
-            p.design.at = Some(self.design.user_location(user));
+            p.design.at = Some(loc);
             return Ok(p);
         }
         let (model, _) = self.model()?;
-        let loc = self.design.user_location(user);
         let layers = self.master_layers();
         let def = self.design.default_master().ok_or(ModelError::NoDefault)?;
         let trees: Vec<Value> =
@@ -895,6 +903,9 @@ impl Project {
         let layer: MasterLayer = serde_json::from_value(blended).unwrap_or_else(|_| layers[def].clone());
         let mut p = self.clone();
         layer.apply(&mut p);
+        if braces {
+            self.blend_braces(&mut p, &layers, &loc);
+        }
         p.design.at = Some(loc);
         p.after_edit();
         Ok(p)

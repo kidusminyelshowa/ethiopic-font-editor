@@ -351,14 +351,24 @@ export function proofAxes(onChange: () => void): HTMLElement {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/** The glyph whose brace layer is open, to go back to. */
+let braceOwner: DrawingTarget | null = null;
+
 /**
  * The open drawing side by side in every master, with what keeps a master
  * from interpolating, and the fixes: match order, direction and start
  * points, or start this master over from the default's drawing.
  */
-export function masterDrawingsSection(target: DrawingTarget, metrics: Metrics, reload: () => Promise<void>): Node[] {
+export function masterDrawingsSection(
+  target: DrawingTarget,
+  metrics: Metrics,
+  reload: () => Promise<void>,
+  open?: (t: DrawingTarget) => void,
+): Node[] {
   const d = design;
   if (!d || d.masters.length < 2) return [];
+  if (target.kind === "base" || target.kind === "symbol") braceOwner = target;
+  const backTo = target.kind === "brace" ? braceOwner : null;
   const strip = el("div", { class: "ds-strip" });
   const note = el("p", { class: "side-note ds-note" });
   const actions = el("div", { class: "button-row" });
@@ -387,16 +397,24 @@ export function masterDrawingsSection(target: DrawingTarget, metrics: Metrics, r
             dot.setAttribute("class", "ds-start");
             svg.append(dot);
           }
+          const onBrace = target.kind === "brace";
+          const active = m.brace ? onBrace && target.id === m.brace : !onBrace && i === d.active;
           const cell = el(
             "button",
             {
-              class: `ds-thumb${i === d.active ? " active" : ""}${m.problem ? " bad" : ""}`,
-              title: m.problem ?? (m.isDefault ? "Default master" : "Matches the default master"),
+              class: `ds-thumb${active ? " active" : ""}${m.problem ? " bad" : ""}${m.brace ? " brace" : ""}`,
+              title: m.problem ?? (m.brace ? "Brace layer: this glyph drawn between the masters" : m.isDefault ? "Default master" : "Matches the default master"),
             },
             svg,
             el("span", { class: "ds-thumb-name" }, m.master),
           );
-          cell.addEventListener("click", () => i !== d.active && void switchMaster(i));
+          cell.addEventListener("click", () => {
+            if (active) return;
+            if (m.brace) open?.({ kind: "brace", id: m.brace });
+            else if (onBrace) {
+              void switchMaster(i).then(() => open?.(backTo ?? target));
+            } else void switchMaster(i);
+          });
           return cell;
         }),
       );
@@ -416,6 +434,38 @@ export function masterDrawingsSection(target: DrawingTarget, metrics: Metrics, r
         }
       });
       actions.replaceChildren(match);
+      // Brace layers: an extra drawing of this glyph where the sliders are.
+      if (target.kind === "base" || target.kind === "symbol") {
+        const add = el(
+          "button",
+          { class: "pill small ghost", title: "Draw this glyph again where the interpolation sliders are, for a shape the masters alone get wrong" },
+          "Add brace layer",
+        );
+        add.addEventListener("click", async () => {
+          if (!proofLocation) {
+            host.toast("Move the interpolation sliders to where the brace layer goes, then add it.");
+            return;
+          }
+          try {
+            const id = await api.addBrace(target, proofLocation);
+            open?.({ kind: "brace", id });
+          } catch (err) {
+            host.toast(String(err), "error");
+          }
+        });
+        actions.append(add);
+      } else if (target.kind === "brace") {
+        const remove = el("button", { class: "pill small ghost", title: "Delete this brace layer" }, "Remove brace layer");
+        remove.addEventListener("click", async () => {
+          try {
+            await api.removeBrace(target.id);
+            if (backTo) open?.(backTo);
+          } catch (err) {
+            host.toast(String(err), "error");
+          }
+        });
+        actions.append(remove);
+      }
       const def = list.find((m) => m.isDefault);
       if (def && list[d.active] && !list[d.active].isDefault && list[d.active].problem) {
         const copy = el("button", { class: "pill small ghost", title: "Replace this master's drawing with the default master's, to adjust from there" }, "Copy from default");

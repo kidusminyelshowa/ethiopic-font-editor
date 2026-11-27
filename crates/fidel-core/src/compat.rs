@@ -118,11 +118,19 @@ pub struct MasterDrawing {
     /// Why it does not interpolate with the default master.
     pub problem: Option<String>,
     pub is_default: bool,
+    /// Set for a brace layer: its id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brace: Option<String>,
 }
 
 impl Project {
     /// The drawing in every master.
     pub fn master_drawings(&self, target: &DrawingTarget) -> Result<Vec<MasterDrawing>, ModelError> {
+        // A brace layer is shown with the glyph it belongs to.
+        let target = &match target {
+            DrawingTarget::Brace(id) => self.brace(id)?.of.clone(),
+            t => t.clone(),
+        };
         let def = self.design.default_master().unwrap_or(self.design.active);
         let projects: Vec<Project> = if self.design.masters.len() < 2 {
             vec![self.clone()]
@@ -141,6 +149,7 @@ impl Project {
                     _ => None,
                 };
                 Ok(MasterDrawing {
+                    brace: None,
                     master: self
                         .design
                         .masters
@@ -153,7 +162,29 @@ impl Project {
                     is_default: i == def,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, ModelError>>()
+            .map(|mut list| {
+                let name = |b: &crate::braces::Brace| {
+                    let at: Vec<String> = self
+                        .design
+                        .axes
+                        .iter()
+                        .map(|a| format!("{}", b.location.get(&a.tag).copied().unwrap_or(a.default).round()))
+                        .collect();
+                    format!("{{{}}}", at.join(", "))
+                };
+                for b in self.braces_of(target) {
+                    list.push(MasterDrawing {
+                        master: name(b),
+                        contours: b.contours.clone(),
+                        advance: Some(b.advance_width),
+                        problem: difference(&reference, &b.contours),
+                        is_default: false,
+                        brace: Some(b.id.clone()),
+                    });
+                }
+                list
+            })
     }
 
     /// Line up every master's version of a drawing with the default

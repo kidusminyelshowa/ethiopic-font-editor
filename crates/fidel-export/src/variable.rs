@@ -7,9 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use fidel_core::designspace::Instance;
+use fidel_core::designspace::{Instance, Model};
 use fidel_core::geometry::{Contour, PointKind, Vec2};
-use fidel_core::Project;
+use fidel_core::{DrawingTarget, Project};
 use kurbo::{BezPath, CubicBez, Point};
 use write_fonts::tables::avar::{Avar, AxisValueMap, SegmentMaps};
 use write_fonts::tables::fvar::{AxisInstanceArrays, Fvar, InstanceRecord, VariationAxisRecord};
@@ -23,6 +23,9 @@ use super::{
     build, collect_items, fixed_glyphs, glyph_name, simple_glyph, to_u16, ExportError, ExportOptions,
     ExportedFont, GlyphOut, CURVE_ACCURACY,
 };
+
+/// Outlines and widths by character.
+type Items = BTreeMap<char, (Vec<Contour>, f64)>;
 
 /// Each master's points of one glyph, phantom points last.
 type MasterPoints = Vec<Vec<(f64, f64)>>;
@@ -88,9 +91,14 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
     let per_master: Vec<BTreeMap<char, (Vec<Contour>, f64)>> =
         masters.iter().map(|p| collect_items(p).into_iter().map(|(c, o, a)| (c, (o, a))).collect()).collect();
     let base = &masters[def];
+    let master_locs: Vec<Vec<f64>> = design.masters.iter().map(|m| design.master_location(m)).collect();
+    let braces = brace_items(project);
 
     let mut glyphs = fixed_glyphs(base);
-    let mut variations: Vec<Option<MasterPoints>> = vec![None; glyphs.len()];
+    // Each glyph's points per master, and which model they vary by: the
+    // masters', or one that also has the glyph's brace layers.
+    let mut models: Vec<Model> = vec![model];
+    let mut variations: Vec<Option<(MasterPoints, usize)>> = vec![None; glyphs.len()];
     let (mut exported, mut skipped, mut fixed) = (Vec::new(), Vec::new(), Vec::new());
     for (ch, outline, advance) in collect_items(base) {
         let closed =
@@ -101,8 +109,26 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
             continue;
         }
         let name = glyph_name(ch);
-        let sets: Option<Vec<(Vec<Contour>, f64)>> =
+        let mut sets: Option<Vec<(Vec<Contour>, f64)>> =
             per_master.iter().map(|m| m.get(&ch).map(|(o, a)| (closed(o), *a))).collect();
+        let mut model_at = 0;
+        let mine: Vec<&(Vec<f64>, Items)> =
+            braces.iter().filter(|(_, items)| items.contains_key(&ch)).collect();
+        if let (Some(list), false) = (sets.as_mut(), mine.is_empty()) {
+            let mut locs = master_locs.clone();
+            for (loc, items) in &mine {
+                let (o, a) = &items[&ch];
+                list.push((closed(o), *a));
+                locs.push(loc.clone());
+            }
+            match Model::new(&locs) {
+                Ok(m) => {
+                    models.push(m);
+                    model_at = models.len() - 1;
+                }
+                Err(_) => list.truncate(master_locs.len()),
+            }
+        }
         let varied = sets.as_ref().and_then(|sets| {
             let paths = lockstep(&sets.iter().map(|(c, _)| c.as_slice()).collect::<Vec<_>>())?;
             let built = SimpleGlyph::interpolatable_glyphs_from_bezpaths(&paths).ok()?;
@@ -127,7 +153,7 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
             Some((mut built, pts)) => {
                 let mut g = built.swap_remove(def);
                 g.overlaps = contours.len() > 1;
-                (Glyph::Simple(g), Some(pts))
+                (Glyph::Simple(g), Some((pts, model_at)))
             }
             None => {
                 fixed.push(ch);
@@ -150,7 +176,8 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
     let mut gvars = Vec::new();
     for (gid, var) in variations.iter().enumerate() {
         let mut deltas_out = Vec::new();
-        if let Some(pts) = var {
+        if let Some((pts, at)) = var {
+            let model = &models[*at];
             let flat: Vec<Vec<f64>> =
                 pts.iter().map(|p| p.iter().flat_map(|&(x, y)| [x, y]).collect()).collect();
             let deltas = model.deltas(&flat);
@@ -316,6 +343,34 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
     let var = VarTables { names, fvar, gvar, avar, stat };
     let bytes = build(base, options, family, &glyphs, Some(var))?;
     Ok(VariableFont { bytes, exported, skipped, fixed })
+}
+
+/// Each brace layer's location, and the glyphs it changes there.
+fn brace_items(project: &Project) -> Vec<(Vec<f64>, Items)> {
+    let items = |p: &Project| -> Items {
+        collect_items(p).into_iter().map(|(c, o, a)| (c, (o, a))).collect()
+    };
+    project
+        .design
+        .braces
+        .iter()
+        .filter_map(|b| {
+            let loc = project.brace_location(b);
+            let plain = project.instance_at_loc(loc.clone(), false).ok()?;
+            let mut with = plain.clone();
+            with.set_drawing(&b.of, b.contours.clone()).ok()?;
+            match &b.of {
+                DrawingTarget::Base(id) => with.bases.get_mut(id)?.advance_width = b.advance_width,
+                DrawingTarget::Symbol(id) => with.symbols.get_mut(id)?.advance_width = b.advance_width,
+                _ => return None,
+            }
+            with.after_edit();
+            let before = items(&plain);
+            let changed: Items =
+                items(&with).into_iter().filter(|(c, v)| before.get(c) != Some(v)).collect();
+            Some((loc, changed))
+        })
+        .collect()
 }
 
 /// Quadratic paths for the same glyph in every master, point for point, or

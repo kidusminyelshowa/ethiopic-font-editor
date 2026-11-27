@@ -161,7 +161,7 @@ export interface OrderRef {
   codepoint: string | null;
 }
 
-export type DrawingKind = "base" | "alteration" | "symbol" | "fidel" | "component";
+export type DrawingKind = "base" | "alteration" | "symbol" | "fidel" | "component" | "brace";
 export type DrawingTarget = { kind: DrawingKind; id: string };
 
 /** A Pa-height zone: the height where a kind of alteration lands (shortened legs end, cricks bend). */
@@ -430,6 +430,8 @@ export interface MasterDrawing {
   problem: string | null;
   isDefault: boolean;
   contours: Contour[];
+  /** Set for a brace layer: its id. */
+  brace?: string;
 }
 
 export interface VariableSummary {
@@ -557,6 +559,8 @@ export const api = {
   getFeatures: () => invoke<FeaturesView>("get_features"),
   setFeatures: (features: Features) => invoke<FeaturesView>("set_features", { features }),
   getPart: (id: string) => invoke<PartView>("get_part", { id }),
+  addBrace: (of: DrawingTarget, location: Record<string, number>) => invoke<string>("add_brace", { of, location }),
+  removeBrace: (id: string) => invoke<void>("remove_brace", { id }),
   drawingAt: (target: DrawingTarget, location: Record<string, number>) => invoke<string>("drawing_at", { target, location }),
   partPreview: (id: string, values: Record<string, number>) => invoke<string>("part_preview", { id, values }),
   setPartAxes: (id: string, axes: PartAxis[]) => invoke<PartView>("set_part_axes", { id, axes }),

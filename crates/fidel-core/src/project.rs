@@ -233,6 +233,10 @@ pub struct Symbol {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ModelError {
+    #[error("no brace layer `{0}`")]
+    UnknownBrace(String),
+    #[error("Only bases and symbols take brace layers")]
+    NoBrace,
     #[error("only bases and symbols have metrics of their own")]
     NoMetrics,
     #[error("Draw and space {0} first: the other glyphs are spaced to match it")]
@@ -281,6 +285,8 @@ pub enum DrawingTarget {
     Symbol(SymbolId),
     Fidel(String),
     Component(ComponentId),
+    /// An intermediate drawing of a base or symbol at one location.
+    Brace(String),
 }
 
 impl DrawingTarget {
@@ -350,6 +356,13 @@ impl Project {
                 .get(id)
                 .map(|s| s.contours.as_slice())
                 .ok_or_else(|| ModelError::UnknownSymbol(id.clone())),
+            DrawingTarget::Brace(id) => self
+                .design
+                .braces
+                .iter()
+                .find(|b| &b.id == id)
+                .map(|b| b.contours.as_slice())
+                .ok_or_else(|| ModelError::UnknownBrace(id.clone())),
             DrawingTarget::Component(id) => {
                 let (comp, state) = crate::parametric::state_ref(id);
                 let c = self.components.get(comp).ok_or_else(|| ModelError::UnknownComponent(id.clone()))?;
@@ -415,6 +428,15 @@ impl Project {
                     s.built_from.clear();
                 }
                 &mut s.contours
+            }
+            DrawingTarget::Brace(id) => {
+                &mut self
+                    .design
+                    .braces
+                    .iter_mut()
+                    .find(|b| &b.id == id)
+                    .ok_or_else(|| ModelError::UnknownBrace(id.clone()))?
+                    .contours
             }
             DrawingTarget::Component(id) => {
                 let (comp, state) = crate::parametric::state_ref(id);
