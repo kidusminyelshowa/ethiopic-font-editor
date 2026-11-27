@@ -686,6 +686,63 @@ fn set_kern_pair(
     Ok(view)
 }
 
+/// Automatic spacing settings and the corpus counts.
+#[tauri::command]
+fn get_spacing(state: State<'_, AppState>) -> fidel_core::spacing::Spacing {
+    state.project().spacing.clone()
+}
+
+/// Change the spacing settings; the corpus counts are kept.
+#[tauri::command]
+fn set_spacing(
+    state: State<'_, AppState>,
+    spacing: fidel_core::spacing::Spacing,
+) -> fidel_core::spacing::Spacing {
+    let mut p = state.project();
+    let (letters, pairs) = (std::mem::take(&mut p.spacing.letters), std::mem::take(&mut p.spacing.pairs));
+    p.spacing = fidel_core::spacing::Spacing { letters, pairs, ..spacing };
+    state.mark_dirty();
+    p.spacing.clone()
+}
+
+/// Count the letters and pairs of a text.
+#[tauri::command]
+fn read_corpus(state: State<'_, AppState>, text: String) -> fidel_core::spacing::Spacing {
+    let mut p = state.project();
+    p.read_corpus(&text);
+    state.mark_dirty();
+    p.spacing.clone()
+}
+
+/// Space bases and symbols to match the reference glyph. Returns how many changed.
+#[tauri::command]
+fn auto_space(state: State<'_, AppState>, only: Option<Vec<DrawingTarget>>) -> CmdResult<usize> {
+    let n = state.project().auto_space(only.as_deref()).map_err(err)?;
+    state.mark_dirty();
+    Ok(n)
+}
+
+/// Kerning proposed for the corpus's most frequent pairs.
+#[tauri::command]
+fn propose_kerning(state: State<'_, AppState>) -> Vec<fidel_core::spacing::KernProposal> {
+    state.project().propose_kerning()
+}
+
+/// Write proposed kerning. Pairs kerned by hand stay.
+#[tauri::command]
+fn apply_kerning(
+    state: State<'_, AppState>,
+    proposals: Vec<fidel_core::spacing::KernProposal>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut p = state.project();
+        p.apply_kerning(&proposals);
+        editor::kerning_view(&p)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
 /// Give every other master this master's kerning. Returns how many changed.
 #[tauri::command]
 fn copy_kerning_to_masters(state: State<'_, AppState>) -> CmdResult<usize> {
@@ -1143,7 +1200,13 @@ pub fn run() {
             set_symbol_components,
             set_metric_keys,
             copy_metrics_to_masters,
-            copy_kerning_to_masters
+            copy_kerning_to_masters,
+            get_spacing,
+            set_spacing,
+            read_corpus,
+            auto_space,
+            propose_kerning,
+            apply_kerning
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

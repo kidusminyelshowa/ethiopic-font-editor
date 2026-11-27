@@ -32,6 +32,7 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
+import { resetAuto } from "./autoSpace";
 import { componentRuleSection, componentsSection, orderRulesSection } from "./orderSide";
 import {
   bindViewMenu,
@@ -119,6 +120,7 @@ const state = {
 
 /** Alterations and components, for the Parts list and the editor. */
 async function loadParts() {
+  resetAuto();
   [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
   kernView.data = await api.getKerning();
   await loadDesign();
@@ -1192,6 +1194,11 @@ const kernView = new KernView(ui.kernView, {
   },
   query: () => side.query,
   changed: () => {
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  respaced: async () => {
+    await refreshGrid();
     void refreshProof();
     void refreshProjectInfo();
   },

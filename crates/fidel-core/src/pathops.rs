@@ -108,7 +108,7 @@ fn shapes(closed: &[&Contour]) -> Vec<(usize, Vec<usize>)> {
 }
 
 /// The contour as a polygon, curves sampled.
-fn flatten(c: &Contour) -> Vec<Vec2> {
+pub(crate) fn flatten(c: &Contour) -> Vec<Vec2> {
     let mut out = Vec::new();
     for s in segments(c) {
         if s.len() == 4 {

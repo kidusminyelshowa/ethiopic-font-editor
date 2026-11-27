@@ -455,6 +455,24 @@ export interface KernClass {
   members: string;
 }
 
+/** Automatic spacing settings and the corpus counts. */
+export interface Spacing {
+  reference: string;
+  depth: number;
+  strength: number;
+  min_kern: number;
+  pair_count: number;
+  letters?: [string, number][];
+  pairs?: [string, number][];
+}
+
+export interface KernProposal {
+  left: string;
+  right: string;
+  value: number;
+  count: number;
+}
+
 export interface KerningData {
   leftClasses: KernClass[];
   rightClasses: KernClass[];
@@ -551,6 +569,12 @@ export const api = {
   setBaseFollows: (base: string, follows: boolean) => invoke<void>("set_base_follows", { base, follows }),
   testInstall: () => invoke<{ path: string; familyName: string; exported: number }>("test_install"),
   getKerning: () => invoke<KerningData>("get_kerning"),
+  getSpacing: () => invoke<Spacing>("get_spacing"),
+  setSpacing: (spacing: Spacing) => invoke<Spacing>("set_spacing", { spacing }),
+  readCorpus: (text: string) => invoke<Spacing>("read_corpus", { text }),
+  autoSpace: (only: DrawingTarget[] | null) => invoke<number>("auto_space", { only }),
+  proposeKerning: () => invoke<KernProposal[]>("propose_kerning"),
+  applyKerning: (proposals: KernProposal[]) => invoke<KerningData>("apply_kerning", { proposals }),
   setKernPair: (left: string, right: string, value: number | null) =>
     invoke<KerningData>("set_kern_pair", { left, right, value }),
   setKernClass: (side: KernSide, name: string, members: string, rename?: string) =>

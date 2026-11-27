@@ -46,6 +46,7 @@ pub mod pathops;
 pub mod project;
 pub mod resolve;
 pub mod scope;
+pub mod spacing;
 
 pub use alteration::{Alteration, AlterationId, Placement, Region, Verb};
 pub use base::{Base, BaseId};

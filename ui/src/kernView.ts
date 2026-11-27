@@ -4,6 +4,7 @@
 import { api, type KernClass, type KernSide, type KerningData, type Metrics } from "./api";
 import { el } from "./dom";
 import { design } from "./mastersPanel";
+import { autoPanel } from "./autoSpace";
 import { numberField, showMenu, type MenuEntry } from "./editorSide";
 import { EMPTY_KERNING, classOf, classesOf, editKey, isException, kernString, layoutLine, listPairs, pairValue, resolve, sampleOf } from "./kerning";
 import { actionFor, comboOf, keysFor } from "./shortcuts";
@@ -20,6 +21,8 @@ export interface KernHost {
   query(): string;
   /** After a change to the kerning: the proof and the project's saved state. */
   changed(): void;
+  /** After automatic spacing: reload outlines and widths. */
+  respaced(): Promise<void>;
   sideList: HTMLElement;
   inspector: HTMLElement;
 }
@@ -54,7 +57,7 @@ export class KernView {
   cursor = 1;
   /** Kern glyph to glyph, as an exception, instead of class to class. */
   exception = false;
-  private tab: "pairs" | "classes" = "pairs";
+  private tab: "pairs" | "classes" | "auto" = "pairs";
   private sort: "name" | "value" = "name";
   private openClass: string | null = null;
   private drag: { index: number; startX: number; start: number; now: number } | null = null;
@@ -423,8 +426,9 @@ export class KernView {
     if (!this.isActive()) return;
     const list = this.host.sideList;
     const seg = el("div", { class: "menu-segment kern-tabs", role: "tablist" });
-    for (const t of ["pairs", "classes"] as const) {
-      const b = el("button", { class: `segment${this.tab === t ? " on" : ""}`, role: "tab", "aria-selected": String(this.tab === t) }, t === "pairs" ? `Pairs ${this.data.pairs.length || ""}`.trim() : "Classes");
+    for (const t of ["pairs", "classes", "auto"] as const) {
+      const label = t === "pairs" ? `Pairs ${this.data.pairs.length || ""}`.trim() : t === "classes" ? "Classes" : "Auto";
+      const b = el("button", { class: `segment${this.tab === t ? " on" : ""}`, role: "tab", "aria-selected": String(this.tab === t), title: t === "auto" ? "Automatic spacing and kerning" : "" }, label);
       b.addEventListener("click", () => {
         this.tab = t;
         this.renderSidebar();
@@ -433,6 +437,22 @@ export class KernView {
     }
     const rows: Node[] = [seg];
     if (this.tab === "pairs") rows.push(...this.pairRows());
+    else if (this.tab === "auto")
+      rows.push(
+        ...autoPanel({
+          toast: (m, t) => this.host.toast(m, t),
+          respaced: async () => {
+            await this.host.respaced();
+            this.render();
+          },
+          kerned: (data) => {
+            this.data = data;
+            this.host.changed();
+            this.render();
+          },
+          rerender: () => this.renderSidebar(),
+        }),
+      );
     else rows.push(...this.classGroup("left"), ...this.classGroup("right"));
     list.replaceChildren(...rows);
   }

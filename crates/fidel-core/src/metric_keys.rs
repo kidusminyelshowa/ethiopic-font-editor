@@ -258,7 +258,7 @@ impl Project {
     }
 
     /// Set one metric of a drawing; returns whether anything moved.
-    fn set_metric(&mut self, who: &Keyed, side: Side, v: f64) -> bool {
+    pub(crate) fn set_metric(&mut self, who: &Keyed, side: Side, v: f64) -> bool {
         let (contours, advance, components, anchors) = match who {
             Keyed::Base(id) => {
                 let Some(b) = self.bases.get_mut(id) else { return false };

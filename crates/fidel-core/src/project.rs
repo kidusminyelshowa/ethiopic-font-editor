@@ -198,6 +198,9 @@ pub struct Project {
     /// OpenType feature code, glyph classes and language systems.
     #[serde(default, skip_serializing_if = "crate::features::Features::is_default")]
     pub features: crate::features::Features,
+    /// Automatic spacing and kerning settings, and the corpus counts.
+    #[serde(default, skip_serializing_if = "crate::spacing::Spacing::is_default")]
+    pub spacing: crate::spacing::Spacing,
 }
 
 pub type SymbolId = String;
@@ -232,6 +235,8 @@ pub struct Symbol {
 pub enum ModelError {
     #[error("only bases and symbols have metrics of their own")]
     NoMetrics,
+    #[error("Draw and space {0} first: the other glyphs are spaced to match it")]
+    NotSpaced(char),
     #[error("no family `{0}`")]
     UnknownFamily(FamilyId),
     #[error("family `{0}` has no {1:?} fidel")]
