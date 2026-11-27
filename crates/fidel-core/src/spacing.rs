@@ -58,7 +58,10 @@ impl Spacing {
 
 /// Letters and adjacent pairs of `text`, most frequent first. Spaces and
 /// punctuation break pairs; only `keep` characters are counted.
-pub fn frequencies(text: &str, keep: &dyn Fn(char) -> bool) -> (Vec<(char, u32)>, Vec<(String, u32)>) {
+/// Letter counts and pair counts, most frequent first.
+pub type Counts = (Vec<(char, u32)>, Vec<(String, u32)>);
+
+pub fn frequencies(text: &str, keep: &dyn Fn(char) -> bool) -> Counts {
     let mut letters: HashMap<char, u32> = HashMap::new();
     let mut pairs: HashMap<(char, char), u32> = HashMap::new();
     let mut prev: Option<char> = None;
@@ -300,7 +303,7 @@ impl Project {
                 (v.abs() >= s.min_kern).then_some(KernProposal { left: l, right: r, value: v as i32, count })
             })
             .collect();
-        out.sort_by(|a, b| b.count.cmp(&a.count));
+        out.sort_by_key(|b| std::cmp::Reverse(b.count));
         out
     }
 
