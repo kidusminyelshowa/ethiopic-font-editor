@@ -3,6 +3,7 @@
 
 import { api, type KernClass, type KernSide, type KerningData, type Metrics } from "./api";
 import { el } from "./dom";
+import { design } from "./mastersPanel";
 import { numberField, showMenu, type MenuEntry } from "./editorSide";
 import { EMPTY_KERNING, classOf, classesOf, editKey, isException, kernString, layoutLine, listPairs, pairValue, resolve, sampleOf } from "./kerning";
 import { actionFor, comboOf, keysFor } from "./shortcuts";
@@ -446,6 +447,18 @@ export class KernView {
         this.renderSidebar();
       });
       sort.append(b);
+    }
+    if ((design?.masters.length ?? 0) > 1) {
+      const copy = el("button", { class: "link-btn", title: "Give every other master the kerning of the master being edited" }, "Copy to all masters");
+      copy.addEventListener("click", async () => {
+        try {
+          const n = await api.copyKerningToMasters();
+          this.host.toast(n ? `Kerning copied to ${n} other master${n > 1 ? "s" : ""}.` : "The other masters already match.");
+        } catch (err) {
+          this.host.toast(String(err), "error");
+        }
+      });
+      sort.append(copy);
     }
     const out: Node[] = [sort];
     const pairs = listPairs(k, this.host.query(), this.sort);

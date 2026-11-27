@@ -481,6 +481,14 @@ fn set_base_follows(state: State<'_, AppState>, base: String, follows: bool) -> 
     Ok(())
 }
 
+/// Give every other master this drawing's sidebearings. Returns how many changed.
+#[tauri::command]
+fn copy_metrics_to_masters(state: State<'_, AppState>, target: DrawingTarget) -> CmdResult<usize> {
+    let n = state.project().copy_metrics_to_masters(&target).map_err(err)?;
+    state.mark_dirty();
+    Ok(n)
+}
+
 /// Set the metric keys of a base or symbol (`=ሀ+10`) and apply them.
 #[tauri::command]
 fn set_metric_keys(
@@ -676,6 +684,14 @@ fn set_kern_pair(
     };
     state.mark_dirty();
     Ok(view)
+}
+
+/// Give every other master this master's kerning. Returns how many changed.
+#[tauri::command]
+fn copy_kerning_to_masters(state: State<'_, AppState>) -> CmdResult<usize> {
+    let n = state.project().copy_kerning_to_masters();
+    state.mark_dirty();
+    Ok(n)
 }
 
 /// Create, change, rename or remove (no members) a kerning class.
@@ -1125,7 +1141,9 @@ pub fn run() {
             test_install,
             set_base_follows,
             set_symbol_components,
-            set_metric_keys
+            set_metric_keys,
+            copy_metrics_to_masters,
+            copy_kerning_to_masters
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

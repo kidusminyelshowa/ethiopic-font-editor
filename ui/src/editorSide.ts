@@ -4,6 +4,7 @@
 
 import { el } from "./dom";
 import { api, type StrokeJoin } from "./api";
+import { design } from "./mastersPanel";
 import { SHAPE_LABEL, SHAPES, type GlyphEditor, type ShapeKind } from "./editor";
 import { evalNumber, ISSUE_LABEL, rotateAbout, scaleAbout, skewAbout, type IssueKind } from "./pathops";
 import { prefs, setPref, type CanvasPrefs } from "./prefs";
@@ -220,7 +221,14 @@ export function metricsSection(ed: GlyphEditor, paLabel: string): Node[] {
     };
     nodes.push(el("div", { class: "field-grid three metric-keys" }, keyInput("left", "Left sidebearing"), keyInput("width", "Width"), keyInput("right", "Right sidebearing")));
   }
-  nodes.push(el("div", { class: "button-row" }, center, el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`)));
+  const row = el("div", { class: "button-row" }, center);
+  if ((design?.masters.length ?? 0) > 1 && (ed.target?.kind === "base" || ed.target?.kind === "symbol")) {
+    const copy = el("button", { class: "pill small ghost", title: "Give every other master these sidebearings" }, "Copy to all masters");
+    copy.addEventListener("click", () => void ed.copyMetricsToMasters());
+    row.append(copy);
+  }
+  row.append(el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`));
+  nodes.push(row);
   return nodes;
 }
 

@@ -59,7 +59,7 @@ import { initProof, setProofFont } from "./proof";
 import { KernView } from "./kernView";
 import { FeaturesView } from "./featuresView";
 import { resolve as resolveKern } from "./kerning";
-import { designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
+import { design, designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
 import { partSection, stateRef } from "./partAxes";
 import { anchorsSection, builtSection } from "./anchorSide";
 
@@ -113,6 +113,8 @@ const state = {
   selectedSymbol: null as string | null,
   /** Family whose base is drawn behind an alteration in the editor. */
   contextFamily: undefined as string | undefined,
+  /** Glyphs picked together with Ctrl or Shift, for setting metrics on all of them. */
+  multi: [] as DrawingTarget[],
 };
 
 /** Alterations and components, for the Parts list and the editor. */
@@ -257,7 +259,10 @@ function renderGrid(grid: FidelGrid) {
         glyphView(cell.outline, grid.metrics, cell.codepoint),
         el("span", { class: `badge badge-${cell.badge}`, "aria-hidden": "true" }),
       );
-      btn.addEventListener("click", () => void select(row.family, cell.order));
+      btn.addEventListener("click", (e) => {
+        if ((e.ctrlKey || e.metaKey || e.shiftKey) && cell.order === "giiz") pickMany({ kind: "base", id: baseOf(row.family) });
+        else void select(row.family, cell.order);
+      });
       btn.addEventListener("dblclick", () => void editFromCell(row.family, cell.order));
       td.append(btn);
     }
@@ -293,12 +298,96 @@ function symbolButton(s: SymbolCell, grid: FidelGrid) {
     },
     glyphView(s.outline, grid.metrics, s.codepoint),
   );
-  btn.addEventListener("click", () => selectSymbol(s.id));
+  btn.addEventListener("click", (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) pickMany({ kind: "symbol", id: s.id });
+    else selectSymbol(s.id);
+  });
   btn.addEventListener("dblclick", () => void openDrawing({ kind: "symbol", id: s.id }));
   return btn;
 }
 
+const sameTarget = (a: DrawingTarget, b: DrawingTarget) => a.kind === b.kind && a.id === b.id;
+
+/** Add a glyph to the picked set (or take it out). The one already selected joins first. */
+function pickMany(t: DrawingTarget) {
+  if (!state.multi.length) {
+    if (state.selected?.order === "giiz") state.multi.push({ kind: "base", id: baseOf(state.selected.family) });
+    else if (state.selectedSymbol) state.multi.push({ kind: "symbol", id: state.selectedSymbol });
+  }
+  const at = state.multi.findIndex((x) => sameTarget(x, t));
+  if (at >= 0) state.multi.splice(at, 1);
+  else state.multi.push(t);
+  state.selected = null;
+  state.selectedSymbol = null;
+  markSelected();
+  renderMultiInspector();
+}
+
+function cellOf(t: DrawingTarget): HTMLElement | null {
+  if (t.kind === "symbol") return ui.grid.querySelector<HTMLElement>(`.cell[data-symbol="${t.id}"]`);
+  const row = state.grid?.rows.find((r) => r.base === t.id);
+  return row ? ui.grid.querySelector<HTMLElement>(`.cell[data-family="${row.family}"][data-order="giiz"]`) : null;
+}
+
+/** Metric keys and sidebearings for several glyphs at once. */
+function renderMultiInspector() {
+  const picked = [...state.multi];
+  if (!picked.length) {
+    renderEmptyInspector();
+    return;
+  }
+  const chars = picked.map((t) => cellOf(t)?.getAttribute("aria-label")?.split(",")[0] ?? "").join(" ");
+  const key = (side: "left" | "width" | "right", label: string) => {
+    const input = el("input", { type: "text", class: "metric-key", placeholder: "Key", "aria-label": `${label} key`, title: `${label} for every picked glyph: =ሀ, =ሀ+10, =|ሀ or =600. Leave empty to keep each one's own; type - to clear.`, spellcheck: "false" }) as HTMLInputElement;
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") input.blur();
+    });
+    input.addEventListener("change", async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      try {
+        for (const t of picked) {
+          const d = await api.getDrawing(t);
+          await api.setMetricKeys(t, { ...(d.metricKeys?.keys ?? {}), [side]: v === "-" ? null : v });
+        }
+        toast(`${label} key set on ${picked.length} glyphs.`);
+        await refreshGrid();
+      } catch (err) {
+        toast(String(err), "error");
+      }
+    });
+    return el("label", { class: "field" }, el("span", {}, label), input);
+  };
+  const body = el(
+    "div",
+    { class: "inspector-body" },
+    el("h2", { class: "display inspector-title" }, `${picked.length} glyph${picked.length > 1 ? "s" : ""}`),
+    el("p", { class: "subtle multi-chars" }, chars),
+    el("h3", { class: "section-label", title: "Ctrl or Shift click Ge'ez cells, numerals and punctuation to pick more" }, "Metric keys"),
+    el("div", { class: "field-grid three" }, key("left", "LSB"), key("width", "Width"), key("right", "RSB")),
+  );
+  if ((design?.masters.length ?? 0) > 1) {
+    const copy = el("button", { class: "pill small ghost", title: "Give every other master the sidebearings these glyphs have in this one" }, "Copy metrics to all masters");
+    copy.addEventListener("click", async () => {
+      let n = 0;
+      for (const t of picked) n += await api.copyMetricsToMasters(t).catch(() => 0);
+      toast(n ? `Copied: ${n} drawing${n > 1 ? "s" : ""} changed in other masters.` : "The other masters already match.");
+    });
+    body.append(el("div", { class: "button-row" }, copy));
+  }
+  const clear = el("button", { class: "pill small ghost" }, "Clear selection");
+  clear.addEventListener("click", () => {
+    state.multi = [];
+    markSelected();
+    renderEmptyInspector();
+  });
+  body.append(el("div", { class: "button-row" }, clear));
+  ui.inspector.replaceChildren(body);
+}
+
 function selectSymbol(id: string) {
+  state.multi = [];
   state.selected = null;
   state.selectedSymbol = id;
   markSelected();
@@ -338,6 +427,7 @@ function selectSymbol(id: string) {
 function markSelected() {
   markSidebar();
   for (const node of ui.grid.querySelectorAll<HTMLElement>(".cell.selected")) node.classList.remove("selected");
+  for (const t of state.multi) cellOf(t)?.classList.add("selected");
   if (state.selectedSymbol) {
     ui.grid.querySelector<HTMLElement>(`.cell[data-symbol="${state.selectedSymbol}"]`)?.classList.add("selected");
   }
@@ -348,6 +438,7 @@ function markSelected() {
 }
 
 async function select(family: string, order: string) {
+  state.multi = [];
   state.selected = { family, order };
   state.selectedSymbol = null;
   markSelected();

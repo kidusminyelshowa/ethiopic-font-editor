@@ -3152,6 +3152,20 @@ export class GlyphEditor {
     }
   }
 
+  /** Give every other master this drawing's sidebearings. */
+  async copyMetricsToMasters(): Promise<void> {
+    const target = this.target;
+    if (!target) return;
+    try {
+      await this.saving;
+      const n = await api.copyMetricsToMasters(target);
+      this.host.toast(n ? `Sidebearings copied to ${n} other master${n > 1 ? "s" : ""}.` : "The other masters already match.");
+      this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not copy the metrics: ${err}`, "error");
+    }
+  }
+
   /** After a save, metric keys may have moved the outline or changed the width in the core: take that in. */
   private async syncFromCore(): Promise<void> {
     const target = this.target;

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geometry::{bounds_of, Contour, Vec2};
 use crate::order::Order;
-use crate::project::Project;
+use crate::project::{ModelError, Project};
 
 /// The keys on one drawing. Empty strings count as unset.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -201,6 +201,62 @@ impl Project {
         errors
     }
 
+    /// Give every other master this drawing's sidebearings as they are in
+    /// the master being edited. Returns how many masters changed.
+    pub fn copy_metrics_to_masters(&mut self, target: &crate::DrawingTarget) -> Result<usize, ModelError> {
+        let who = match target {
+            crate::DrawingTarget::Base(id) => Keyed::Base(id.clone()),
+            crate::DrawingTarget::Symbol(id) => Keyed::Symbol(id.clone()),
+            _ => return Err(ModelError::NoMetrics),
+        };
+        let (contours, advance) = match &who {
+            Keyed::Base(id) => {
+                let b = self.bases.get(id).ok_or_else(|| ModelError::UnknownBase(id.clone()))?;
+                (b.contours.clone(), b.advance_width)
+            }
+            Keyed::Symbol(id) => {
+                let s = self.symbols.get(id).ok_or_else(|| ModelError::UnknownSymbol(id.clone()))?;
+                (s.contours.clone(), s.advance_width)
+            }
+        };
+        let Some((lsb, rsb, _)) = measure(&contours, advance) else { return Ok(0) };
+        let back = self.design.active;
+        let mut changed = 0;
+        for m in 0..self.design.masters.len() {
+            if m == back {
+                continue;
+            }
+            let _ = self.switch_master(m);
+            let moved = self.set_metric(&who, Side::Left, lsb.round())
+                | self.set_metric(&who, Side::Right, rsb.round());
+            if moved {
+                changed += 1;
+            }
+        }
+        let _ = self.switch_master(back);
+        Ok(changed)
+    }
+
+    /// Give every other master the kerning of the master being edited.
+    /// Returns how many masters changed.
+    pub fn copy_kerning_to_masters(&mut self) -> usize {
+        let pairs = self.kerning.pairs.clone();
+        let back = self.design.active;
+        let mut changed = 0;
+        for m in 0..self.design.masters.len() {
+            if m == back {
+                continue;
+            }
+            let _ = self.switch_master(m);
+            if self.kerning.pairs != pairs {
+                self.kerning.pairs = pairs.clone();
+                changed += 1;
+            }
+        }
+        let _ = self.switch_master(back);
+        changed
+    }
+
     /// Set one metric of a drawing; returns whether anything moved.
     fn set_metric(&mut self, who: &Keyed, side: Side, v: f64) -> bool {
         let (contours, advance, components, anchors) = match who {
@@ -210,7 +266,7 @@ impl Project {
             }
             Keyed::Symbol(id) => {
                 let Some(s) = self.symbols.get_mut(id) else { return false };
-                (&mut s.contours, &mut s.advance_width, Some(&mut s.components), None)
+                (&mut s.contours, &mut s.advance_width, Some(&mut s.components), Some(&mut s.anchors))
             }
         };
         let Some(b) = bounds_of(contours.iter()) else { return false };
