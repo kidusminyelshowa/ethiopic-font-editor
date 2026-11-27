@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use crate::component::{PartAxis, PartState, PartValues};
+use crate::geometry::Contour;
 use crate::project::{ModelError, Project};
 
 /// `leaf#2` is the second state of `leaf`; `leaf` is its main drawing.
@@ -57,6 +58,12 @@ pub struct PartView {
 }
 
 impl Project {
+    /// The part's outline at these settings, for previewing a placement.
+    pub fn part_preview(&self, id: &str, values: &PartValues) -> Result<Vec<Contour>, ModelError> {
+        let c = self.components.get(id).ok_or_else(|| ModelError::UnknownComponent(id.into()))?;
+        Ok(c.shape(values))
+    }
+
     pub fn part_view(&self, id: &str) -> Result<PartView, ModelError> {
         let c = self.components.get(id).ok_or_else(|| ModelError::UnknownComponent(id.into()))?;
         Ok(PartView {

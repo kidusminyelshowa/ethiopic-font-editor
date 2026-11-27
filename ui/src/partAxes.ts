@@ -64,6 +64,51 @@ export function partValueFields(
   });
 }
 
+/** Sliders that show the part at any setting on the canvas while they move. */
+function previewSliders(ed: GlyphEditor, part: string, axes: PartAxis[]): Node[] {
+  const values: Record<string, number> = Object.fromEntries(axes.map((a) => [a.name, a.default]));
+  let asked = 0;
+  const show = () => {
+    const atDefault = axes.every((a) => values[a.name] === a.default);
+    const n = ++asked;
+    if (atDefault) {
+      ed.partPreview = null;
+      ed.render();
+      return;
+    }
+    api.partPreview(part, values).then((d) => {
+      if (n !== asked) return;
+      ed.partPreview = d;
+      ed.render();
+    }, () => {});
+  };
+  const sliders = axes.map((a) => {
+    const range = el("input", { type: "range", min: String(a.min), max: String(a.max), step: "any", value: String(a.default), "aria-label": `Preview ${a.name}` }) as HTMLInputElement;
+    const out = el("span", { class: "part-value" }, String(Math.round(a.default)));
+    range.addEventListener("input", () => {
+      values[a.name] = Number(range.value);
+      out.textContent = String(Math.round(values[a.name]));
+      show();
+    });
+    return el("label", { class: "field range part-range" }, el("span", {}, a.name, out), range);
+  });
+  const reset = el("button", { class: "pill small ghost", title: "Hide the preview" }, "Reset");
+  reset.addEventListener("click", () => {
+    for (const a of axes) values[a.name] = a.default;
+    sliders.forEach((s, i) => {
+      const r = s.querySelector("input") as HTMLInputElement;
+      r.value = String(axes[i].default);
+      (s.querySelector(".part-value") as HTMLElement).textContent = String(Math.round(axes[i].default));
+    });
+    show();
+  });
+  return [
+    el("div", { class: "menu-label rule-label", title: "Drag to see the part between its states, drawn over the canvas" }, "Preview"),
+    ...sliders,
+    el("div", { class: "button-row" }, reset),
+  ];
+}
+
 export interface PartHost {
   open(id: string): void;
   /** The part's axes changed: placements elsewhere need the new list. */
@@ -161,6 +206,7 @@ export function partSection(ed: GlyphEditor, openId: string, host: PartHost): No
         }
         rows.push(row);
       });
+      if (v.states.length) rows.push(...previewSliders(ed, part, v.axes));
       const addState = el("button", { class: "pill small ghost", title: "Starts as a copy of the default drawing" }, "Add state");
       addState.addEventListener("click", () => {
         const loc = nextStateLocation(v.axes, v.states.map((s) => s.location));

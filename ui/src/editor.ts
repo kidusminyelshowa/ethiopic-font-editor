@@ -353,6 +353,8 @@ export class GlyphEditor {
   anchorSel: string | null = null;
   /** Another glyph shown against this one by their anchors. */
   markPreview: { partner: string; d: string | null } | null = null;
+  /** A parametric part at other settings, from the preview sliders. */
+  partPreview: string | null = null;
 
   async open(target: DrawingTarget, contextFamily?: string): Promise<void> {
     const sameDrawing = this.target && this.target.kind === target.kind && this.target.id === target.id;
@@ -381,6 +383,7 @@ export class GlyphEditor {
       this.ruleSel = null;
       this.anchorSel = null;
       this.markPreview = null;
+      this.partPreview = null;
     } else if (this.markPreview) void this.refreshMarkPreview();
     void this.loadRuleEnds();
     if (!sameDrawing) {
@@ -3816,6 +3819,9 @@ export class GlyphEditor {
     }
     if (this.markPreview?.d) {
       parts.push(`<path class="mark-preview" transform="${xf}" d="${this.markPreview.d}"/>`);
+    }
+    if (this.partPreview) {
+      parts.push(`<path class="part-preview" transform="${xf}" d="${this.partPreview}"/>`);
     }
 
     // Snap guides.

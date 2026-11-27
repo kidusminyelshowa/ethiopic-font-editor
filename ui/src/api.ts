@@ -557,6 +557,7 @@ export const api = {
   getFeatures: () => invoke<FeaturesView>("get_features"),
   setFeatures: (features: Features) => invoke<FeaturesView>("set_features", { features }),
   getPart: (id: string) => invoke<PartView>("get_part", { id }),
+  partPreview: (id: string, values: Record<string, number>) => invoke<string>("part_preview", { id, values }),
   setPartAxes: (id: string, axes: PartAxis[]) => invoke<PartView>("set_part_axes", { id, axes }),
   addPartState: (id: string, location: Record<string, number>) => invoke<PartView>("add_part_state", { id, location }),
   setPartState: (id: string, index: number, location: Record<string, number>) =>

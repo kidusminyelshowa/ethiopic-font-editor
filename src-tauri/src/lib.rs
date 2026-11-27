@@ -415,6 +415,15 @@ fn get_part(state: State<'_, AppState>, id: String) -> CmdResult<fidel_core::par
     state.project().part_view(&id).map_err(err)
 }
 
+#[tauri::command]
+fn part_preview(
+    state: State<'_, AppState>,
+    id: String,
+    values: fidel_core::component::PartValues,
+) -> CmdResult<String> {
+    state.project().part_preview(&id, &values).map(|c| fidel_core::svg_path(&c)).map_err(err)
+}
+
 fn part_change(
     state: &State<'_, AppState>,
     id: &str,
@@ -1172,6 +1181,7 @@ pub fn run() {
             mark_preview,
             set_features,
             get_part,
+            part_preview,
             set_part_axes,
             add_part_state,
             set_part_state,
