@@ -143,6 +143,7 @@ impl Project {
                     state: FidelState::Linked,
                     alteration_overrides: BTreeMap::new(),
                     built_on: None,
+                    components: Vec::new(),
                 },
             );
             // Only the new fidel takes its default form: choices made on the

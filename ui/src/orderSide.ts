@@ -208,6 +208,26 @@ export function componentsSection(
         swap.append(o);
       }
       swap.addEventListener("change", () => update(r.id, (x) => (x.component = swap.value)));
+      // Line it up: its origin on an anchor, or level with another placement.
+      const lineUp = el("select", { class: "zone-select", "aria-label": "Line it up", title: "Put its origin on an anchor, or line it up with another component" }) as HTMLSelectElement;
+      lineUp.append(el("option", { value: "" }, "Line up with…"));
+      for (const [name, a] of Object.entries(ed.drawing?.anchors ?? {})) {
+        if (!name.startsWith("_")) lineUp.append(el("option", { value: `a:${a.x}:${a.y}` }, `Anchor ${name}`));
+      }
+      for (const other of placed) {
+        if (other.placement.id === r.id) continue;
+        const o = other.placement;
+        lineUp.append(
+          el("option", { value: `x:${o.at.x}` }, `${other.name}: same X`),
+          el("option", { value: `y:${o.at.y}` }, `${other.name}: same Y`),
+        );
+      }
+      lineUp.addEventListener("change", () => {
+        const [k, a, b] = lineUp.value.split(":");
+        if (k === "a") update(r.id, (x) => (x.at = { x: Number(a), y: Number(b) }));
+        else if (k === "x") update(r.id, (x) => (x.at.x = Number(a)));
+        else if (k === "y") update(r.id, (x) => (x.at.y = Number(a)));
+      });
       row.append(
         el(
           "div",
@@ -230,6 +250,7 @@ export function componentsSection(
           remove,
         ),
         el("label", { class: "field", title: "Swap it for another component" }, el("span", {}, "Component"), swap),
+        ...(lineUp.options.length > 1 ? [lineUp] : []),
         ...partValueFields(components.find((c) => c.id === r.component)?.axes ?? [], r.values, (values) => update(r.id, (x) => (x.values = values))),
         el("div", { class: "button-row" }, edit, decompose),
       );

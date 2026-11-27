@@ -3,7 +3,7 @@
 // right-click menu and the view (snapping and display) menu.
 
 import { el } from "./dom";
-import type { StrokeJoin } from "./api";
+import { api, type StrokeJoin } from "./api";
 import { SHAPE_LABEL, SHAPES, type GlyphEditor, type ShapeKind } from "./editor";
 import { evalNumber, ISSUE_LABEL, rotateAbout, scaleAbout, skewAbout, type IssueKind } from "./pathops";
 import { prefs, setPref, type CanvasPrefs } from "./prefs";
@@ -149,6 +149,18 @@ export function transformSection(ed: GlyphEditor): Node[] {
     iconButton("distH", "Distribute horizontally", () => ed.distribute("x")),
     iconButton("distV", "Distribute vertically", () => ed.distribute("y")),
   );
+  const guides = ed.allGuides();
+  const toGuide = el("select", { class: "zone-select", "aria-label": "Align to a guide", title: "Move the selected points onto a guide" }) as HTMLSelectElement;
+  toGuide.append(el("option", { value: "" }, "Align points to a guide…"));
+  for (const { g, scope } of guides) {
+    const where = g.angle === 0 ? `y ${Math.round(g.y)}` : g.angle === 90 ? `x ${Math.round(g.x)}` : `${Math.round(g.angle)}°`;
+    toGuide.append(el("option", { value: `${scope}:${g.id}` }, `${g.name || "Guide"} · ${where}${scope === "global" ? " · global" : ""}`));
+  }
+  toGuide.addEventListener("change", () => {
+    const [scope, id] = toGuide.value.split(":");
+    if (id) ed.alignToGuide(scope as "local" | "global", Number(id));
+    toGuide.value = "";
+  });
   return [
     el("h3", { class: "section-label" }, "Transform"),
     el("div", { class: "transform-head" }, picker, pos),
@@ -157,6 +169,7 @@ export function transformSection(ed: GlyphEditor): Node[] {
     apply,
     el("h3", { class: "section-label" }, "Align"),
     align,
+    ...(guides.length && ed.tool !== "select" ? [toGuide] : []),
   ];
 }
 
@@ -599,10 +612,12 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Tunni lines", "showTunni"),
     check("Curvature comb", "showComb"),
     check("Metric lines", "showMetrics"),
+    check("Anchors", "showAnchors"),
     el("div", { class: "menu-sep", role: "separator" }),
     el("div", { class: "menu-label" }, "Points"),
     check("Colour by point type", "pointColors"),
     check("Coordinates of selected points", "showCoords"),
+    check("Solid points", "solidPoints"),
     sizePicker(),
     el("div", { class: "menu-sep", role: "separator" }),
     shortcutsItem(),
@@ -761,6 +776,33 @@ export function backgroundSection(ed: GlyphEditor): Node[] {
         btn("Clear", "Empty the background layer", () => ed.clearBackground(), !has),
       ),
       el("label", { class: "field compare-field", title: "Show another glyph's outline behind this one" }, el("span", {}, "Compare with"), cmp),
+      masterCompare(ed),
     ),
   ];
+}
+
+/** Pick another master of this drawing to show behind it; hidden with one master. */
+function masterCompare(ed: GlyphEditor): HTMLElement {
+  const pick = el("select", { class: "zone-select", "aria-label": "Compare with a master", title: "Show this drawing in another master behind it" }) as HTMLSelectElement;
+  pick.hidden = true;
+  const target = ed.target;
+  // Generated fidel have no drawing of their own in each master.
+  if (target && !ed.drawing?.generated) {
+    void api
+      .masterDrawings(target)
+      .then((all) => {
+        if (all.length < 2) return;
+        pick.append(el("option", { value: "" }, "Compare with a master…"));
+        const now = ed.compareMaster?.key === ed.targetKey ? ed.compareMaster.master : "";
+        for (const m of all) {
+          const o = el("option", { value: m.master }, m.master) as HTMLOptionElement;
+          o.selected = m.master === now;
+          pick.append(o);
+        }
+        pick.hidden = false;
+      })
+      .catch(() => {});
+  }
+  pick.addEventListener("change", () => void ed.setCompareMaster(pick.value || null));
+  return pick;
 }

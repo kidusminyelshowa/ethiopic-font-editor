@@ -396,7 +396,7 @@ impl DrawingView {
                     },
                     advance_width: None,
                     context: None,
-                    components: None,
+                    components: Some(placed_components(project, &project.fidel(&family, order)?.components)),
                     zones: zone_views(&metrics),
                     generated,
                     handles: if generated { r.handles.clone() } else { Vec::new() },

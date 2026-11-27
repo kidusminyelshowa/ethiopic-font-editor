@@ -237,6 +237,9 @@ pub struct FamilyLayer {
     pub attach_offsets: BTreeMap<String, Vec2>,
     #[serde(default)]
     pub states: BTreeMap<Order, FidelState>,
+    /// Components placed on single fidels.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<Order, Vec<ComponentRef>>,
 }
 
 impl MasterLayer {
@@ -284,6 +287,12 @@ impl MasterLayer {
                     let l = FamilyLayer {
                         attach_offsets: f.attach_offsets.clone(),
                         states: f.fidels.iter().map(|(o, fi)| (*o, fi.state.clone())).collect(),
+                        components: f
+                            .fidels
+                            .iter()
+                            .filter(|(_, fi)| !fi.components.is_empty())
+                            .map(|(o, fi)| (*o, fi.components.clone()))
+                            .collect(),
                     };
                     (id.clone(), l)
                 })
@@ -336,6 +345,7 @@ impl MasterLayer {
                 for (o, s) in &l.states {
                     if let Some(fi) = f.fidels.get_mut(o) {
                         fi.state = s.clone();
+                        fi.components = l.components.get(o).cloned().unwrap_or_default();
                     }
                 }
             }

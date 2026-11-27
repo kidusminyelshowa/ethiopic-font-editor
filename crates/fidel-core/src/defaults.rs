@@ -218,6 +218,7 @@ pub fn geez_project(metrics: Metrics) -> Project {
                     built_on: default_built_on(c).map(|parent| {
                         Order::ALL.into_iter().find(|o| f.codepoint(*o) == parent).expect("same family")
                     }),
+                    components: Vec::new(),
                 },
             );
         }

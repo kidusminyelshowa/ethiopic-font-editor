@@ -118,6 +118,7 @@ fn resolve_in_chain(
     match &fidel.state {
         FidelState::Detached { contours } if !contours.is_empty() => {
             out.contours = own(contours);
+            place_own_components(project, fidel, &mut out);
             return Some(out);
         }
         // Drawn by hand but not drawn yet: show the generated form meanwhile.
@@ -246,6 +247,7 @@ fn resolve_in_chain(
     }
 
     place_leaves(project, &family.base, &mut out);
+    place_own_components(project, fidel, &mut out);
     apply_point_nudges(&mut out, nudges, &alterations);
 
     // Grow the advance so added parts keep the base's right sidebearing.
@@ -347,6 +349,21 @@ fn handle_point(c: &Contour, verb: Verb, region: crate::alteration::Region) -> O
         c.points.iter().filter(|p| p.is_on_curve() && (p.pos.y - y).abs() < 1.0).map(|p| p.pos.x).collect();
     let x = if xs.is_empty() { (b.min.x + b.max.x) / 2.0 } else { xs.iter().sum::<f64>() / xs.len() as f64 };
     Some(Vec2::new(x, y))
+}
+
+/// The components placed on the fidel itself, last, so they sit on its
+/// finished outline.
+fn place_own_components(project: &Project, fidel: &crate::fidel::Fidel, out: &mut ResolvedFidel) {
+    for r in &fidel.components {
+        match project.components.get(&r.component) {
+            Some(comp) => out.contours.extend(
+                r.place_in(comp, &project.design.font_location())
+                    .into_iter()
+                    .map(|contour| ResolvedContour { source: Source::Placed(r.id), contour }),
+            ),
+            None => out.diagnostics.push(Diagnostic::MissingComponent { component: r.component.clone() }),
+        }
+    }
 }
 
 /// Put every rule-placed component (leaves) on the ends of the strokes it

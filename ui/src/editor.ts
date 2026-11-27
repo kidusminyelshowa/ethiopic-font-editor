@@ -526,6 +526,27 @@ export class GlyphEditor {
     return this.compareWith.get(this.targetKey) ?? "";
   }
 
+  /** Another master of this drawing shown behind it, by master name, with its outline. */
+  compareMaster: { key: string; master: string; d: string } | null = null;
+
+  /** Show this drawing in another master behind it; null stops. */
+  async setCompareMaster(master: string | null): Promise<void> {
+    const target = this.target;
+    if (!master || !target) {
+      this.compareMaster = null;
+      this.render();
+      return;
+    }
+    try {
+      const all = await api.masterDrawings(target);
+      const m = all.find((x) => x.master === master);
+      this.compareMaster = m ? { key: this.targetKey, master, d: m.d } : null;
+    } catch (err) {
+      this.host.toast(`Could not show that master: ${err}`, "error");
+    }
+    this.render();
+  }
+
   /** Trace the sketch image into outlines, added to the drawing. */
   async traceSketch(threshold = 128): Promise<void> {
     const sk = this.sketch;
@@ -570,8 +591,8 @@ export class GlyphEditor {
   /** Turn the selected paths into a new component, placed where they were. */
   async makeComponent(kind: ComponentKind = "corner"): Promise<void> {
     const t = this.target;
-    if (t?.kind !== "base" && t?.kind !== "symbol") {
-      this.host.toast("Components are placed on bases and symbols. Open one to make a component.");
+    if (t?.kind !== "base" && t?.kind !== "symbol" && t?.kind !== "fidel") {
+      this.host.toast("Components are placed on bases, fidel and symbols. Open one to make a component.");
       return;
     }
     const sel = this.selectedContours();
@@ -604,7 +625,7 @@ export class GlyphEditor {
   /** Turn one placed component (or all of them) back into plain paths on the base. */
   async decompose(id?: number): Promise<void> {
     const t = this.target;
-    if (t?.kind !== "base" && t?.kind !== "symbol") return;
+    if (t?.kind !== "base" && t?.kind !== "symbol" && t?.kind !== "fidel") return;
     const refs = this.placements;
     const which = id === undefined ? refs : refs.filter((r) => r.id === id);
     if (!which.length) return;
@@ -734,7 +755,7 @@ export class GlyphEditor {
   }
 
   /** Every guide with its scope, for drawing, hit testing and snapping. */
-  private allGuides(): { g: Guide; scope: GuideScope }[] {
+  allGuides(): { g: Guide; scope: GuideScope }[] {
     if (!prefs.showGuides) return [];
     return [
       ...this.guides.global.map((g) => ({ g, scope: "global" as const })),
@@ -870,7 +891,11 @@ export class GlyphEditor {
 
   /** The advance the canvas is framed on: the drawing's own, or its context base's. */
   get frameWidth(): number | null {
-    return this.drawing?.advanceWidth ?? this.drawing?.context?.advanceWidth ?? null;
+    const own = this.drawing?.advanceWidth ?? this.drawing?.context?.advanceWidth;
+    if (own != null) return own;
+    // A fidel takes its width from its base: read it from the glyph it makes.
+    const ch = this.target?.kind === "fidel" ? this.host.charOf(this.target) : null;
+    return (ch && this.host.glyphFor(ch)?.advance) || null;
   }
 
   zoom(factor: number, around?: Vec2): void {
@@ -1180,9 +1205,10 @@ export class GlyphEditor {
 
   async setPlacements(refs: ComponentRef[]): Promise<void> {
     const target = this.target;
-    if ((target?.kind !== "base" && target?.kind !== "symbol") || !this.drawing) return;
+    if ((target?.kind !== "base" && target?.kind !== "symbol" && target?.kind !== "fidel") || !this.drawing) return;
     try {
       if (target.kind === "symbol") await api.setSymbolComponents(target.id, refs);
+      else if (target.kind === "fidel") await api.setFidelComponents(target.id, refs);
       else await api.setBaseComponents(target.id, refs);
       const fresh = await api.getDrawing(target);
       if (this.target?.kind === target.kind && this.target.id === target.id && this.drawing) {
@@ -1288,6 +1314,34 @@ export class GlyphEditor {
     }
     roundContours(this.contours);
     this.commit("Align");
+    this.changedSelection();
+  }
+
+  /** Move the selected points onto a guide, along its perpendicular; their handles come along. */
+  alignToGuide(scope: GuideScope, id: number): void {
+    const g = this.guides[scope].find((x) => x.id === id);
+    if (!g) return;
+    const moves: { ci: number; pi: number; d: Vec2 }[] = [];
+    this.contours.forEach((c, ci) =>
+      c.points.forEach((p, pi) => {
+        if (!this.selection.has(key(ci, pi)) || !isOn(p)) return;
+        const to = projectOnGuide(g, p.pos);
+        moves.push({ ci, pi, d: { x: to.x - p.pos.x, y: to.y - p.pos.y } });
+      }),
+    );
+    if (!moves.length) {
+      this.host.toast("Select points to put on the guide.");
+      return;
+    }
+    for (const { ci, pi, d } of moves) {
+      const pts = this.contours[ci].points;
+      const n = pts.length;
+      const near = new Set([pi]);
+      for (const j of [(pi + n - 1) % n, (pi + 1) % n]) if (!isOn(pts[j]) && !this.selection.has(key(ci, j))) near.add(j);
+      this.contours = transformContours(this.contours, translate(d.x, d.y), (c, p) => c === ci && near.has(p));
+    }
+    roundContours(this.contours);
+    this.commit("Align to guide");
     this.changedSelection();
   }
 
@@ -3651,6 +3705,8 @@ export class GlyphEditor {
 
   render(): void {
     if (!this.drawing) return;
+    if (prefs.solidPoints) this.svg.dataset.solidPoints = "true";
+    else delete this.svg.dataset.solidPoints;
     if (prefs.pointColors) this.svg.dataset.pointColors = "true";
     else delete this.svg.dataset.pointColors;
     const r = this.svg.getBoundingClientRect();
@@ -3761,6 +3817,8 @@ export class GlyphEditor {
     if (host?.length) parts.push(`<path class="host-layer" transform="${xf}" d="${host.map(contourPath).join("")}"/>`);
     const cmp = this.compare ? this.host.glyphFor(this.compare) : null;
     if (cmp?.d) parts.push(`<path class="compare-layer" transform="${xf}" d="${cmp.d}"/>`);
+    const cm = this.compareMaster;
+    if (cm?.key === this.targetKey && cm.d) parts.push(`<path class="compare-layer master" transform="${xf}" d="${cm.d}"/>`);
 
     // The rest of the line of text, filled, to judge the glyph in context.
     for (const n of this.neighbours()) {
@@ -3770,6 +3828,17 @@ export class GlyphEditor {
         `<rect class="neighbour-box" data-ti="${n.i}" x="${sx(n.x)}" y="${sy(m.pa_top)}" width="${n.advance * scale}" height="${(m.pa_top - m.pa_bottom) * scale}"/>`,
         `<path class="neighbour" data-ti="${n.i}" transform="matrix(${scale} 0 0 ${-scale} ${tx + n.x * scale} ${ty})" d="${n.d}"/>`,
       );
+      // Their sidebearings too, so spacing is judged in the line.
+      const ink = prefs.showMetrics ? pathXRange(n.d) : null;
+      if (ink) {
+        const y = sy(m.pa_bottom) + 18;
+        parts.push(
+          `<line class="neighbour-edge" x1="${sx(n.x)}" x2="${sx(n.x)}" y1="${sy(m.pa_top)}" y2="${y + 4}"/>`,
+          `<line class="neighbour-edge" x1="${sx(n.x + n.advance)}" x2="${sx(n.x + n.advance)}" y1="${sy(m.pa_top)}" y2="${y + 4}"/>`,
+          `<text class="neighbour-sb" x="${sx(n.x) + 4}" y="${y}">${Math.round(ink[0])}</text>`,
+          `<text class="neighbour-sb" x="${sx(n.x + n.advance) - 4}" y="${y}" text-anchor="end">${Math.round(n.advance - ink[1])}</text>`,
+        );
+      }
     }
 
     // Filled outline (all visible contours together, so counters cut out),
@@ -3847,7 +3916,7 @@ export class GlyphEditor {
     }
 
     // Anchors: where accents attach, or where this accent joins.
-    for (const [name, a] of Object.entries(this.drawing.anchors ?? {})) {
+    for (const [name, a] of Object.entries(prefs.showAnchors ? (this.drawing.anchors ?? {}) : {})) {
       const x = sx(a.x);
       const y = sy(a.y);
       const r = 5;
@@ -4174,3 +4243,17 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 export { PARTS };
+
+/** The left and right ink edges of an SVG path of absolute pairs (M, L, C, Q), from its points. */
+export function pathXRange(d: string): [number, number] | null {
+  const nums = d.match(/-?\d*\.?\d+(?:e-?\d+)?/gi);
+  if (!nums || nums.length < 2) return null;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < nums.length; i += 2) {
+    const x = Number(nums[i]);
+    lo = Math.min(lo, x);
+    hi = Math.max(hi, x);
+  }
+  return [lo, hi];
+}

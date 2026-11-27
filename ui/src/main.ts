@@ -1532,7 +1532,7 @@ function renderEditorSide(ed: GlyphEditor) {
   // Metrics: sidebearings and width, for bases and symbols.
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
   if (d.target.kind === "base" && d.derived) sections.unshift(...derivedSection(ed, d));
-  if (d.target.kind === "base" || d.target.kind === "symbol") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  if (d.target.kind === "base" || d.target.kind === "symbol" || d.target.kind === "fidel") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
   const anchorHost = {
     charOf: (dv: DrawingView) => charOf(dv.target),
     glyphs: () => {

@@ -34,6 +34,10 @@ export interface CanvasPrefs {
   pointColors: boolean;
   /** Coordinates next to selected points. */
   showCoords: boolean;
+  /** Points filled in, instead of hollow. */
+  solidPoints: boolean;
+  /** Anchors and their names. */
+  showAnchors: boolean;
   /** Shape tool options. */
   cornerRadius: number;
   polygonSides: number;
@@ -65,6 +69,8 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   nodeSize: "medium",
   pointColors: false,
   showCoords: false,
+  solidPoints: false,
+  showAnchors: true,
   cornerRadius: 40,
   polygonSides: 6,
   starPoints: 5,

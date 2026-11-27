@@ -547,6 +547,7 @@ impl Project {
             .resolve(family, order)?
             .contours
             .into_iter()
+            .filter(|rc| !matches!(rc.source, Source::Placed(_)))
             .enumerate()
             .map(|(i, rc)| Contour { id: i as u32, ..rc.contour })
             .collect())
@@ -562,7 +563,8 @@ impl Project {
         order: Order,
         contours: &[Contour],
     ) -> Result<(), ModelError> {
-        let resolved = self.resolve(family, order)?;
+        let mut resolved = self.resolve(family, order)?;
+        resolved.contours.retain(|rc| !matches!(rc.source, Source::Placed(_)));
         let same_points = resolved.contours.len() == contours.len()
             && resolved.contours.iter().zip(contours).all(|(rc, edited)| {
                 rc.contour.points.len() == edited.points.len()
@@ -681,6 +683,7 @@ impl Project {
         let contours: Vec<Contour> = resolved
             .contours
             .into_iter()
+            .filter(|rc| !matches!(rc.source, Source::Placed(_)))
             .enumerate()
             .map(|(i, rc)| {
                 let name = rc.contour.name.clone().or_else(|| match &rc.source {
@@ -694,6 +697,7 @@ impl Project {
                     Source::Leaf(_) => Some(
                         self.components.get(id_of_leaf(&rc.source)).map_or("Leaf".into(), |c| c.name.clone()),
                     ),
+                    Source::Placed(_) => None,
                     Source::Component(_) => Some(
                         rc.contour.part.map_or("Component".to_string(), |p| capitalise(&format!("{p:?}"))),
                     ),
@@ -916,6 +920,11 @@ impl Project {
         for s in self.symbols.values_mut() {
             s.components.retain(|r| r.component != id);
         }
+        for f in self.families.values_mut() {
+            for fi in f.fidels.values_mut() {
+                fi.components.retain(|r| r.component != id);
+            }
+        }
         Ok(())
     }
 
@@ -1020,6 +1029,31 @@ impl Project {
         }
         self.symbols.get_mut(symbol).ok_or_else(|| ModelError::UnknownSymbol(symbol.into()))?.components =
             refs;
+        Ok(())
+    }
+
+    /// Replace the component placements on one fidel.
+    pub fn set_fidel_components(
+        &mut self,
+        family: &str,
+        order: crate::order::Order,
+        refs: Vec<crate::component::ComponentRef>,
+    ) -> Result<(), ModelError> {
+        let mut ids = std::collections::HashSet::new();
+        for r in &refs {
+            if !self.components.contains_key(&r.component) {
+                return Err(ModelError::UnknownComponent(r.component.clone()));
+            }
+            if !ids.insert(r.id) {
+                return Err(ModelError::DuplicatePlacementId(r.id));
+            }
+        }
+        let fam = self.families.get_mut(family).ok_or_else(|| ModelError::UnknownFamily(family.into()))?;
+        fam.fidels
+            .get_mut(&order)
+            .ok_or_else(|| ModelError::UnknownFidel(family.into(), order))?
+            .components = refs;
+        self.after_edit();
         Ok(())
     }
 

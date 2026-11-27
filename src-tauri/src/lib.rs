@@ -745,6 +745,19 @@ fn set_symbol_components(
     Ok(())
 }
 
+/// Replace the components placed on one fidel (`family/order`).
+#[tauri::command]
+fn set_fidel_components(
+    state: State<'_, AppState>,
+    fidel: String,
+    placements: Vec<ComponentRef>,
+) -> CmdResult<()> {
+    let (family, order) = fidel_core::DrawingTarget::fidel_ref(&fidel).map_err(err)?;
+    state.project().set_fidel_components(&family, order, placements).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
 /// Replace the components placed on a base.
 #[tauri::command]
 fn set_base_components(
@@ -1074,6 +1087,7 @@ pub fn run() {
             add_component,
             remove_component,
             set_base_components,
+            set_fidel_components,
             set_component_rule,
             set_component_end,
             rule_ends,

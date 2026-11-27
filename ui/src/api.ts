@@ -558,6 +558,8 @@ export const api = {
   setSmartFilters: (filters: SmartFilter[]) => invoke<OrganizeView>("set_smart_filters", { filters }),
   setSymbolComponents: (symbol: string, placements: ComponentRef[]) =>
     invoke<void>("set_symbol_components", { symbol, placements }),
+  setFidelComponents: (fidel: string, placements: ComponentRef[]) =>
+    invoke<void>("set_fidel_components", { fidel, placements }),
   setBaseComponents: (base: string, placements: ComponentRef[]) =>
     invoke<void>("set_base_components", { base, placements }),
 };

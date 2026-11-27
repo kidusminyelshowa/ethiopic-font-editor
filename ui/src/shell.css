@@ -2150,6 +2150,18 @@ body.editing .side-list {
   fill: transparent;
   cursor: pointer;
 }
+.canvas .neighbour-edge {
+  stroke: var(--guide, #8aa4c8);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.canvas .neighbour-sb {
+  font: 10px var(--font-mono, ui-monospace, monospace);
+  fill: var(--muted, #8a8580);
+  pointer-events: none;
+}
 .canvas .neighbour-box:hover + .neighbour,
 .canvas .neighbour:hover {
   fill-opacity: 1;
@@ -2233,6 +2245,10 @@ body.editing .side-list {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+.canvas .compare-layer.master {
+  fill: rgba(183, 121, 31, 0.06);
+  stroke: rgba(183, 121, 31, 0.7);
+}
 .compare-field {
   display: flex;
   align-items: center;
@@ -2265,6 +2281,21 @@ body.editing .side-list {
 .canvas[data-preview] .outline-fill.no-fill {
   fill: var(--ink);
   fill-opacity: 1;
+}
+.canvas[data-solid-points] .pt-on:not(.selected) {
+  fill: var(--ink);
+}
+.canvas[data-solid-points] .pt-off:not(.selected) {
+  fill: var(--ink-soft);
+}
+.canvas[data-solid-points][data-point-colors] .pt-on.corner:not(.selected) {
+  fill: #2b6cb0;
+}
+.canvas[data-solid-points][data-point-colors] .pt-on.smooth:not(.selected) {
+  fill: #2f855a;
+}
+.canvas[data-solid-points][data-point-colors] .pt-on.tangent:not(.selected) {
+  fill: #b7791f;
 }
 .canvas[data-point-colors] .pt-on.corner {
   stroke: #2b6cb0;
