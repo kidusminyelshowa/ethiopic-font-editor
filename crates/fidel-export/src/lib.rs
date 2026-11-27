@@ -24,6 +24,12 @@ use write_fonts::tables::post::Post;
 use write_fonts::types::{FWord, Fixed, GlyphId, LongDateTime, NameId, Tag, UfWord};
 use write_fonts::{FontBuilder, OffsetMarker};
 
+pub mod features;
+pub mod import;
+pub mod ufo;
+mod variable;
+pub use variable::{export_instance, export_variable, VariableFont};
+
 /// Largest distance, in font units, between a cubic and its quadratic stand-in.
 pub const CURVE_ACCURACY: f64 = 0.5;
 
@@ -43,6 +49,9 @@ pub struct ExportOptions {
     pub timestamp: i64,
     /// Written as the font's designer (name ID 9) when not empty.
     pub designer: String,
+    /// For proofs: when the hand-written feature code does not compile,
+    /// leave it out instead of failing.
+    pub skip_bad_features: bool,
 }
 
 impl ExportOptions {
@@ -53,6 +62,7 @@ impl ExportOptions {
             version: 1.0,
             timestamp: 0,
             designer: String::new(),
+            skip_bad_features: false,
         }
     }
 }
@@ -79,6 +89,10 @@ pub enum ExportError {
     TooManyGlyphs,
     #[error("could not write the font: {0}")]
     Write(String),
+    #[error("{0}")]
+    Design(String),
+    #[error("the feature code has an error: {0}")]
+    Features(String),
 }
 
 struct GlyphOut {
@@ -93,37 +107,13 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     if family.is_empty() {
         return Err(ExportError::NoFamilyName);
     }
-    let upm = project.metrics.units_per_em;
-    let upm_f = f64::from(upm);
-
-    let mut glyphs = vec![
-        notdef(upm_f),
-        GlyphOut {
-            name: "space".into(),
-            codepoint: Some(' '),
-            advance: (upm_f * 0.3).round() as u16,
-            glyph: Glyph::Empty,
-        },
-    ];
+    let mut glyphs = fixed_glyphs(project);
     let mut exported = Vec::new();
     let mut skipped = Vec::new();
 
-    // Every fidel and symbol in the project's character sets, by codepoint.
-    let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
-        .iter()
-        .chain(Order::EXTRA.iter())
-        .flat_map(|&o| project.resolve_order(o))
-        .filter_map(|f| {
-            let ch = f.codepoint?;
-            Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
-        })
-        .chain(project.symbols.values().map(|s| (s.codepoint, s.contours.clone(), s.advance_width)))
-        .filter(|(ch, ..)| project.in_charset(*ch))
-        .collect();
-    items.sort_by_key(|(ch, ..)| *ch);
-    items.dedup_by_key(|(ch, ..)| *ch);
-    for (ch, outline, advance) in items {
-        let contours: Vec<&Contour> = outline.iter().filter(|c| c.points.len() >= 2).collect();
+    for (ch, outline, advance) in collect_items(project) {
+        // Open paths are working lines, not part of the glyph.
+        let contours: Vec<&Contour> = outline.iter().filter(|c| !c.open && c.points.len() >= 2).collect();
         if contours.is_empty() {
             skipped.push(ch);
             continue;
@@ -137,8 +127,72 @@ pub fn export(project: &Project, options: &ExportOptions) -> Result<ExportedFont
     if exported.is_empty() {
         return Err(ExportError::NothingDrawn);
     }
-    let bytes = build(project, options, family, &glyphs)?;
+    glyphs.extend(alternate_glyphs(project, &exported)?);
+    let bytes = build(project, options, family, &glyphs, None)?;
     Ok(ExportedFont { bytes, exported, skipped })
+}
+
+/// The characters an export would include: those with a closed outline.
+pub fn exported_chars(project: &Project) -> Vec<char> {
+    collect_items(project)
+        .into_iter()
+        .filter(|(_, outline, _)| outline.iter().any(|c| !c.open && c.points.len() >= 2))
+        .map(|(c, ..)| c)
+        .collect()
+}
+
+/// The first two glyphs of every font: .notdef and the space.
+fn fixed_glyphs(project: &Project) -> Vec<GlyphOut> {
+    let upm = project.metrics.units_per_em;
+    vec![
+        notdef(f64::from(upm)),
+        GlyphOut {
+            name: "space".into(),
+            codepoint: Some(' '),
+            advance: project.info.space_advance(upm).round() as u16,
+            glyph: Glyph::Empty,
+        },
+    ]
+}
+
+/// Every fidel and symbol in the project's character sets, by codepoint,
+/// with its outline and advance.
+/// Alternates of exported characters, as unencoded glyphs.
+fn alternate_glyphs(project: &Project, exported: &[char]) -> Result<Vec<GlyphOut>, ExportError> {
+    let mut out = Vec::new();
+    for a in project.alternates.values().filter(|a| exported.contains(&a.of)) {
+        let contours: Vec<&Contour> = a.contours.iter().filter(|c| !c.open && c.points.len() >= 2).collect();
+        if contours.is_empty() {
+            continue;
+        }
+        let name = a.glyph_name();
+        let glyph = simple_glyph(&contours)
+            .map_err(|reason| ExportError::BadOutline { glyph: format!("{} ({name})", a.label()), reason })?;
+        out.push(GlyphOut { name, codepoint: None, advance: to_u16(a.advance_width), glyph });
+    }
+    Ok(out)
+}
+
+fn collect_items(project: &Project) -> Vec<(char, Vec<Contour>, f64)> {
+    let mut items: Vec<(char, Vec<Contour>, f64)> = Order::ALL
+        .iter()
+        .chain(Order::EXTRA.iter())
+        .flat_map(|&o| project.resolve_order(o))
+        .filter_map(|f| {
+            let ch = f.codepoint?;
+            Some((ch, f.contours.into_iter().map(|c| c.contour).collect(), f.advance_width))
+        })
+        .chain(
+            project
+                .symbols
+                .values()
+                .map(|s| (s.codepoint, project.symbol_outline(&s.id), project.symbol_advance(&s.id))),
+        )
+        .filter(|(ch, ..)| project.in_charset(*ch))
+        .collect();
+    items.sort_by_key(|(ch, ..)| *ch);
+    items.dedup_by_key(|(ch, ..)| *ch);
+    items
 }
 
 fn build(
@@ -146,6 +200,7 @@ fn build(
     options: &ExportOptions,
     family: &str,
     glyphs: &[GlyphOut],
+    var: Option<variable::VarTables>,
 ) -> Result<Vec<u8>, ExportError> {
     let write_err = |e: &dyn std::fmt::Display| ExportError::Write(e.to_string());
     let metrics = &project.metrics;
@@ -197,6 +252,10 @@ fn build(
     let line_gap = (upm_f * 0.2).round() as i16;
     let pa_top = to_i16(metrics.pa_top);
 
+    // A slanted master leans the caret and marks the font italic.
+    let italic = metrics.italic_angle;
+    let (caret_rise, caret_run) =
+        if italic == 0.0 { (1, 0) } else { (upm as i16, (upm_f * italic.to_radians().tan()).round() as i16) };
     let time = LongDateTime::new(options.timestamp + EPOCH_1904_TO_1970);
     let head = Head::new(
         Fixed::from_f64(options.version),
@@ -209,7 +268,7 @@ fn build(
         font_box.y_min,
         font_box.x_max,
         font_box.y_max,
-        MacStyle::empty(),
+        if italic != 0.0 { MacStyle::ITALIC } else { MacStyle::empty() },
         8,
         match loca_format {
             LocaFormat::Short => 0,
@@ -225,8 +284,8 @@ fn build(
         FWord::new(if min_lsb == i16::MAX { 0 } else { min_lsb }),
         FWord::new(if min_rsb == i16::MAX { 0 } else { min_rsb }),
         FWord::new(if max_extent == i16::MIN { 0 } else { max_extent }),
-        1,
-        0,
+        caret_rise,
+        caret_run,
         0,
         num_glyphs,
     );
@@ -257,6 +316,24 @@ fn build(
         .collect();
     let first_char = mappings.iter().map(|(c, _)| *c as u32).min().unwrap_or(0x20);
     let last_char = mappings.iter().map(|(c, _)| *c as u32).max().unwrap_or(0x20);
+    let names: Vec<String> = glyphs.iter().map(|g| g.name.clone()).collect();
+    let first_name = var.as_ref().and_then(|v| v.names.iter().map(|n| n.0).max()).map_or(256, |m| m + 1);
+    let layout = features::compile(project, &names, first_name).or_else(|errs| {
+        if !options.skip_bad_features {
+            return Err(errs);
+        }
+        let mut plain = project.clone();
+        plain.features.code.clear();
+        plain.features.classes.clear();
+        features::compile(&plain, &names, first_name)
+    });
+    let layout = layout.map_err(|errs| {
+        let e = errs.iter().find(|e| e.error).or(errs.first());
+        ExportError::Features(e.map_or_else(String::new, |e| match e.line {
+            Some(l) => format!("line {l}: {}", e.message),
+            None => e.message.clone(),
+        }))
+    })?;
     let cmap = Cmap::from_mappings(mappings).map_err(|e| write_err(&e))?;
 
     let avg_width = {
@@ -280,7 +357,11 @@ fn build(
         ul_unicode_range_1: 1,
         ul_unicode_range_3: 1 << (75 - 64),
         ach_vend_id: Tag::new(b"NONE"),
-        fs_selection: SelectionFlags::REGULAR | SelectionFlags::USE_TYPO_METRICS,
+        fs_selection: if italic != 0.0 {
+            SelectionFlags::ITALIC | SelectionFlags::USE_TYPO_METRICS
+        } else {
+            SelectionFlags::REGULAR | SelectionFlags::USE_TYPO_METRICS
+        },
         us_first_char_index: first_char.min(0xFFFF) as u16,
         us_last_char_index: last_char.min(0xFFFF) as u16,
         s_typo_ascender: ascender,
@@ -314,6 +395,10 @@ fn build(
     if !options.designer.trim().is_empty() {
         records.push((9, options.designer.trim().to_string()));
     }
+    if let Some(v) = &var {
+        records.extend(v.names.iter().cloned());
+    }
+    records.extend(layout.names.iter().cloned());
     records.sort_by_key(|(id, _)| *id);
     let name = Name::new(
         records
@@ -325,6 +410,7 @@ fn build(
     let mut post = Post::new_v2(glyphs.iter().map(|g| g.name.as_str()));
     post.underline_position = FWord::new(-(upm_f * 0.1).round() as i16);
     post.underline_thickness = FWord::new((upm_f * 0.05).round() as i16);
+    post.italic_angle = Fixed::from_f64(-italic);
 
     let mut font = FontBuilder::new();
     font.add_table(&head)
@@ -338,6 +424,13 @@ fn build(
         .and_then(|f| f.add_table(&loca))
         .and_then(|f| f.add_table(&glyf))
         .map_err(|e| write_err(&e))?;
+    for (tag, data) in &layout.tables {
+        let (tag, data) = (*tag, data.clone());
+        font.add_raw(tag, data);
+    }
+    if let Some(v) = var {
+        v.add_to(&mut font).map_err(|e| write_err(&e))?;
+    }
     Ok(font.build())
 }
 
@@ -433,12 +526,7 @@ fn to_quadratics(cubic: CubicBez) -> Vec<kurbo::QuadBez> {
 
 /// AGL-style name: uni1200.
 pub fn glyph_name(c: char) -> String {
-    let cp = c as u32;
-    if cp <= 0xFFFF {
-        format!("uni{cp:04X}")
-    } else {
-        format!("u{cp:05X}")
-    }
+    fidel_core::features::glyph_name(c)
 }
 
 fn postscript_name(family: &str, style: &str) -> String {

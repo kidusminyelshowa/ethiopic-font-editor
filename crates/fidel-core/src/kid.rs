@@ -11,13 +11,19 @@
 //! alterations/<id>.json         one alteration: drawn parts and placement rule
 //! symbols/<id>.json             one punctuation mark, numeral or combining mark
 //! components/<id>.json          one leaf, cap or corner, drawn once
+//! alternates/<id>.json          another drawing of a character (ሀ.ss01)
+//! kerning.json                  kerning pairs and classes
+//! features.json                 feature code, glyph classes, language systems
+//! spacing.json                  automatic spacing settings and corpus counts
+//! designspace.json              axes, instances, and the masters other than
+//!                               the active one, each with its drawings
 //! ```
 //!
 //! `project.json` also lists the character sets the project covers. Files
 //! from before sets existed open as Ge'ez only.
 //!
-//! Multiple masters will add a `masters/<name>/` level later; version 1 holds
-//! a single master. Entries are written in sorted order with a fixed
+//! The files above hold the active master's drawings; the other masters'
+//! drawings are in `designspace.json`. Entries are written in sorted order with a fixed
 //! timestamp, so saving the same project twice gives identical bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -94,6 +100,10 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
         let name = entry("families", id)?;
         entries.insert(name.clone(), to_json(&name, family)?);
     }
+    for (id, a) in &project.alternates {
+        let name = entry("alternates", id)?;
+        entries.insert(name.clone(), to_json(&name, a)?);
+    }
     for (id, alt) in &project.alterations {
         let name = entry("alterations", id)?;
         entries.insert(name.clone(), to_json(&name, alt)?);
@@ -105,6 +115,27 @@ pub fn write<W: Write + Seek>(project: &Project, writer: W) -> Result<(), KidErr
     for (id, comp) in &project.components {
         let name = entry("components", id)?;
         entries.insert(name.clone(), to_json(&name, comp)?);
+    }
+    if !project.guides.is_empty() {
+        entries.insert("guides.json".into(), to_json("guides.json", &project.guides)?);
+    }
+    if !project.backgrounds.is_empty() {
+        entries.insert("backgrounds.json".into(), to_json("backgrounds.json", &project.backgrounds)?);
+    }
+    if !project.organize.is_empty() {
+        entries.insert("organize.json".into(), to_json("organize.json", &project.organize)?);
+    }
+    if !project.kerning.is_empty() {
+        entries.insert("kerning.json".into(), to_json("kerning.json", &project.kerning)?);
+    }
+    if !project.features.is_default() {
+        entries.insert("features.json".into(), to_json("features.json", &project.features)?);
+    }
+    if !project.spacing.is_default() {
+        entries.insert("spacing.json".into(), to_json("spacing.json", &project.spacing)?);
+    }
+    if !project.design.is_empty() {
+        entries.insert("designspace.json".into(), to_json("designspace.json", &project.design)?);
     }
 
     let mut zip = ZipWriter::new(writer);
@@ -144,6 +175,27 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
         ..Default::default()
     };
     let names: Vec<String> = zip.file_names().map(|n| n.map(|s| s.into_owned())).collect::<Result<_, _>>()?;
+    if names.iter().any(|n| n == "guides.json") {
+        project.guides = read_entry(&mut zip, "guides.json")?;
+    }
+    if names.iter().any(|n| n == "backgrounds.json") {
+        project.backgrounds = read_entry(&mut zip, "backgrounds.json")?;
+    }
+    if names.iter().any(|n| n == "organize.json") {
+        project.organize = read_entry(&mut zip, "organize.json")?;
+    }
+    if names.iter().any(|n| n == "kerning.json") {
+        project.kerning = read_entry(&mut zip, "kerning.json")?;
+    }
+    if names.iter().any(|n| n == "features.json") {
+        project.features = read_entry(&mut zip, "features.json")?;
+    }
+    if names.iter().any(|n| n == "spacing.json") {
+        project.spacing = read_entry(&mut zip, "spacing.json")?;
+    }
+    if names.iter().any(|n| n == "designspace.json") {
+        project.design = read_entry(&mut zip, "designspace.json")?;
+    }
     for name in names {
         let Some((dir, id)) = name.strip_suffix(".json").and_then(|n| n.split_once('/')) else {
             continue;
@@ -177,10 +229,16 @@ pub fn read<R: Read + Seek>(reader: R) -> Result<Project, KidError> {
                 check_id(&name, id, &comp.id)?;
                 project.components.insert(comp.id.clone(), comp);
             }
+            "alternates" => {
+                let a: crate::alternates::Alternate = read_entry(&mut zip, &name)?;
+                check_id(&name, id, &a.id)?;
+                project.alternates.insert(a.id.clone(), a);
+            }
             // Unknown folders are left alone, for files from later versions.
             _ => {}
         }
     }
+    project.after_edit();
     Ok(project)
 }
 

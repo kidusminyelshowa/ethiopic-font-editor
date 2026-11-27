@@ -1120,6 +1120,70 @@ button {
   stroke-width: 1.5;
 }
 
+.canvas[data-tool="pencil"],
+.canvas[data-tool="knife"],
+.canvas[data-tool="eraser"] {
+  cursor: crosshair;
+}
+
+.canvas .eraser-trail {
+  stroke: var(--orange);
+  stroke-opacity: 0.35;
+  stroke-width: 12;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  pointer-events: none;
+}
+
+.canvas .knife-line {
+  stroke: var(--orange);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  fill: none;
+  pointer-events: none;
+}
+
+/* An open path: a stroke, no fill. */
+.canvas .contour.open {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-dasharray: none;
+}
+
+.canvas .tunni-line {
+  stroke: var(--blue, #3a6ea5);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.canvas .tunni-pt {
+  fill: var(--card);
+  stroke: var(--blue, #3a6ea5);
+  stroke-width: 1.5;
+  cursor: move;
+}
+
+.canvas .tunni-pt:hover {
+  fill: var(--blue, #3a6ea5);
+}
+
+.canvas .comb line {
+  stroke: rgba(58, 110, 165, 0.45);
+  stroke-width: 1;
+}
+
+.canvas .comb polyline {
+  fill: none;
+  stroke: rgba(58, 110, 165, 0.8);
+  stroke-width: 1;
+}
+
+.canvas .comb {
+  pointer-events: none;
+}
+
 .canvas .pen-start {
   fill: none;
   stroke: var(--orange);

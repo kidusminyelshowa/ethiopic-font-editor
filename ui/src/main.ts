@@ -14,6 +14,7 @@ import {
   type ImpactView,
   type Scope,
   type DrawingTarget,
+  type DrawingView,
   type FidelDetail,
   type FidelGrid,
   type FidelPreview,
@@ -31,7 +32,8 @@ import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { el, glyphView, hex } from "./dom";
 import { GlyphEditor, PART_COLORS } from "./editor";
-import { componentsSection, orderRulesSection } from "./orderSide";
+import { resetAuto } from "./autoSpace";
+import { componentRuleSection, componentsSection, orderRulesSection } from "./orderSide";
 import {
   bindViewMenu,
   historyRows,
@@ -43,15 +45,29 @@ import {
   shapeSection,
   showContextMenu,
   showMenu,
+  pathOpsSection,
+  guideSection,
+  backgroundSection,
   transformSection,
+  showShortcuts,
 } from "./editorSide";
 import { checkForUpdate } from "./updater";
 import { setupChrome } from "./chrome";
+import { keysFor, onShortcuts, showKeys } from "./shortcuts";
+import { applyFind, find, initFind, loadOrganize, markSection } from "./findBar";
+import { MARK_COLORS, glyphName, unicodeOf, type GlyphMark } from "./organize";
+import { initProof, setProofFont } from "./proof";
+import { KernView } from "./kernView";
+import { FeaturesView } from "./featuresView";
+import { resolve as resolveKern } from "./kerning";
+import { design, designSections, initMasters, loadDesign, masterDrawingsSection, onDesign, proofAxes, proofLocation } from "./mastersPanel";
+import { partSection, stateRef } from "./partAxes";
+import { alternatesSection } from "./alternates";
+import { anchorsSection, builtSection } from "./anchorSide";
 
 setupChrome();
 import { isClockwise, isOn } from "./geometry";
 
-const STATES: StateKind[] = ["linked", "adjusted", "detached"];
 
 const STATE_LABEL: Record<StateKind, string> = {
   linked: "Linked",
@@ -75,35 +91,41 @@ const GROUP_LABEL: Record<string, string> = {
 const ui = {
   status: document.getElementById("core-status")!,
   summary: document.getElementById("grid-summary")!,
-  filters: document.getElementById("filters")!,
   grid: document.getElementById("grid")!,
   inspector: document.getElementById("inspector")!,
   gridView: document.getElementById("grid-view")!,
   editorView: document.getElementById("editor-view")!,
+  kernView: document.getElementById("kern-view")!,
+  feaView: document.getElementById("fea-view")!,
   drawingSelect: document.getElementById("drawing-select") as HTMLSelectElement,
   toasts: document.getElementById("toasts")!,
   projectName: document.getElementById("project-name")!,
   projectMeta: document.getElementById("project-meta")!,
 };
 
-type ViewName = "grid" | "editor";
+type ViewName = "grid" | "editor" | "kerning" | "features";
 
 const state = {
   view: "grid" as ViewName,
   grid: null as FidelGrid | null,
   alterations: [] as AlterationSummary[],
   components: [] as ComponentSummary[],
-  filter: "all" as StateKind | "all",
   selected: null as { family: string; order: string } | null,
   /** A selected punctuation mark or numeral, by symbol id. */
   selectedSymbol: null as string | null,
   /** Family whose base is drawn behind an alteration in the editor. */
   contextFamily: undefined as string | undefined,
+  /** Glyphs picked together with Ctrl or Shift, for setting metrics on all of them. */
+  multi: [] as DrawingTarget[],
 };
 
 /** Alterations and components, for the Parts list and the editor. */
 async function loadParts() {
+  resetAuto();
   [state.alterations, state.components] = await Promise.all([api.listAlterations(), api.listComponents()]);
+  kernView.data = await api.getKerning();
+  await loadDesign();
+  if (state.view === "features") void featuresView.show();
 }
 
 // ---------- Toasts ----------
@@ -121,13 +143,20 @@ function showView(view: ViewName) {
   state.view = view;
   ui.gridView.hidden = view !== "grid";
   ui.editorView.hidden = view !== "editor";
+  ui.kernView.hidden = view !== "kerning";
+  ui.feaView.hidden = view !== "features";
+  document.body.classList.toggle("kerning", view === "kerning" || view === "features");
   document.querySelectorAll<HTMLElement>(".tab[data-view]").forEach((t) => {
     const on = t.dataset.view === view;
     t.classList.toggle("active", on);
     if (on) t.setAttribute("aria-current", "page");
     else t.removeAttribute("aria-current");
   });
-  if (view === "grid") {
+  if (view === "kerning") {
+    void refreshGrid().then(() => kernView.show());
+  } else if (view === "features") {
+    void featuresView.show();
+  } else if (view === "grid") {
     void refreshGrid().then(() => {
       if (state.selected) void select(state.selected.family, state.selected.order);
       else renderEmptyInspector();
@@ -151,10 +180,10 @@ async function refreshGrid() {
   void refreshProof();
   state.grid = await api.fidelGrid();
   ui.summary.textContent = gridSummary(state.grid);
-  renderFilters(state.grid);
   renderGrid(state.grid);
   renderSidebar();
   renderCharsetMenu();
+  await loadOrganize();
 }
 
 function gridSummary(grid: FidelGrid): string {
@@ -174,37 +203,11 @@ function baseOf(family: string): string {
   return state.grid?.rows.find((r) => r.family === family)?.base ?? family;
 }
 
-function renderFilters(grid: FidelGrid) {
-  const counts: Record<string, number> = { all: 0 };
-  for (const row of grid.rows) {
-    for (const cell of row.cells) {
-      counts.all++;
-      counts[cell.state] = (counts[cell.state] ?? 0) + 1;
-    }
-  }
-  const options: (StateKind | "all")[] = ["all", ...STATES];
-  ui.filters.replaceChildren(
-    ...options.map((k) => {
-      const label = k === "all" ? "All" : STATE_LABEL[k];
-      const btn = el(
-        "button",
-        { class: `filter${state.filter === k ? " active" : ""}`, "aria-pressed": String(state.filter === k) },
-        el("span", { class: `swatch swatch-${k}`, "aria-hidden": "true" }),
-        label,
-        el("span", { class: "count" }, String(counts[k] ?? 0)),
-      );
-      btn.addEventListener("click", () => {
-        state.filter = k;
-        ui.grid.dataset.filter = k;
-        renderFilters(grid);
-      });
-      return btn;
-    }),
-  );
-  ui.grid.dataset.filter = state.filter;
-}
-
 function renderGrid(grid: FidelGrid) {
+  if (find.mode === "list") {
+    applyFind();
+    return;
+  }
   const extras = grid.orders.filter((o) => o.extra).length;
   const table = el("table", { class: `fidel-grid${extras ? " has-extra" : ""}` });
   const head = table.createTHead().insertRow();
@@ -259,21 +262,30 @@ function renderGrid(grid: FidelGrid) {
         glyphView(cell.outline, grid.metrics, cell.codepoint),
         el("span", { class: `badge badge-${cell.badge}`, "aria-hidden": "true" }),
       );
-      btn.addEventListener("click", () => void select(row.family, cell.order));
+      btn.addEventListener("click", (e) => {
+        if ((e.ctrlKey || e.metaKey || e.shiftKey) && cell.order === "giiz") pickMany({ kind: "base", id: baseOf(row.family) });
+        else void select(row.family, cell.order);
+      });
       btn.addEventListener("dblclick", () => void editFromCell(row.family, cell.order));
       td.append(btn);
     }
   }
   const nodes: Node[] = [table];
-  if (grid.symbols.length) {
-    const wrap = el("section", { class: "symbol-grid", "aria-label": "Symbols" });
-    wrap.append(el("h2", { class: "symbol-heading" }, "Punctuation, numerals and marks"));
+  const isLatin = (c: string) => (c.codePointAt(0) ?? 0) < 0x1200;
+  for (const [title, syms] of [
+    ["Punctuation, numerals and marks", grid.symbols.filter((s) => !isLatin(s.codepoint))],
+    ["Latin", grid.symbols.filter((s) => isLatin(s.codepoint))],
+  ] as const) {
+    if (!syms.length) continue;
+    const wrap = el("section", { class: "symbol-grid", "aria-label": title });
+    wrap.append(el("h2", { class: "symbol-heading" }, title));
     const list = el("div", { class: "symbol-cells" });
-    for (const s of grid.symbols) list.append(symbolButton(s, grid));
+    for (const s of syms) list.append(symbolButton(s, grid));
     wrap.append(list);
     nodes.push(wrap);
   }
   ui.grid.replaceChildren(...nodes);
+  applyFind();
   markSelected();
 }
 
@@ -289,12 +301,96 @@ function symbolButton(s: SymbolCell, grid: FidelGrid) {
     },
     glyphView(s.outline, grid.metrics, s.codepoint),
   );
-  btn.addEventListener("click", () => selectSymbol(s.id));
+  btn.addEventListener("click", (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) pickMany({ kind: "symbol", id: s.id });
+    else selectSymbol(s.id);
+  });
   btn.addEventListener("dblclick", () => void openDrawing({ kind: "symbol", id: s.id }));
   return btn;
 }
 
+const sameTarget = (a: DrawingTarget, b: DrawingTarget) => a.kind === b.kind && a.id === b.id;
+
+/** Add a glyph to the picked set (or take it out). The one already selected joins first. */
+function pickMany(t: DrawingTarget) {
+  if (!state.multi.length) {
+    if (state.selected?.order === "giiz") state.multi.push({ kind: "base", id: baseOf(state.selected.family) });
+    else if (state.selectedSymbol) state.multi.push({ kind: "symbol", id: state.selectedSymbol });
+  }
+  const at = state.multi.findIndex((x) => sameTarget(x, t));
+  if (at >= 0) state.multi.splice(at, 1);
+  else state.multi.push(t);
+  state.selected = null;
+  state.selectedSymbol = null;
+  markSelected();
+  renderMultiInspector();
+}
+
+function cellOf(t: DrawingTarget): HTMLElement | null {
+  if (t.kind === "symbol") return ui.grid.querySelector<HTMLElement>(`.cell[data-symbol="${t.id}"]`);
+  const row = state.grid?.rows.find((r) => r.base === t.id);
+  return row ? ui.grid.querySelector<HTMLElement>(`.cell[data-family="${row.family}"][data-order="giiz"]`) : null;
+}
+
+/** Metric keys and sidebearings for several glyphs at once. */
+function renderMultiInspector() {
+  const picked = [...state.multi];
+  if (!picked.length) {
+    renderEmptyInspector();
+    return;
+  }
+  const chars = picked.map((t) => cellOf(t)?.getAttribute("aria-label")?.split(",")[0] ?? "").join(" ");
+  const key = (side: "left" | "width" | "right", label: string) => {
+    const input = el("input", { type: "text", class: "metric-key", placeholder: "Key", "aria-label": `${label} key`, title: `${label} for every picked glyph: =ሀ, =ሀ+10, =|ሀ or =600. Leave empty to keep each one's own; type - to clear.`, spellcheck: "false" }) as HTMLInputElement;
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") input.blur();
+    });
+    input.addEventListener("change", async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      try {
+        for (const t of picked) {
+          const d = await api.getDrawing(t);
+          await api.setMetricKeys(t, { ...(d.metricKeys?.keys ?? {}), [side]: v === "-" ? null : v });
+        }
+        toast(`${label} key set on ${picked.length} glyphs.`);
+        await refreshGrid();
+      } catch (err) {
+        toast(String(err), "error");
+      }
+    });
+    return el("label", { class: "field" }, el("span", {}, label), input);
+  };
+  const body = el(
+    "div",
+    { class: "inspector-body" },
+    el("h2", { class: "display inspector-title" }, `${picked.length} glyph${picked.length > 1 ? "s" : ""}`),
+    el("p", { class: "subtle multi-chars" }, chars),
+    el("h3", { class: "section-label", title: "Ctrl or Shift click Ge'ez cells, numerals and punctuation to pick more" }, "Metric keys"),
+    el("div", { class: "field-grid three" }, key("left", "LSB"), key("width", "Width"), key("right", "RSB")),
+  );
+  if ((design?.masters.length ?? 0) > 1) {
+    const copy = el("button", { class: "pill small ghost", title: "Give every other master the sidebearings these glyphs have in this one" }, "Copy metrics to all masters");
+    copy.addEventListener("click", async () => {
+      let n = 0;
+      for (const t of picked) n += await api.copyMetricsToMasters(t).catch(() => 0);
+      toast(n ? `Copied: ${n} drawing${n > 1 ? "s" : ""} changed in other masters.` : "The other masters already match.");
+    });
+    body.append(el("div", { class: "button-row" }, copy));
+  }
+  const clear = el("button", { class: "pill small ghost" }, "Clear selection");
+  clear.addEventListener("click", () => {
+    state.multi = [];
+    markSelected();
+    renderEmptyInspector();
+  });
+  body.append(el("div", { class: "button-row" }, clear));
+  ui.inspector.replaceChildren(body);
+}
+
 function selectSymbol(id: string) {
+  state.multi = [];
   state.selected = null;
   state.selectedSymbol = id;
   markSelected();
@@ -321,7 +417,11 @@ function selectSymbol(id: string) {
         { class: "facts" },
         el("div", {}, el("dt", {}, "Kind"), el("dd", {}, "Symbol")),
         el("div", {}, el("dt", {}, "Outline"), el("dd", {}, s.outline ? "Drawn" : "Not drawn")),
+        el("div", {}, el("dt", {}, "Unicode"), el("dd", { class: "mono" }, unicodeOf(s.codepoint))),
+        el("div", {}, el("dt", {}, "Name"), el("dd", { class: "mono" }, glyphName(s.codepoint))),
+        el("div", {}, el("dt", {}, "Width"), el("dd", {}, s.outline ? String(Math.round(s.outline.advanceWidth)) : "—")),
       ),
+      ...markSection(`symbol:${s.id}`, null),
       edit,
     ),
   );
@@ -330,6 +430,7 @@ function selectSymbol(id: string) {
 function markSelected() {
   markSidebar();
   for (const node of ui.grid.querySelectorAll<HTMLElement>(".cell.selected")) node.classList.remove("selected");
+  for (const t of state.multi) cellOf(t)?.classList.add("selected");
   if (state.selectedSymbol) {
     ui.grid.querySelector<HTMLElement>(`.cell[data-symbol="${state.selectedSymbol}"]`)?.classList.add("selected");
   }
@@ -340,6 +441,7 @@ function markSelected() {
 }
 
 async function select(family: string, order: string) {
+  state.multi = [];
   state.selected = { family, order };
   state.selectedSymbol = null;
   markSelected();
@@ -443,6 +545,13 @@ function renderInspector(d: FidelDetail) {
         el("div", {}, el("dt", {}, "Order"), el("dd", {}, d.orderNumber > 7 ? d.orderName : `${d.orderNumber} · ${d.orderName}`)),
         el("div", {}, el("dt", {}, "Group"), el("dd", {}, d.group ? (GROUP_LABEL[d.group] ?? d.group) : "—")),
         el("div", {}, el("dt", {}, "Nudges"), el("dd", {}, String(d.nudgeCount))),
+        ...(d.codepoint
+          ? [
+              el("div", {}, el("dt", {}, "Unicode"), el("dd", { class: "mono" }, unicodeOf(d.codepoint))),
+              el("div", {}, el("dt", {}, "Name"), el("dd", { class: "mono" }, glyphName(d.codepoint))),
+            ]
+          : []),
+        el("div", {}, el("dt", {}, "Width"), el("dd", {}, outline ? String(Math.round(outline.advanceWidth)) : "—")),
       ),
       ...(d.note ? [el("p", { class: "state-help" }, d.note)] : []),
       el("h3", { class: "section-label" }, "Recipe"),
@@ -459,6 +568,7 @@ function renderInspector(d: FidelDetail) {
             ),
           ]
         : []),
+      ...markSection(`fidel:${d.family}/${d.order}`, { key: `family:${d.family}`, name: d.familyName }),
       el("div", { class: "actions" }, open, ...stateActions(d)),
     ),
   );
@@ -559,9 +669,10 @@ function renderFontProperties(p: FontProperties) {
   const info = { ...p.info };
   let paTop = p.metrics.pa_top;
   let paBottom = p.metrics.pa_bottom;
+  let italicAngle = p.metrics.italic_angle ?? 0;
   const save = async () => {
     try {
-      await api.setFontProperties(info, paTop, paBottom);
+      await api.setFontProperties(info, paTop, paBottom, italicAngle);
       void refreshProjectInfo();
       if (state.grid) {
         state.grid.metrics.pa_top = paTop;
@@ -612,10 +723,57 @@ function renderFontProperties(p: FontProperties) {
         num("Pa-top", paTop, (v) => (paTop = v)),
         num("Pa-bottom", paBottom, (v) => (paBottom = v)),
       ),
-      el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
+      el(
+        "div",
+        { class: "field-row" },
+        num(
+          "Word space",
+          Math.round(info.space_width ?? p.metrics.units_per_em * 0.3),
+          (v) => (info.space_width = v >= 0 ? v : null),
+        ),
+        el("div", { class: "field static" }, el("span", {}, "Units per em"), el("strong", {}, String(p.metrics.units_per_em))),
+      ),
+      slantRow(italicAngle, (v) => (italicAngle = v), save),
+      ...designSections(),
     ),
   );
 }
+/** Italic angle, and a way to lean the drawings of the master being edited. */
+function slantRow(angle: number, set: (v: number) => void, save: () => Promise<void>) {
+  const angleInput = el("input", { type: "number", value: String(angle), step: "0.5", title: "Degrees the font leans, clockwise. Marks the font italic." }) as HTMLInputElement;
+  angleInput.addEventListener("change", () => {
+    const v = Number(angleInput.value);
+    if (!Number.isFinite(v) || Math.abs(v) >= 45) return;
+    set(v);
+    void save();
+  });
+  const by = el("input", { type: "number", value: "12", step: "0.5", title: "Degrees to lean every drawing in this master" }) as HTMLInputElement;
+  const go = el("button", { class: "pill small ghost slant-btn", title: "Shear every drawing in this master and add to its italic angle" }, "Slant");
+  go.addEventListener("click", async () => {
+    const v = Number(by.value);
+    if (!Number.isFinite(v) || v === 0 || Math.abs(v) >= 45) return;
+    try {
+      await api.slantMaster(v);
+      toast(`Slanted ${v}°`);
+      await refreshGrid();
+      void refreshProjectInfo();
+      renderEmptyInspector();
+    } catch (err) {
+      toast(String(err), "error");
+    }
+  });
+  return el(
+    "div",
+    { class: "field-row" },
+    el("label", { class: "field" }, el("span", {}, "Italic angle"), angleInput),
+    el("label", { class: "field slant-field" }, el("span", {}, "Slant drawings"), el("div", { class: "slant-input" }, by, go)),
+  );
+}
+
+// The masters sections redraw when the design space changes.
+onDesign(() => {
+  if (state.view === "grid" && !state.selected && !state.selectedSymbol && ui.inspector.querySelector(".font-props")) renderEmptyInspector();
+});
 
 function deselect() {
   if (!state.selected && !state.selectedSymbol) return;
@@ -774,6 +932,14 @@ function renderLayers() {
 
 function renderSidebar() {
   document.body.classList.toggle("editing", state.view === "editor");
+  if (state.view === "kerning") {
+    kernView.renderSidebar();
+    return;
+  }
+  if (state.view === "features") {
+    featuresView.renderSidebar();
+    return;
+  }
   if (state.view === "editor") {
     renderLayers();
     return;
@@ -896,6 +1062,42 @@ function renderSidebar() {
   markSidebar();
 }
 
+/** For a base made from another (ሸ from ሰ): where it comes from, and following it again. */
+function derivedSection(ed: GlyphEditor, d: DrawingView): Node[] {
+  const dv = d.derived!;
+  const base = d.target.id;
+  const family = state.grid?.rows.find((r) => r.base === base)?.family;
+  const box = el("div", { class: "side-box derived-box" });
+  const from = el("button", { class: "chip recipe-step clickable", title: `Edit ${dv.fromName}: this base follows it` }, el("span", { class: "step-glyph", lang: "gez" }, dv.fromGlyph), el("span", {}, dv.fromName), el("span", { class: "step-edit" }, "Edit"));
+  from.addEventListener("click", () => void openDrawing({ kind: "base", id: dv.from }));
+  const steps = el("ul", { class: "recipe" }, el("li", {}, from));
+  for (const [id, name] of dv.adds) {
+    const add = el("button", { class: "chip recipe-step clickable", title: "Drawn once for every row that adds it" }, el("span", { class: "step-plus", "aria-hidden": "true" }, "+"), el("span", {}, name), el("span", { class: "step-edit" }, "Edit"));
+    add.addEventListener("click", () => {
+      state.contextFamily = family;
+      void openDrawing({ kind: "alteration", id });
+    });
+    steps.append(el("li", {}, add));
+  }
+  box.append(steps);
+  if (!dv.follows) {
+    const again = el("button", { class: "pill small", title: `Rebuild it from ${dv.fromName} and its marks, replacing this drawing` }, `Follow ${dv.fromName} again`);
+    again.addEventListener("click", async () => {
+      const ok = await ask(`Replace this drawing with ${dv.fromName} and its marks?`, { title: "Follow again", kind: "warning", okLabel: "Replace", cancelLabel: "Keep my drawing" });
+      if (!ok) return;
+      try {
+        await api.setBaseFollows(base, true);
+        await ed.open(d.target);
+        await refreshGrid();
+      } catch (err) {
+        toast(`Could not follow it again: ${err}`, "error");
+      }
+    });
+    box.append(el("div", { class: "button-row" }, again));
+  }
+  return [el("h3", { class: "section-label", title: dv.follows ? `Rebuilt whenever ${dv.fromName} or its marks change. Drawing here makes it its own.` : "Drawn by hand" }, "Built from"), box];
+}
+
 async function newComponent(kind: ComponentKind) {
   const name = `${kind[0].toUpperCase()}${kind.slice(1)}`;
   try {
@@ -961,6 +1163,202 @@ const editor = new GlyphEditor(ui.editorView, {
   renderSide: (ed) => renderEditorSide(ed),
   contextMenu: (ed, at) => showContextMenu(ed, at),
   alterationName: (id) => state.alterations.find((a) => a.id === id)?.name ?? id,
+  glyphFor: (ch) => {
+    const g = glyphIndex().get(ch);
+    return g ? { target: g.target, d: g.outline?.d ?? null, advance: g.outline?.advanceWidth ?? state.grid?.metrics.units_per_em ?? 1000 } : null;
+  },
+  charOf: (target) => charOf(target),
+  kern: (l, r) => resolveKern(kernView.data, l, r)?.value ?? 0,
+  openTarget: (target) => void openDrawing(target),
+});
+const kernView = new KernView(ui.kernView, {
+  metrics: () => state.grid?.metrics ?? null,
+  glyph: (ch) => {
+    const g = glyphIndex().get(ch);
+    return g ? { d: g.outline?.d ?? null, advance: g.outline?.advanceWidth ?? state.grid?.metrics.units_per_em ?? 1000 } : null;
+  },
+  partners: () => {
+    const out: string[] = [];
+    for (const row of state.grid?.rows ?? []) {
+      const c = row.cells.find((x) => x.order === "giiz");
+      if (c?.codepoint && c.outline) out.push(c.codepoint);
+    }
+    for (const sym of state.grid?.symbols ?? []) if (sym.outline) out.push(sym.codepoint);
+    return out;
+  },
+  toast,
+  openGlyph: (ch) => {
+    const g = glyphIndex().get(ch);
+    if (!g) return;
+    showView("editor");
+    void openDrawing(g.target);
+  },
+  query: () => side.query,
+  changed: () => {
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  respaced: async () => {
+    await refreshGrid();
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  sideList: side.list,
+  inspector: ui.inspector,
+});
+
+const featuresView = new FeaturesView(ui.feaView, {
+  toast,
+  changed: () => {
+    void refreshProof().then(() => featuresView.renderInspector());
+    void refreshProjectInfo();
+  },
+  proofFamily: () => proofFace?.family ?? null,
+  sideList: side.list,
+  inspector: ui.inspector,
+});
+
+// The editor's line of text updates when outlines change.
+const redrawLine = () => {
+  if (state.view === "editor" && editor.textIndex >= 0) editor.render();
+};
+
+/** Every character the project draws, with its drawing and outline. */
+let glyphIndexCache: { grid: FidelGrid | null; map: Map<string, { target: DrawingTarget; outline?: { d: string; advanceWidth: number } }> } = {
+  grid: null,
+  map: new Map(),
+};
+function glyphIndex() {
+  if (glyphIndexCache.grid === state.grid) return glyphIndexCache.map;
+  const map = new Map<string, { target: DrawingTarget; outline?: { d: string; advanceWidth: number } }>();
+  for (const row of state.grid?.rows ?? []) {
+    for (const cell of row.cells) {
+      if (cell.codepoint && !map.has(cell.codepoint)) {
+        map.set(cell.codepoint, { target: { kind: "fidel", id: `${row.family}/${cell.order}` }, outline: cell.outline });
+      }
+    }
+  }
+  for (const sym of state.grid?.symbols ?? []) {
+    if (!map.has(sym.codepoint)) map.set(sym.codepoint, { target: { kind: "symbol", id: sym.id }, outline: sym.outline });
+  }
+  glyphIndexCache = { grid: state.grid, map };
+  return map;
+}
+
+/** The character a drawing makes: a fidel's, a symbol's, or a base's first order. */
+function charOf(target: DrawingTarget): string | null {
+  const grid = state.grid;
+  if (!grid) return null;
+  if (target.kind === "symbol") return grid.symbols.find((s) => s.id === target.id)?.codepoint ?? null;
+  if (target.kind === "fidel") {
+    const [family, order] = target.id.split("/");
+    return grid.rows.find((r) => r.family === family)?.cells.find((c) => c.order === order)?.codepoint ?? null;
+  }
+  if (target.kind === "base") return grid.rows.find((r) => r.family === target.id)?.cells[0]?.codepoint ?? null;
+  return null;
+}
+
+/** How dark a sketch pixel must be to be traced, 0 to 255. */
+let traceThreshold = 128;
+
+// ---------- Editor tabs ----------
+
+/** Open drawings, each with its own line of text, as in Glyphs' edit tabs. */
+interface EditorTab {
+  target: DrawingTarget | null;
+  text: string;
+  title?: string;
+}
+const tabs: EditorTab[] = [{ target: null, text: "" }];
+let currentTab = 0;
+const tabBar = document.getElementById("editor-tabs")!;
+const textInput = document.getElementById("text-line") as HTMLInputElement;
+
+function tabLabel(t: EditorTab): string {
+  if (t.text.trim()) return [...t.text.trim()].slice(0, 12).join("");
+  if (!t.target) return "New tab";
+  return charOf(t.target) ?? t.title ?? t.target.id.split("/")[0];
+}
+
+function renderTabs() {
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  tabs[currentTab].title = editor.drawing?.title;
+  const chips = tabs.map((t, i) => {
+    const chip = el("button", { class: `editor-tab${i === currentTab ? " active" : ""}`, role: "tab", "aria-selected": String(i === currentTab), title: "Ctrl T new tab, Ctrl W close" }, tabLabel(t));
+    chip.addEventListener("click", () => switchTab(i));
+    if (tabs.length > 1) {
+      const x = el("span", { class: "editor-tab-close", role: "button", "aria-label": "Close tab", title: "Close (Ctrl W)" }, "×");
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeTab(i);
+      });
+      chip.append(x);
+    }
+    return chip;
+  });
+  const add = el("button", { class: "editor-tab add", title: "New tab (Ctrl T)", "aria-label": "New tab" }, "+");
+  add.addEventListener("click", () => newTab());
+  tabBar.replaceChildren(...chips, add);
+}
+
+function switchTab(i: number) {
+  if (i === currentTab || !tabs[i]) return;
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  currentTab = i;
+  const t = tabs[i];
+  textInput.value = t.text;
+  editor.setText(t.text);
+  if (t.target) void openDrawing(t.target);
+  renderTabs();
+}
+
+function newTab() {
+  tabs[currentTab].target = editor.target;
+  tabs[currentTab].text = editor.textLine;
+  tabs.push({ target: editor.target, text: editor.textLine });
+  currentTab = tabs.length - 1;
+  renderTabs();
+  textInput.focus();
+  textInput.select();
+}
+
+function closeTab(i: number) {
+  if (tabs.length < 2) return;
+  tabs.splice(i, 1);
+  const next = Math.min(i === currentTab ? i : currentTab > i ? currentTab - 1 : currentTab, tabs.length - 1);
+  currentTab = -1;
+  switchTab(next);
+}
+
+textInput.addEventListener("input", () => {
+  editor.setText(textInput.value);
+  // Typing a line while nothing in it is open: open its first glyph.
+  if (editor.textIndex < 0) {
+    for (const ch of textInput.value) {
+      const g = glyphIndex().get(ch);
+      if (g) {
+        void openDrawing(g.target);
+        break;
+      }
+    }
+  }
+  renderTabs();
+});
+textInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === "Escape") textInput.blur();
+});
+window.addEventListener("keydown", (e) => {
+  if (state.view !== "editor" || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "t") {
+    e.preventDefault();
+    newTab();
+  } else if (k === "w" && tabs.length > 1) {
+    e.preventDefault();
+    closeTab(currentTab);
+  }
 });
 onRefresh((ed) => renderEditorSide(ed));
 bindViewMenu(ui.editorView);
@@ -977,6 +1375,7 @@ async function openDrawing(target: DrawingTarget) {
     }
     await editor.open(target, target.kind === "alteration" ? state.contextFamily : undefined);
     ui.drawingSelect.value = `${target.kind}:${target.id}`;
+    renderTabs();
     if (target.kind === "base") side.open.add(target.id);
     markSidebar();
   } catch (err) {
@@ -1020,6 +1419,7 @@ function scheduleSideRefresh() {
     await loadParts();
     state.grid = await api.fidelGrid();
     fillDrawingSelect();
+    redrawLine();
     if (state.view === "editor") renderEditorSide(editor);
   }, 120);
 }
@@ -1079,8 +1479,32 @@ function renderEditorSide(ed: GlyphEditor) {
   const strip = el("div", { class: "system-strip" });
   const previewTitle =
     d.target.kind === "base" ? "The family, live" : `Everywhere it lands (${orderNamesOf(d.target.id)})`;
-  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component";
+  const standalone = d.target.kind === "symbol" || d.target.kind === "fidel" || d.target.kind === "component" || d.target.kind === "brace";
   if (!standalone) sections.push(el("h3", { class: "section-label first" }, previewTitle), strip);
+  if (d.target.kind !== "fidel") {
+    const target = d.target;
+    sections.push(
+      ...masterDrawingsSection(
+        target,
+        metrics,
+        async () => {
+          editor.reset();
+          await editor.open(target, d.context?.family);
+          renderEditorSide(editor);
+        },
+        (t) => void openDrawing(t),
+      ),
+    );
+  }
+  if (design && design.masters.length > 1 && design.axes.length) {
+    sections.push(
+      el("h3", { class: "section-label", title: "Drag to see this drawing anywhere in the design space, shaded over the canvas. Past the ends extrapolates." }, "Interpolation"),
+      proofAxes(() => {
+        void refreshProof();
+        void editor.showLocation(proofLocation);
+      }),
+    );
+  }
   const token = ++previewToken;
   if (standalone) {
     // A symbol or a hand-drawn fidel stands alone: nothing else follows it.
@@ -1212,14 +1636,55 @@ function renderEditorSide(ed: GlyphEditor) {
     }
     selBox.append(el("h3", { class: "section-label" }, "Part"), tags);
   }
+  sections.push(...guideSection(ed));
   sections.push(el("h3", { class: "section-label" }, "Selection"), selBox);
   sections.push(...transformSection(ed));
+  sections.push(...pathOpsSection(ed));
   sections.push(...shapeSection(ed));
 
   // Metrics: sidebearings and width, for bases and symbols.
   sections.push(...metricsSection(ed, `${metrics.pa_bottom}–${metrics.pa_top}`));
-  if (d.target.kind === "base") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  if (d.target.kind === "base" && d.derived) sections.unshift(...derivedSection(ed, d));
+  if (d.target.kind === "base" || d.target.kind === "symbol" || d.target.kind === "fidel") sections.push(...componentsSection(ed, state.components, (kind) => void newComponent(kind)));
+  const anchorHost = {
+    charOf: (dv: DrawingView) => charOf(dv.target),
+    glyphs: () => {
+      const out: { ch: string; name: string }[] = [];
+      for (const sym of state.grid?.symbols ?? []) if (sym.outline) out.push({ ch: sym.codepoint, name: sym.name });
+      for (const row of state.grid?.rows ?? []) {
+        const c = row.cells.find((x) => x.order === "giiz");
+        if (c?.codepoint && c.outline) out.push({ ch: c.codepoint, name: row.name });
+      }
+      return out;
+    },
+    rebuilt: async () => {
+      await ed.open(d.target);
+      await refreshGrid();
+      renderEditorSide(ed);
+    },
+  };
+  sections.push(...anchorsSection(ed, d, anchorHost));
+  sections.push(
+    ...alternatesSection(d.target, {
+      open: (t) => void openDrawing(t),
+      toast,
+      changed: () => void refreshGrid(),
+    }),
+  );
+  // Built letters lead with their parts; for others it is an option at the end.
+  if (d.built) sections.unshift(...builtSection(ed, d, anchorHost));
+  else sections.push(...builtSection(ed, d, anchorHost));
+  if (d.target.kind === "component") {
+    const id = stateRef(d.target.id).part;
+    const kind = state.components.find((c) => c.id === id)?.kind;
+    const parts = partSection(ed, d.target.id, {
+      open: (to) => void openDrawing({ kind: "component", id: to }),
+      changed: () => void loadParts(),
+    });
+    sections.unshift(...(kind ? componentRuleSection(ed, d, kind) : []), ...parts);
+  }
   sections.push(...issuesSection(ed));
+  sections.push(...backgroundSection(ed));
 
   // Sketch.
   const sk = ed.sketch;
@@ -1239,9 +1704,12 @@ function renderEditorSide(ed: GlyphEditor) {
       ed.updateSketch({ unlocked: !sk.unlocked });
       renderEditorSide(ed);
     });
+    const trace = el("button", { class: "pill small", title: "Turn the dark parts of the sketch into editable outlines" }, "Trace");
+    trace.addEventListener("click", () => void ed.traceSketch(traceThreshold));
     sketchBox.append(
       remove,
       lock,
+      trace,
       el(
         "div",
         { class: "field-row" },
@@ -1250,6 +1718,7 @@ function renderEditorSide(ed: GlyphEditor) {
       ),
       rangeField("Opacity", sk.opacity, 0.05, 1, (v) => ed.updateSketch({ opacity: v })),
       rangeField("Size", sk.h / (metrics.pa_top - metrics.pa_bottom), 0.3, 2, (v) => ed.updateSketch({ scale: v })),
+      rangeField("Trace threshold", traceThreshold / 255, 0.1, 0.95, (v) => (traceThreshold = Math.round(v * 255))),
     );
   }
   sections.push(el("h3", { class: "section-label", title: "Unlock it to drag it on the canvas. Kept for this session only." }, "Sketch"), sketchBox);
@@ -1421,6 +1890,31 @@ async function afterProjectChanged(info: ProjectInfo) {
   showView("grid");
 }
 
+/** Save as UFO for other editors; with masters, a designspace beside one UFO each. */
+async function exportUfo() {
+  const family = projectInfo.name || "Untitled";
+  const masters = (design?.masters.length ?? 0) > 1;
+  const path = await saveDialog({
+    defaultPath: `${family}.${masters ? "designspace" : "ufo"}`,
+    filters: [masters ? { name: "Designspace", extensions: ["designspace"] } : { name: "UFO", extensions: ["ufo"] }],
+  });
+  if (!path) return;
+  try {
+    const files = await api.exportUfo(path, family);
+    toast(`Saved ${files.length === 1 ? files[0] : `${files.length} files`}.`);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
+
+async function afterImport() {
+  editor.reset();
+  await loadDesign();
+  await loadParts();
+  await refreshGrid();
+  showView("grid");
+}
+
 async function newProject() {
   if (!(await confirmDiscard("Start a new project"))) return;
   await afterProjectChanged(await api.newProject());
@@ -1433,6 +1927,34 @@ async function openProject() {
   try {
     await afterProjectChanged(await api.openProject(path));
     toast(`Opened ${projectInfo.name}.`);
+  } catch (err) {
+    toast(String(err), "error");
+  }
+}
+
+/** Bring in an existing font: fill empty bases and symbols, or only backgrounds. */
+async function importFont(ufo: boolean) {
+  const path = ufo
+    ? await openDialog({ directory: true, title: "A .ufo folder" })
+    : await openDialog({ multiple: false, directory: false, filters: [{ name: "Fonts", extensions: ["otf", "ttf", "woff", "designspace"] }] });
+  if (typeof path !== "string") return;
+  const fill = await ask("Fill the empty bases and symbols with its outlines? Every other letter goes behind its drawing as a background to rebuild from.", {
+    title: "Import font",
+    okLabel: "Fill drawings",
+    cancelLabel: "Backgrounds only",
+  });
+  try {
+    const r = await api.importFont(path, fill ? "drawings" : "backgrounds");
+    const parts = [
+      r.drawn && `${r.drawn} drawn`,
+      r.backgrounds && `${r.backgrounds} as backgrounds`,
+      r.kept && `${r.kept} kept as they were`,
+      r.kerning && `${r.kerning} kerning pairs`,
+      r.masters && `${r.masters} more masters`,
+      r.unused && `${r.unused} with no place here`,
+    ].filter(Boolean);
+    toast(`Imported: ${parts.join(", ") || "nothing new"}.`);
+    await afterImport();
   } catch (err) {
     toast(String(err), "error");
   }
@@ -1460,6 +1982,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-file]").forEach((b) =>
     const action = b.dataset.file;
     if (action === "new") void newProject();
     else if (action === "open") void openProject();
+    else if (action === "import" || action === "import-ufo") void importFont(action === "import-ufo");
+    else if (action === "export-ufo") void exportUfo();
     else void saveProject(action === "saveas" || e.shiftKey);
   }),
 );
@@ -1492,6 +2016,36 @@ void getCurrentWindow()
 
 const FONT_FILTER = [{ name: "Font", extensions: ["ttf"] }];
 
+async function exportVariable() {
+  const path = await saveDialog({ defaultPath: `${projectInfo.name}-VF.ttf`, filters: FONT_FILTER });
+  if (!path) return;
+  try {
+    const r = await api.exportVariable(path);
+    const fixed = r.fixed.length ? ` ${r.fixed.length} do not interpolate and stay as in the default master: ${r.fixed.slice(0, 12).join(" ")}` : "";
+    toast(`Exported a variable font of ${r.exported} glyphs as “${r.familyName}”.${fixed}`);
+  } catch (err) {
+    toast(`Could not export: ${err}`, "error");
+  }
+}
+
+async function exportInstances() {
+  const dir = await openDialog({ directory: true, title: "Folder for the instances" });
+  if (!dir || Array.isArray(dir)) return;
+  try {
+    const paths = await api.exportInstances(dir);
+    toast(`Exported ${paths.length} ${paths.length === 1 ? "font" : "fonts"}.`);
+  } catch (err) {
+    toast(`Could not export: ${err}`, "error");
+  }
+}
+
+/** The font properties, with the masters and axes. */
+function showProperties() {
+  showView("grid");
+  deselect();
+  renderEmptyInspector();
+}
+
 async function exportFont() {
   const path = await saveDialog({ defaultPath: `${projectInfo.name}.ttf`, filters: FONT_FILTER });
   if (!path) return;
@@ -1505,6 +2059,66 @@ async function exportFont() {
 }
 
 document.getElementById("export-font")!.addEventListener("click", () => void exportFont());
+
+async function testInstall() {
+  try {
+    const r = await api.testInstall();
+    toast(`Installed “${r.familyName}” with ${r.exported} fidel. Restart Word or the browser to see this version.`);
+  } catch (err) {
+    toast(`Could not install: ${err}`, "error");
+  }
+}
+
+initMasters({
+  toast,
+  afterSwitch: async () => {
+    await refreshGrid();
+    kernView.data = await api.getKerning();
+    if (state.view === "kerning") kernView.refresh();
+    const t = editor.drawing?.target;
+    if (t) {
+      const ctx = editor.drawing?.context?.family;
+      editor.reset();
+      await editor.open(t, ctx);
+      if (state.view === "editor") renderEditorSide(editor);
+    }
+  },
+  changed: () => {
+    void refreshProof();
+    void refreshProjectInfo();
+  },
+  openDrawing: (key) => {
+    const [kind, id] = key.split(/:(.*)/s);
+    showView("editor");
+    void openDrawing({ kind, id } as DrawingTarget);
+  },
+  exportVariable: () => void exportVariable(),
+  exportInstances: () => void exportInstances(),
+  showProperties,
+});
+
+initProof(document.querySelector<HTMLElement>(".grid-view .proof")!, {
+  rows: () =>
+    (state.grid?.rows ?? []).map((r) => {
+      const cp = (o: string) => r.cells.find((c) => c.order === o)?.codepoint ?? "";
+      const main = state.grid!.orders.filter((o) => !o.extra).map((o) => cp(o.order)).filter(Boolean);
+      const extras = state.grid!.orders.filter((o) => o.extra).map((o) => cp(o.order)).filter(Boolean);
+      return { base: cp("giiz"), orders: main, extras };
+    }),
+  symbols: () => (state.grid?.symbols ?? []).map((s) => s.codepoint),
+  testInstall: () => void testInstall(),
+});
+{
+  // Axis sliders in the proof, when there are masters to move between.
+  const tools = document.querySelector<HTMLElement>(".grid-view .proof .proof-tools");
+  tools?.insertBefore(
+    proofAxes(() => {
+      void refreshProof();
+      void editor.showLocation(proofLocation);
+    }),
+    tools.querySelector(".grow"),
+  );
+}
 
 // ---------- Character sets ----------
 
@@ -1542,7 +2156,7 @@ function renderCharsetMenu() {
     });
   const group = (ids: CharSetId[]) => sets.filter((s) => ids.includes(s.id)).map(setItem);
   const all = el("button", { class: "menu-item" }, "Full Ethiopic");
-  all.addEventListener("click", () => void applyCoverage(sets.map((s) => s.id), []));
+  all.addEventListener("click", () => void applyCoverage(sets.filter((s) => !s.id.startsWith("latin") || s.enabled).map((s) => s.id), []));
   charsetMenu.replaceChildren(
     el("div", { class: "menu-label" }, "Languages"),
     ...langs.map(langItem),
@@ -1550,9 +2164,21 @@ function renderCharsetMenu() {
     ...group(["geez", "ethiopic-letters", "ethiopic-labialized", "ethiopic-marks"]),
     el("div", { class: "menu-label" }, "Supplements"),
     ...group(["supplement", "extended", "extended-a", "extended-b"]),
+    el("div", { class: "menu-label" }, "Latin"),
+    ...group(["latin", "latin-supplement", "latin-extended-a"]),
     el("div", { class: "menu-sep", role: "separator" }),
     all,
   );
+}
+
+async function buildAccents() {
+  try {
+    const n = await api.buildAccents();
+    toast(n ? `${n} accented letter${n === 1 ? "" : "s"} now built from their parts.` : "Every accented letter is already built or drawn.");
+    if (n) await refreshGrid();
+  } catch (err) {
+    toast(`Could not build the accented letters: ${err}`, "error");
+  }
 }
 
 async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
@@ -1569,7 +2195,6 @@ async function applyCoverage(sets: CharSetId[], languages: LanguageId[]) {
       renderEmptyInspector();
     }
     ui.summary.textContent = gridSummary(grid);
-    renderFilters(grid);
     renderGrid(grid);
     renderSidebar();
     renderCharsetMenu();
@@ -1602,13 +2227,83 @@ function toggleSidebars() {
   document.body.classList.toggle("panels-hidden");
 }
 
+// ---------- Find and organize ----------
+
+initFind(
+  {
+    grid: () => state.grid,
+    gridEl: ui.grid,
+    selectItem: (it) => {
+      if (it.family && it.order) void select(it.family, it.order);
+      else selectSymbol(it.key.slice("symbol:".length));
+    },
+    openItem: (it) => {
+      if (it.family && it.order) void editFromCell(it.family, it.order);
+      else void openDrawing({ kind: "symbol", id: it.key.slice("symbol:".length) });
+    },
+    redrawn: () => {
+      if (state.grid) renderGrid(state.grid);
+    },
+    toast,
+    changed: () => {},
+  },
+  document.querySelector<HTMLElement>(".grid-view .stage-tools")!,
+);
+
+// Right-click a glyph to colour it.
+ui.grid.addEventListener("contextmenu", (e) => {
+  const cell = (e.target as HTMLElement).closest<HTMLElement>(".cell, .list-row");
+  if (!cell) return;
+  e.preventDefault();
+  const key = cell.dataset.key ?? (cell.dataset.symbol ? `symbol:${cell.dataset.symbol}` : `fidel:${cell.dataset.family}/${cell.dataset.order}`);
+  const mark: GlyphMark = find.organize.marks[key] ?? {};
+  const setColor = (color: GlyphMark["color"]) =>
+    void api.setMark(key, { ...mark, color }).then(
+      (o) => {
+        find.organize = o;
+        applyFind();
+      },
+      (err) => toast(`Could not mark it: ${err}`, "error"),
+    );
+  showMenu(
+    [
+      { heading: "Colour" },
+      ...MARK_COLORS.map((c) => ({ label: c[0].toUpperCase() + c.slice(1), checked: mark.color === c, run: () => setColor(c) })),
+      { label: "No colour", checked: !mark.color, run: () => setColor(null) },
+    ],
+    { x: e.clientX, y: e.clientY },
+  );
+});
+
+/** Tool tooltips show the keys each tool runs on now. */
+function refreshToolTitles(): void {
+  document.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) => {
+    const keys = keysFor(`tool.${b.dataset.tool}`);
+    if (!b.title || b.dataset.tool === "shape") return;
+    const label = b.title.replace(/\s*\([^)]*\)/, "");
+    const [name, ...rest] = label.split(":");
+    const space = b.dataset.tool === "hand" ? (keys ? ", or hold Space" : " (hold Space)") : "";
+    b.title = `${name}${keys ? ` (${showKeys(keys)}${space})` : space}${rest.length ? ":" + rest.join(":") : ""}`;
+  });
+}
+refreshToolTitles();
+onShortcuts(refreshToolTitles);
+
 document.querySelectorAll<HTMLElement>("[data-menu]").forEach((b) =>
   b.addEventListener("click", () => {
     const m = b.dataset.menu;
     if (m === "export") void exportFont();
+    else if (m === "export-variable") void exportVariable();
+    else if (m === "export-instances") void exportInstances();
+    else if (m === "masters") showProperties();
+    else if (m === "view-kerning") showView("kerning");
+    else if (m === "view-features") showView("features");
+    else if (m === "test-install") void testInstall();
+    else if (m === "build-accents") void buildAccents();
     else if (m === "view-grid") showView("grid");
     else if (m === "view-editor") showView("editor");
     else if (m === "toggle-left") toggleSidebars();
+    else if (m === "shortcuts") showShortcuts();
     else if (m === "charsets") {
       showView("grid");
       setTimeout(() => toggleCharsetMenu(true), 0);
@@ -1622,8 +2317,8 @@ window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
     e.preventDefault();
     toggleSidebars();
-  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2")) {
-    showView(e.key === "1" ? "grid" : "editor");
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4")) {
+    showView(e.key === "1" ? "grid" : e.key === "2" ? "editor" : e.key === "3" ? "kerning" : "features");
   }
 });
 window.addEventListener("keydown", (e) => {
@@ -1639,14 +2334,13 @@ let proofFace: FontFace | null = null;
 let proofSerial = 0;
 
 async function refreshProof() {
-  const input = document.getElementById("proof-input") as HTMLInputElement;
   const note = document.getElementById("proof-note")!;
   try {
-    const bytes = await api.proofFont();
+    const bytes = await api.proofFont(proofLocation);
     if (proofFace) document.fonts.delete(proofFace);
     proofFace = null;
     if (!bytes.byteLength) {
-      input.style.fontFamily = "";
+      setProofFont(null);
       note.title = "System font until you draw";
       return;
     }
@@ -1654,7 +2348,7 @@ async function refreshProof() {
     await face.load();
     document.fonts.add(face);
     proofFace = face;
-    input.style.fontFamily = `"${face.family}", var(--ethiopic)`;
+    setProofFont(face.family);
     note.title = "Your drawings, the rest in the system font";
   } catch (err) {
     console.warn("Proof font failed", err);

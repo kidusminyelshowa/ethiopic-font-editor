@@ -3,6 +3,7 @@
 
 mod editor;
 mod grid;
+mod install;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
@@ -118,6 +119,94 @@ fn get_drawing(
         .map_err(err)
 }
 
+/// The character a drawing is for, and its alternates.
+#[derive(serde::Serialize)]
+struct AlternatesView {
+    of: Option<char>,
+    list: Vec<(String, String)>,
+    duplicates: Vec<(char, Vec<String>)>,
+}
+
+#[tauri::command]
+fn alternates_of(state: State<'_, AppState>, target: DrawingTarget) -> AlternatesView {
+    let p = state.project();
+    let of = p.char_of(&target);
+    let list = of
+        .map(|c| p.alternates_of(c).iter().map(|a| (a.id.clone(), a.label())).collect())
+        .unwrap_or_default();
+    AlternatesView { of, list, duplicates: p.duplicate_codepoints() }
+}
+
+#[tauri::command]
+fn add_alternate(state: State<'_, AppState>, of: char, suffix: String) -> CmdResult<String> {
+    let id = state.project().add_alternate(of, &suffix).map_err(err)?;
+    state.mark_dirty();
+    Ok(id)
+}
+
+#[tauri::command]
+fn remove_alternate(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().remove_alternate(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+#[tauri::command]
+fn set_symbol_codepoint(state: State<'_, AppState>, id: String, codepoint: char) -> CmdResult<()> {
+    state.project().set_symbol_codepoint(&id, codepoint).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Open a font, UFO or designspace into the project.
+#[tauri::command]
+fn import_font(
+    state: State<'_, AppState>,
+    path: String,
+    mode: fidel_export::import::ImportMode,
+) -> CmdResult<fidel_export::import::ImportReport> {
+    let imported = fidel_export::import::read_any(std::path::Path::new(&path))?;
+    let report = fidel_export::import::apply(&mut state.project(), &imported, mode);
+    state.mark_dirty();
+    Ok(report)
+}
+
+/// Save as UFO, or a designspace with a UFO per master. Returns the files.
+#[tauri::command]
+fn export_ufo(state: State<'_, AppState>, path: String, family: String) -> CmdResult<Vec<String>> {
+    fidel_export::ufo::write_designspace(&state.project(), std::path::Path::new(&path), &family)
+}
+
+/// Add a brace layer of a base or symbol at a location in user units.
+#[tauri::command]
+fn add_brace(
+    state: State<'_, AppState>,
+    of: DrawingTarget,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<String> {
+    let id = state.project().add_brace(of, &location).map_err(err)?;
+    state.mark_dirty();
+    Ok(id)
+}
+
+#[tauri::command]
+fn remove_brace(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().remove_brace(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// A drawing at a location in the design space, for the canvas preview.
+#[tauri::command]
+fn drawing_at(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<String> {
+    let p = state.project().instance_at(&location).map_err(err)?;
+    Ok(DrawingView::open(&p, target, None).map_err(err)?.outline_d())
+}
+
 #[tauri::command]
 fn set_drawing(state: State<'_, AppState>, target: DrawingTarget, contours: Vec<Contour>) -> CmdResult<()> {
     state.project().set_drawing(&target, contours).map_err(err)?;
@@ -137,10 +226,16 @@ fn set_advance(state: State<'_, AppState>, target: DrawingTarget, advance_width:
             DrawingTarget::Symbol(id) => {
                 project.symbols.get_mut(id).ok_or_else(|| format!("no symbol `{id}`"))?.advance_width = w
             }
+            DrawingTarget::Brace(id) => project.set_brace_advance(id, w).map_err(err)?,
+            DrawingTarget::Alternate(id) => {
+                project.alternates.get_mut(id).ok_or_else(|| format!("no alternate `{id}`"))?.advance_width =
+                    w
+            }
             DrawingTarget::Alteration(_) | DrawingTarget::Fidel(_) | DrawingTarget::Component(_) => {
                 return Err("this drawing has no advance width of its own".into())
             }
         }
+        project.after_edit();
     }
     state.mark_dirty();
     Ok(())
@@ -208,6 +303,13 @@ fn set_form(
     Ok(detail)
 }
 
+/// Remove overlap, booleans, offset, expand stroke or a knife cut, on
+/// contours the editor sends. Returns the contours that replace them.
+#[tauri::command]
+fn path_op(op: fidel_core::pathops::PathOp) -> Vec<fidel_core::Contour> {
+    op.run()
+}
+
 /// Set the zone a deform lands on and how far it pulls.
 #[tauri::command]
 fn set_deform(
@@ -238,6 +340,50 @@ fn set_zone(
     zones
 }
 
+/// The guides for a drawing: its own and the global ones.
+#[tauri::command]
+fn get_guides(state: State<'_, AppState>, drawing: String) -> GuidesView {
+    let project = state.project();
+    GuidesView { local: project.guides.local(&drawing), global: project.guides.global.clone() }
+}
+
+/// Replace a drawing's guides and the global ones.
+#[tauri::command]
+fn set_guides(
+    state: State<'_, AppState>,
+    drawing: String,
+    local: Vec<fidel_core::guides::Guide>,
+    global: Vec<fidel_core::guides::Guide>,
+) {
+    state.project().guides.set(&drawing, local, global);
+    state.mark_dirty();
+}
+
+/// A drawing's background layer.
+#[tauri::command]
+fn get_background(state: State<'_, AppState>, drawing: String) -> Vec<fidel_core::Contour> {
+    state.project().backgrounds.get(&drawing).cloned().unwrap_or_default()
+}
+
+/// Replace a drawing's background layer; empty removes it.
+#[tauri::command]
+fn set_background(state: State<'_, AppState>, drawing: String, contours: Vec<fidel_core::Contour>) {
+    let mut project = state.project();
+    if contours.is_empty() {
+        project.backgrounds.remove(&drawing);
+    } else {
+        project.backgrounds.insert(drawing, contours);
+    }
+    drop(project);
+    state.mark_dirty();
+}
+
+#[derive(serde::Serialize)]
+struct GuidesView {
+    local: Vec<fidel_core::guides::Guide>,
+    global: Vec<fidel_core::guides::Guide>,
+}
+
 #[tauri::command]
 fn list_components(state: State<'_, AppState>) -> Vec<editor::ComponentSummary> {
     editor::component_summaries(&state.project.lock().expect("project lock"))
@@ -253,6 +399,536 @@ fn add_component(state: State<'_, AppState>, name: String, kind: ComponentKind) 
 #[tauri::command]
 fn remove_component(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     state.project().remove_component(&id).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Where a component lands by rule.
+#[tauri::command]
+fn set_component_rule(
+    state: State<'_, AppState>,
+    id: String,
+    lands_on: Vec<fidel_core::Part>,
+    corners: fidel_core::CornerSide,
+) -> CmdResult<()> {
+    state.project().set_component_rule(&id, lands_on, corners).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Switch one rule placement on or off and set how it is adjusted.
+#[tauri::command]
+fn set_component_end(
+    state: State<'_, AppState>,
+    id: String,
+    key: String,
+    on: bool,
+    tweak: fidel_core::Tweak,
+) -> CmdResult<()> {
+    state.project().set_component_end(&id, &key, on, tweak).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Replace the anchors of a base or symbol.
+#[tauri::command]
+fn set_anchors(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    anchors: std::collections::BTreeMap<String, Vec2>,
+) -> CmdResult<()> {
+    state.project().set_anchors(&target, anchors).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Build every undrawn accented letter from its base letter and accents.
+#[tauri::command]
+fn build_accents(state: State<'_, AppState>) -> usize {
+    let n = state.project().build_accents();
+    if n > 0 {
+        state.mark_dirty();
+    }
+    n
+}
+
+/// Build a symbol from these characters (a letter, then accents), or draw
+/// it by hand when empty.
+#[tauri::command]
+fn set_built_from(state: State<'_, AppState>, id: String, parts: String) -> CmdResult<()> {
+    state.project().set_built_from(&id, parts.chars().collect()).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Turn a built letter into its own drawing.
+#[tauri::command]
+fn decompose_symbol(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.project().decompose_symbol(&id).ok_or("Could not build it")?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Another glyph placed against the drawing open now, by their anchors:
+/// an accent on this letter, or a letter under this accent.
+#[tauri::command]
+fn mark_preview(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    contours: Vec<fidel_core::Contour>,
+    partner: String,
+) -> Option<String> {
+    editor::mark_preview(&state.project(), &target, contours, &partner)
+}
+
+/// The feature code and whether it compiles.
+#[tauri::command]
+fn get_features(state: State<'_, AppState>) -> editor::FeaturesView {
+    editor::features_view(&state.project())
+}
+
+/// Save the feature code, classes, languages and set names, and check them.
+#[tauri::command]
+fn set_features(
+    state: State<'_, AppState>,
+    features: fidel_core::features::Features,
+) -> editor::FeaturesView {
+    let view = {
+        let mut project = state.project();
+        project.features = features;
+        editor::features_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
+/// A part's own axes and states.
+#[tauri::command]
+fn get_part(state: State<'_, AppState>, id: String) -> CmdResult<fidel_core::parametric::PartView> {
+    state.project().part_view(&id).map_err(err)
+}
+
+#[tauri::command]
+fn part_preview(
+    state: State<'_, AppState>,
+    id: String,
+    values: fidel_core::component::PartValues,
+) -> CmdResult<String> {
+    state.project().part_preview(&id, &values).map(|c| fidel_core::svg_path(&c)).map_err(err)
+}
+
+fn part_change(
+    state: &State<'_, AppState>,
+    id: &str,
+    f: impl FnOnce(&mut Project) -> Result<(), fidel_core::parametric::PartError>,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    let view = {
+        let mut project = state.project();
+        f(&mut project).map_err(|e| e.to_string())?;
+        project.part_view(id).map_err(err)?
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+#[tauri::command]
+fn set_part_axes(
+    state: State<'_, AppState>,
+    id: String,
+    axes: Vec<fidel_core::PartAxis>,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.set_part_axes(&id, axes))
+}
+
+/// A new state, starting as a copy of the part's main drawing.
+#[tauri::command]
+fn add_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    location: fidel_core::PartValues,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.add_part_state(&id, location).map(|_| ()))
+}
+
+#[tauri::command]
+fn set_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+    location: fidel_core::PartValues,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.set_part_state(&id, index, location))
+}
+
+#[tauri::command]
+fn remove_part_state(
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+) -> CmdResult<fidel_core::parametric::PartView> {
+    part_change(&state, &id, |p| p.remove_part_state(&id, index))
+}
+
+/// Every rule placement on a base, the ones switched off included.
+#[tauri::command]
+fn rule_ends(state: State<'_, AppState>, base: String) -> Vec<editor::RuleEnd> {
+    editor::rule_ends(&state.project(), &base)
+}
+
+/// Make a derived base (ሸ from ሰ) follow its source again, or keep its own drawing.
+#[tauri::command]
+fn set_base_follows(state: State<'_, AppState>, base: String, follows: bool) -> CmdResult<()> {
+    state.project().set_base_follows(&base, follows).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Give every other master this drawing's sidebearings. Returns how many changed.
+#[tauri::command]
+fn copy_metrics_to_masters(state: State<'_, AppState>, target: DrawingTarget) -> CmdResult<usize> {
+    let n = state.project().copy_metrics_to_masters(&target).map_err(err)?;
+    state.mark_dirty();
+    Ok(n)
+}
+
+/// Set the metric keys of a base or symbol (`=ሀ+10`) and apply them.
+#[tauri::command]
+fn set_metric_keys(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    keys: fidel_core::metric_keys::MetricKeys,
+) -> CmdResult<()> {
+    state.project().set_metric_keys(&target, keys).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Axes, masters, instances and what keeps them from interpolating.
+#[tauri::command]
+fn get_design(state: State<'_, AppState>) -> editor::DesignView {
+    editor::design_view(&state.project())
+}
+
+/// Run a change to the design space and return the new view.
+fn design_change(
+    state: &State<'_, AppState>,
+    f: impl FnOnce(&mut fidel_core::Project) -> Result<(), fidel_core::designspace::DesignError>,
+) -> CmdResult<editor::DesignView> {
+    let view = {
+        let mut project = state.project();
+        f(&mut *project).map_err(err)?;
+        editor::design_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Add an axis, or change the one tagged `old_tag`.
+#[tauri::command]
+fn set_axis(
+    state: State<'_, AppState>,
+    old_tag: Option<String>,
+    axis: fidel_core::designspace::Axis,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.set_axis(old_tag.as_deref(), axis))
+}
+
+#[tauri::command]
+fn remove_axis(state: State<'_, AppState>, tag: String) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.remove_axis(&tag);
+        Ok(())
+    })
+}
+
+/// A new master starting from the drawings of the one being edited.
+#[tauri::command]
+fn add_master(
+    state: State<'_, AppState>,
+    name: String,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.add_master(&name, location);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_master(
+    state: State<'_, AppState>,
+    index: usize,
+    name: String,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.set_master(index, &name, location))
+}
+
+#[tauri::command]
+fn remove_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.remove_master(index))
+}
+
+/// Lean every drawing of the master being edited by some degrees.
+#[tauri::command]
+fn slant_master(state: State<'_, AppState>, degrees: f64) -> CmdResult<()> {
+    if !degrees.is_finite() || degrees.abs() >= 45.0 {
+        return Err("Slant by less than 45°".into());
+    }
+    state.project().slant_master(degrees);
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Edit another master: its drawings come into the editor.
+#[tauri::command]
+fn switch_master(state: State<'_, AppState>, index: usize) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| p.switch_master(index))
+}
+
+#[tauri::command]
+fn set_instances(
+    state: State<'_, AppState>,
+    instances: Vec<fidel_core::designspace::Instance>,
+) -> CmdResult<editor::DesignView> {
+    design_change(&state, |p| {
+        p.design.instances = instances;
+        Ok(())
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableSummary {
+    path: String,
+    family_name: String,
+    exported: usize,
+    skipped: usize,
+    /// Glyphs whose masters do not match, left as in the default master.
+    fixed: Vec<String>,
+}
+
+/// The variable font over all masters.
+#[tauri::command]
+fn export_variable(state: State<'_, AppState>, path: String) -> CmdResult<VariableSummary> {
+    let options = export_options(&state);
+    let family_name = options.family_name.clone();
+    let font = fidel_export::export_variable(&state.project(), &options).map_err(err)?;
+    let path = with_extension(PathBuf::from(path), "ttf");
+    std::fs::write(&path, &font.bytes).map_err(err)?;
+    Ok(VariableSummary {
+        path: path.to_string_lossy().into_owned(),
+        family_name,
+        exported: font.exported.len(),
+        skipped: font.skipped.len(),
+        fixed: font.fixed.iter().map(|c| c.to_string()).collect(),
+    })
+}
+
+/// Each instance marked for export, as its own font in `dir`. Returns the paths.
+#[tauri::command]
+fn export_instances(state: State<'_, AppState>, dir: String) -> CmdResult<Vec<String>> {
+    let options = export_options(&state);
+    let project = state.project().clone();
+    let mut out = Vec::new();
+    for inst in project.design.instances.iter().filter(|i| i.export) {
+        let font = fidel_export::export_instance(&project, inst, &options).map_err(err)?;
+        let stem = format!("{}-{}", options.family_name, inst.name)
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "");
+        let path = PathBuf::from(&dir).join(format!("{stem}.ttf"));
+        std::fs::write(&path, &font.bytes).map_err(err)?;
+        out.push(path.to_string_lossy().into_owned());
+    }
+    if out.is_empty() {
+        return Err("No instance is set to export.".into());
+    }
+    Ok(out)
+}
+
+/// A drawing in every master, with what keeps each from interpolating.
+#[tauri::command]
+fn master_drawings(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+) -> CmdResult<Vec<editor::MasterDrawingView>> {
+    editor::master_drawings(&state.project(), &target)
+}
+
+/// Line up every master's version of a drawing with the default master's.
+#[tauri::command]
+fn match_masters(state: State<'_, AppState>, target: DrawingTarget) -> CmdResult<usize> {
+    let n = state.project().match_masters(&target).map_err(err)?;
+    if n > 0 {
+        state.mark_dirty();
+    }
+    Ok(n)
+}
+
+/// Kerning classes and pairs.
+#[tauri::command]
+fn get_kerning(state: State<'_, AppState>) -> editor::KerningView {
+    editor::kerning_view(&state.project())
+}
+
+/// Set or remove (`value: null`) the kerning between two sides: a character
+/// or `@class`.
+#[tauri::command]
+fn set_kern_pair(
+    state: State<'_, AppState>,
+    left: String,
+    right: String,
+    value: Option<i32>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut project = state.project();
+        project.kerning.set_pair(&left, &right, value).map_err(err)?;
+        editor::kerning_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Automatic spacing settings and the corpus counts.
+#[tauri::command]
+fn get_spacing(state: State<'_, AppState>) -> fidel_core::spacing::Spacing {
+    state.project().spacing.clone()
+}
+
+/// Change the spacing settings; the corpus counts are kept.
+#[tauri::command]
+fn set_spacing(
+    state: State<'_, AppState>,
+    spacing: fidel_core::spacing::Spacing,
+) -> fidel_core::spacing::Spacing {
+    let mut p = state.project();
+    let (letters, pairs) = (std::mem::take(&mut p.spacing.letters), std::mem::take(&mut p.spacing.pairs));
+    p.spacing = fidel_core::spacing::Spacing { letters, pairs, ..spacing };
+    state.mark_dirty();
+    p.spacing.clone()
+}
+
+/// Count the letters and pairs of a text.
+#[tauri::command]
+fn read_corpus(state: State<'_, AppState>, text: String) -> fidel_core::spacing::Spacing {
+    let mut p = state.project();
+    p.read_corpus(&text);
+    state.mark_dirty();
+    p.spacing.clone()
+}
+
+/// Space bases and symbols to match the reference glyph. Returns how many changed.
+#[tauri::command]
+fn auto_space(state: State<'_, AppState>, only: Option<Vec<DrawingTarget>>) -> CmdResult<usize> {
+    let n = state.project().auto_space(only.as_deref()).map_err(err)?;
+    state.mark_dirty();
+    Ok(n)
+}
+
+/// Kerning proposed for the corpus's most frequent pairs.
+#[tauri::command]
+fn propose_kerning(state: State<'_, AppState>) -> Vec<fidel_core::spacing::KernProposal> {
+    state.project().propose_kerning()
+}
+
+/// Write proposed kerning. Pairs kerned by hand stay.
+#[tauri::command]
+fn apply_kerning(
+    state: State<'_, AppState>,
+    proposals: Vec<fidel_core::spacing::KernProposal>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut p = state.project();
+        p.apply_kerning(&proposals);
+        editor::kerning_view(&p)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Give every other master this master's kerning. Returns how many changed.
+#[tauri::command]
+fn copy_kerning_to_masters(state: State<'_, AppState>) -> CmdResult<usize> {
+    let n = state.project().copy_kerning_to_masters();
+    state.mark_dirty();
+    Ok(n)
+}
+
+/// Create, change, rename or remove (no members) a kerning class.
+#[tauri::command]
+fn set_kern_class(
+    state: State<'_, AppState>,
+    side: fidel_core::kerning::KernSide,
+    name: String,
+    members: String,
+    rename: Option<String>,
+) -> CmdResult<editor::KerningView> {
+    let view = {
+        let mut project = state.project();
+        let members: Vec<char> = members.chars().collect();
+        project.kerning.set_class(side, &name, &members, rename.as_deref()).map_err(err)?;
+        editor::kerning_view(&project)
+    };
+    state.mark_dirty();
+    Ok(view)
+}
+
+/// Marks, tags, notes and saved filters.
+#[tauri::command]
+fn get_organize(state: State<'_, AppState>) -> editor::OrganizeView {
+    editor::organize_view(&state.project())
+}
+
+/// Set the colour, tags and note on a glyph (`fidel:ha/kaib`, `symbol:…`) or family (`family:ha`).
+#[tauri::command]
+fn set_mark(
+    state: State<'_, AppState>,
+    key: String,
+    mark: fidel_core::organize::GlyphMark,
+) -> editor::OrganizeView {
+    let view = {
+        let mut project = state.project();
+        project.organize.set_mark(&key, mark);
+        editor::organize_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
+#[tauri::command]
+fn set_smart_filters(
+    state: State<'_, AppState>,
+    filters: Vec<fidel_core::organize::SmartFilter>,
+) -> editor::OrganizeView {
+    let view = {
+        let mut project = state.project();
+        project.organize.set_filters(filters);
+        editor::organize_view(&project)
+    };
+    state.mark_dirty();
+    view
+}
+
+/// Replace the components placed on a symbol (a numeral's frame).
+#[tauri::command]
+fn set_symbol_components(
+    state: State<'_, AppState>,
+    symbol: String,
+    placements: Vec<ComponentRef>,
+) -> CmdResult<()> {
+    state.project().set_symbol_components(&symbol, placements).map_err(err)?;
+    state.mark_dirty();
+    Ok(())
+}
+
+/// Replace the components placed on one fidel (`family/order`).
+#[tauri::command]
+fn set_fidel_components(
+    state: State<'_, AppState>,
+    fidel: String,
+    placements: Vec<ComponentRef>,
+) -> CmdResult<()> {
+    let (family, order) = fidel_core::DrawingTarget::fidel_ref(&fidel).map_err(err)?;
+    state.project().set_fidel_components(&family, order, placements).map_err(err)?;
     state.mark_dirty();
     Ok(())
 }
@@ -303,6 +979,7 @@ fn set_font_properties(
     info: FontInfo,
     pa_top: f64,
     pa_bottom: f64,
+    italic_angle: Option<f64>,
 ) -> CmdResult<()> {
     if pa_top <= pa_bottom {
         return Err("Pa-top must be above Pa-bottom".into());
@@ -312,6 +989,9 @@ fn set_font_properties(
         project.info = info;
         project.metrics.pa_top = pa_top;
         project.metrics.pa_bottom = pa_bottom;
+        if let Some(a) = italic_angle {
+            project.metrics.italic_angle = a;
+        }
     }
     state.mark_dirty();
     Ok(())
@@ -380,25 +1060,9 @@ pub struct ExportSummary {
 /// The family name is the project's name.
 #[tauri::command]
 fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSummary> {
-    let (family_name, info) = {
-        let project = state.project();
-        let info = project.info.clone();
-        let name =
-            if info.family_name.trim().is_empty() { state.info().name } else { info.family_name.clone() };
-        (name, info)
-    };
-    let mut options = fidel_export::ExportOptions::new(family_name.clone());
-    if !info.style_name.trim().is_empty() {
-        options.style_name = info.style_name.clone();
-    }
-    options.version = info.version;
-    options.designer = info.designer.clone();
-    // A fresh timestamp each time helps Windows notice a reinstalled font.
-    options.timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let font = fidel_export::export(&state.project(), &options).map_err(err)?;
+    let options = export_options(&state);
+    let family_name = options.family_name.clone();
+    let font = fidel_export::export(&state.project().default_project(), &options).map_err(err)?;
     let path = with_extension(PathBuf::from(path), "ttf");
     std::fs::write(&path, &font.bytes).map_err(err)?;
     Ok(ExportSummary {
@@ -409,12 +1073,75 @@ fn export_font(state: State<'_, AppState>, path: String) -> CmdResult<ExportSumm
     })
 }
 
+/// Export settings from the font info, named after the project when the
+/// family name is empty.
+fn export_options(state: &State<'_, AppState>) -> fidel_export::ExportOptions {
+    let (family_name, info) = {
+        let project = state.project();
+        let info = project.info.clone();
+        let name =
+            if info.family_name.trim().is_empty() { state.info().name } else { info.family_name.clone() };
+        (name, info)
+    };
+    let mut options = fidel_export::ExportOptions::new(family_name);
+    if !info.style_name.trim().is_empty() {
+        options.style_name = info.style_name.clone();
+    }
+    options.version = info.version;
+    options.designer = info.designer.clone();
+    // A fresh timestamp each time helps Windows notice a reinstalled font.
+    options.timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    options
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallSummary {
+    path: String,
+    family_name: String,
+    exported: usize,
+}
+
+/// Install the current font for this user, replacing the last test copy.
+#[tauri::command]
+fn test_install(state: State<'_, AppState>) -> CmdResult<InstallSummary> {
+    let options = export_options(&state);
+    let font = fidel_export::export(&state.project().default_project(), &options).map_err(err)?;
+    if font.exported.is_empty() {
+        return Err("Nothing is drawn yet.".into());
+    }
+    let path = install::install(&font.bytes, &options.family_name, options.timestamp)?;
+    Ok(InstallSummary {
+        path: path.to_string_lossy().into_owned(),
+        family_name: options.family_name,
+        exported: font.exported.len(),
+    })
+}
+
 /// The current drawings as font bytes, for the live proof line. Empty when
 /// nothing is drawn yet.
 #[tauri::command]
-fn proof_font(state: State<'_, AppState>) -> tauri::ipc::Response {
-    let options = fidel_export::ExportOptions::new("Fidel Proof");
-    let bytes = fidel_export::export(&state.project(), &options).map(|f| f.bytes).unwrap_or_default();
+fn proof_font(
+    state: State<'_, AppState>,
+    location: Option<std::collections::BTreeMap<String, f64>>,
+) -> tauri::ipc::Response {
+    let options = fidel_export::ExportOptions {
+        skip_bad_features: true,
+        ..fidel_export::ExportOptions::new("Fidel Proof")
+    };
+    let project = match &location {
+        Some(at) => state.project().instance_at(at).ok(),
+        None => None,
+    };
+    let bytes = match project {
+        Some(p) => fidel_export::export(&p, &options),
+        None => fidel_export::export(&state.project(), &options),
+    }
+    .map(|f| f.bytes)
+    .unwrap_or_default();
     tauri::ipc::Response::new(bytes)
 }
 
@@ -422,6 +1149,12 @@ fn proof_font(state: State<'_, AppState>) -> tauri::ipc::Response {
 #[tauri::command]
 fn alteration_impacts(state: State<'_, AppState>, id: String) -> Vec<editor::ImpactView> {
     editor::alteration_impacts(&state.project(), &id)
+}
+
+/// The fidel an edit to a base reaches.
+#[tauri::command]
+fn base_impacts(state: State<'_, AppState>, id: String) -> Vec<editor::ImpactView> {
+    editor::base_impacts(&state.project(), &id)
 }
 
 /// Give the fidel in `scope` their own copy of the alteration; returns its id.
@@ -510,6 +1243,7 @@ pub fn run() {
             export_font,
             proof_font,
             alteration_impacts,
+            base_impacts,
             fork_alteration,
             rejoin_alteration,
             set_built_on,
@@ -517,12 +1251,74 @@ pub fn run() {
             relink_fidel,
             set_rule_variant,
             set_form,
+            path_op,
             set_deform,
             set_zone,
+            get_guides,
+            set_guides,
+            get_background,
+            set_background,
             list_components,
             add_component,
             remove_component,
-            set_base_components
+            set_base_components,
+            set_fidel_components,
+            set_component_rule,
+            set_component_end,
+            rule_ends,
+            get_features,
+            set_anchors,
+            build_accents,
+            set_built_from,
+            decompose_symbol,
+            mark_preview,
+            set_features,
+            get_part,
+            drawing_at,
+            add_brace,
+            import_font,
+            export_ufo,
+            alternates_of,
+            add_alternate,
+            remove_alternate,
+            set_symbol_codepoint,
+            remove_brace,
+            part_preview,
+            set_part_axes,
+            add_part_state,
+            set_part_state,
+            remove_part_state,
+            get_design,
+            master_drawings,
+            match_masters,
+            set_axis,
+            remove_axis,
+            add_master,
+            set_master,
+            remove_master,
+            switch_master,
+            slant_master,
+            set_instances,
+            export_variable,
+            export_instances,
+            get_kerning,
+            set_kern_pair,
+            set_kern_class,
+            get_organize,
+            set_mark,
+            set_smart_filters,
+            test_install,
+            set_base_follows,
+            set_symbol_components,
+            set_metric_keys,
+            copy_metrics_to_masters,
+            copy_kerning_to_masters,
+            get_spacing,
+            set_spacing,
+            read_corpus,
+            auto_space,
+            propose_kerning,
+            apply_kerning
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");

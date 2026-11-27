@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::order::Order;
 
+mod latin;
 mod table;
 
 /// A pickable slice of the Ethiopic repertoire.
@@ -28,10 +29,17 @@ pub enum CharSet {
     ExtendedA,
     /// Ethiopic Extended-B, U+1E7E0 to U+1E7FF: Gurage.
     ExtendedB,
+    /// Basic Latin letters, figures and punctuation, with the combining
+    /// accents accented letters are built from.
+    Latin,
+    /// Latin-1 Supplement, U+00A0 to U+00FF: Western European accents.
+    LatinSupplement,
+    /// Latin Extended-A, U+0100 to U+017F: Central European and others.
+    LatinExtendedA,
 }
 
 impl CharSet {
-    pub const ALL: [CharSet; 8] = [
+    pub const ALL: [CharSet; 11] = [
         CharSet::Geez,
         CharSet::EthiopicLetters,
         CharSet::EthiopicLabialized,
@@ -40,7 +48,14 @@ impl CharSet {
         CharSet::Extended,
         CharSet::ExtendedA,
         CharSet::ExtendedB,
+        CharSet::Latin,
+        CharSet::LatinSupplement,
+        CharSet::LatinExtendedA,
     ];
+
+    pub fn is_latin(self) -> bool {
+        matches!(self, CharSet::Latin | CharSet::LatinSupplement | CharSet::LatinExtendedA)
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -52,6 +67,9 @@ impl CharSet {
             CharSet::Extended => "Ethiopic Extended",
             CharSet::ExtendedA => "Ethiopic Extended-A",
             CharSet::ExtendedB => "Ethiopic Extended-B",
+            CharSet::Latin => "Basic Latin",
+            CharSet::LatinSupplement => "Latin-1 Supplement",
+            CharSet::LatinExtendedA => "Latin Extended-A",
         }
     }
 
@@ -64,6 +82,9 @@ impl CharSet {
             CharSet::Extended => "U+2D80–U+2DDE",
             CharSet::ExtendedA => "U+AB01–U+AB2E",
             CharSet::ExtendedB => "U+1E7E0–U+1E7FE",
+            CharSet::Latin => "U+0021–U+007E and accents",
+            CharSet::LatinSupplement => "U+00A0–U+00FF",
+            CharSet::LatinExtendedA => "U+0100–U+017F",
         }
     }
 
@@ -179,12 +200,25 @@ pub enum Slot {
     Symbol { name: &'static str },
 }
 
+/// Every character, by codepoint: Latin, then Ethiopic.
 pub fn entries() -> impl Iterator<Item = &'static Entry> {
-    table::ETHIOPIC.iter()
+    latin::LATIN.iter().chain(table::ETHIOPIC.iter())
 }
 
 pub fn entry(c: char) -> Option<&'static Entry> {
-    table::ETHIOPIC.binary_search_by_key(&c, |e| e.cp).ok().map(|i| &table::ETHIOPIC[i])
+    let find = |t: &'static [Entry]| t.binary_search_by_key(&c, |e| e.cp).ok().map(|i| &t[i]);
+    find(latin::LATIN).or_else(|| find(table::ETHIOPIC))
+}
+
+/// The base letter and accents an accented letter is built from: À is A
+/// and a combining grave.
+pub fn recipe(c: char) -> Option<(char, &'static [char])> {
+    latin::RECIPES.binary_search_by_key(&c, |r| r.0).ok().map(|i| (latin::RECIPES[i].1, latin::RECIPES[i].2))
+}
+
+/// Accents that sit below the letter, or on its right foot (ogonek).
+pub fn accent_below(c: char) -> bool {
+    matches!(c, '\u{0326}' | '\u{0327}' | '\u{0328}')
 }
 
 pub fn set_of(c: char) -> Option<CharSet> {
@@ -227,12 +261,13 @@ mod tests {
     fn table_is_sorted_and_complete() {
         let all: Vec<_> = entries().collect();
         assert!(all.windows(2).all(|w| w[0].cp < w[1].cp));
-        assert_eq!(all.len(), 523);
+        assert_eq!(all.len(), 523 + 333);
         assert_eq!(CharSet::Geez.count(), 182);
         assert_eq!(set_of('ሸ'), Some(CharSet::EthiopicLetters));
         assert_eq!(set_of('ሏ'), Some(CharSet::EthiopicLabialized));
         assert_eq!(set_of('።'), Some(CharSet::EthiopicMarks));
-        assert_eq!(set_of('a'), None);
+        assert_eq!(set_of('a'), Some(CharSet::Latin));
+        assert_eq!(set_of('À'), Some(CharSet::LatinSupplement));
         let geez: Vec<_> = entries().filter(|e| e.set == CharSet::Geez).collect();
         assert!(geez.iter().all(|e| matches!(e.slot, Slot::Fidel { order, .. } if order.is_main())));
     }

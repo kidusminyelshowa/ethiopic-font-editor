@@ -3,9 +3,12 @@
 // right-click menu and the view (snapping and display) menu.
 
 import { el } from "./dom";
+import { api, type StrokeJoin } from "./api";
+import { design } from "./mastersPanel";
 import { SHAPE_LABEL, SHAPES, type GlyphEditor, type ShapeKind } from "./editor";
 import { evalNumber, ISSUE_LABEL, rotateAbout, scaleAbout, skewAbout, type IssueKind } from "./pathops";
 import { prefs, setPref, type CanvasPrefs } from "./prefs";
+import { ACTIONS, comboOf, keysFor, resetBindings, setBinding, showKeys } from "./shortcuts";
 
 /** A number field that also takes simple arithmetic (120/6, 500+20). */
 export function numberField(label: string, value: number, onChange: (v: number) => void, title?: string): HTMLElement {
@@ -147,6 +150,18 @@ export function transformSection(ed: GlyphEditor): Node[] {
     iconButton("distH", "Distribute horizontally", () => ed.distribute("x")),
     iconButton("distV", "Distribute vertically", () => ed.distribute("y")),
   );
+  const guides = ed.allGuides();
+  const toGuide = el("select", { class: "zone-select", "aria-label": "Align to a guide", title: "Move the selected points onto a guide" }) as HTMLSelectElement;
+  toGuide.append(el("option", { value: "" }, "Align points to a guide…"));
+  for (const { g, scope } of guides) {
+    const where = g.angle === 0 ? `y ${Math.round(g.y)}` : g.angle === 90 ? `x ${Math.round(g.x)}` : `${Math.round(g.angle)}°`;
+    toGuide.append(el("option", { value: `${scope}:${g.id}` }, `${g.name || "Guide"} · ${where}${scope === "global" ? " · global" : ""}`));
+  }
+  toGuide.addEventListener("change", () => {
+    const [scope, id] = toGuide.value.split(":");
+    if (id) ed.alignToGuide(scope as "local" | "global", Number(id));
+    toGuide.value = "";
+  });
   return [
     el("h3", { class: "section-label" }, "Transform"),
     el("div", { class: "transform-head" }, picker, pos),
@@ -155,6 +170,7 @@ export function transformSection(ed: GlyphEditor): Node[] {
     apply,
     el("h3", { class: "section-label" }, "Align"),
     align,
+    ...(guides.length && ed.tool !== "select" ? [toGuide] : []),
   ];
 }
 
@@ -164,17 +180,56 @@ export function metricsSection(ed: GlyphEditor, paLabel: string): Node[] {
   if (!sb) return [];
   const center = el("button", { class: "pill small ghost", title: "Same space left and right" }, "Center");
   center.addEventListener("click", () => ed.centerInWidth());
-  return [
+  const mk = ed.drawing?.metricKeys;
+  const keys = mk?.keys ?? {};
+  // A keyed value follows its key; type in the key, not the number.
+  const field = (label: string, side: "left" | "width" | "right", value: number, set: (v: number) => void, title: string) => {
+    const f = numberField(label, value, set, title);
+    if (keys[side]) {
+      f.classList.add("linked");
+      f.querySelector("input")!.readOnly = true;
+      f.title = `Follows ${keys[side]}`;
+    }
+    return f;
+  };
+  const nodes: Node[] = [
     el("h3", { class: "section-label", title: "Drag the left or right metric line on the canvas, too" }, "Metrics"),
     el(
       "div",
       { class: "field-grid three" },
-      numberField("LSB", sb.lsb, (v) => ed.setSidebearing("left", v), "Left sidebearing"),
-      numberField("Width", sb.width, (v) => void ed.setAdvance(v), "Advance width"),
-      numberField("RSB", sb.rsb, (v) => ed.setSidebearing("right", v), "Right sidebearing"),
+      field("LSB", "left", sb.lsb, (v) => ed.setSidebearing("left", v), "Left sidebearing"),
+      field("Width", "width", sb.width, (v) => void ed.setAdvance(v), "Advance width"),
+      field("RSB", "right", sb.rsb, (v) => ed.setSidebearing("right", v), "Right sidebearing"),
     ),
-    el("div", { class: "button-row" }, center, el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`)),
   ];
+  if (mk) {
+    const keyInput = (side: "left" | "width" | "right", label: string) => {
+      const input = el("input", {
+        type: "text",
+        class: `metric-key${mk.errors[side] ? " invalid" : ""}`,
+        value: keys[side] ?? "",
+        placeholder: "Key",
+        "aria-label": `${label} key`,
+        title: mk.errors[side] ?? `${label} from another glyph: =ሀ, =ሀ+10, =|ሀ for its other side, or =600`,
+        spellcheck: "false",
+      }) as HTMLInputElement;
+      input.addEventListener("change", () => void ed.setMetricKeys({ ...keys, [side]: input.value.trim() || null }));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") input.blur();
+      });
+      return input;
+    };
+    nodes.push(el("div", { class: "field-grid three metric-keys" }, keyInput("left", "Left sidebearing"), keyInput("width", "Width"), keyInput("right", "Right sidebearing")));
+  }
+  const row = el("div", { class: "button-row" }, center);
+  if ((design?.masters.length ?? 0) > 1 && (ed.target?.kind === "base" || ed.target?.kind === "symbol")) {
+    const copy = el("button", { class: "pill small ghost", title: "Give every other master these sidebearings" }, "Copy to all masters");
+    copy.addEventListener("click", () => void ed.copyMetricsToMasters());
+    row.append(copy);
+  }
+  row.append(el("span", { class: "side-note inline" }, `Pa-height ${paLabel}`));
+  nodes.push(row);
+  return nodes;
 }
 
 /** Options for the shape tool in use. */
@@ -228,6 +283,14 @@ export function historyRows(ed: GlyphEditor): HTMLElement[] {
   const { labels, applied } = ed.steps;
   if (!labels.length) return [];
   const rows: HTMLElement[] = [el("div", { class: "tree-section" }, "History")];
+  // On a base or an alteration, each step reaches every fidel built from it.
+  if (ed.reach?.length) {
+    const live = ed.reach.filter((r) => r.effect !== "untouched");
+    const kept = ed.reach.length - live.length;
+    const chars = live.map((r) => r.codepoint ?? `${r.familyName} ${r.order}`).join(" ");
+    const text = `Reaches ${live.length} fidel${live.length === 1 ? "" : "s"}${kept ? `, ${kept} drawn by hand stay` : ""}`;
+    rows.push(el("div", { class: "history-reach", title: chars }, text));
+  }
   const opened = el("div", { class: `history-row${applied === 0 ? " current" : ""}`, role: "button", tabindex: "0" }, "Opened");
   opened.addEventListener("click", () => ed.jumpTo(0));
   rows.push(opened);
@@ -321,6 +384,13 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
     if (segs.lines) entries.push({ label: segs.lines > 1 ? "Make curves" : "Make curve", run: () => ed.setSegmentKind("curve") });
     if (segs.curves) entries.push({ label: segs.curves > 1 ? "Make lines" : "Make line", run: () => ed.setSegmentKind("line") });
     if (nodes.length === 1) entries.push({ label: "Set as start point", run: () => ed.setStartPoint() });
+    entries.push(
+      { label: "Break path here", run: () => ed.breakAtSelection() },
+      ...(ed.canJoin ? [{ label: "Join ends", keys: "Shift J", run: () => void ed.joinSelection() }] : []),
+      { label: "Harmonize", run: () => ed.harmonize(), disabled: !nodes.some((n) => n.type === "smooth") },
+      { label: "Balance handles", run: () => ed.balanceHandles(), disabled: !segs.curves },
+      { label: "Automatic handles", run: () => ed.autoHandles() },
+    );
     entries.push("sep", { heading: "Select" });
     entries.push(
       { label: "Select path", run: () => { for (const ci of contours) ed.selectContour(ci); ed.render(); refresh(ed); } },
@@ -338,9 +408,21 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Invert selection", keys: "Ctrl Shift I", run: () => ed.invertSelection() },
       "sep",
       { heading: contours.length === 1 ? "Path" : `${contours.length} paths` },
+      ...(ed.hasOpenSelection ? [{ label: "Close path", run: () => ed.closePaths() }] : []),
       { label: "Reverse direction", keys: "Ctrl Shift R", run: () => ed.reverseDirection() },
+      ...(ed.target?.kind === "base" || ed.target?.kind === "symbol" ? [{ label: "Make component", run: () => void ed.makeComponent() }] : []),
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Tidy up", run: () => ed.tidyUp() },
+      { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
+      ...(contours.length > 1
+        ? [
+            { label: "Union", run: () => void ed.booleanOp("union") },
+            { label: "Subtract front", run: () => void ed.booleanOp("subtract") },
+            { label: "Intersect", run: () => void ed.booleanOp("intersect") },
+            { label: "Exclude", run: () => void ed.booleanOp("exclude") },
+          ]
+        : []),
       { label: "Duplicate", keys: "Ctrl D", run: () => ed.duplicate() },
       { label: "Lock", keys: "Ctrl Shift L", run: () => ed.setLayerFlag("locked", contours, true) },
       { label: "Hide", keys: "Ctrl Shift H", run: () => ed.setLayerFlag("hidden", contours, true) },
@@ -352,6 +434,8 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
       { label: "Select all", keys: "Ctrl A", run: () => ed.selectAll() },
       { label: "Correct path direction", run: () => ed.correctDirection() },
       { label: "Add extremes", run: () => ed.addExtremes() },
+      { label: "Tidy up", run: () => ed.tidyUp() },
+      { label: "Remove overlap", keys: "Ctrl Shift O", run: () => void ed.removeOverlap() },
       { label: "Round coordinates", run: () => ed.roundCoordinates() },
     );
   }
@@ -367,6 +451,98 @@ export function showContextMenu(ed: GlyphEditor, at: { x: number; y: number }) {
 }
 
 /** The canvas view menu: snapping, grid, nudge steps and what is shown. */
+/** Small, medium or large points. */
+function sizePicker(): HTMLElement {
+  const row = el("div", { class: "menu-segment", role: "group", "aria-label": "Point size" });
+  for (const size of ["small", "medium", "large"] as const) {
+    const b = el("button", { class: `segment${prefs.nodeSize === size ? " on" : ""}`, "aria-pressed": String(prefs.nodeSize === size) }, size[0].toUpperCase() + size.slice(1));
+    b.addEventListener("click", () => {
+      setPref("nodeSize", size);
+      row.querySelectorAll(".segment").forEach((x) => x.classList.toggle("on", x === b));
+    });
+    row.append(b);
+  }
+  return el("label", { class: "menu-field" }, el("span", {}, "Point size"), row);
+}
+
+function shortcutsItem(): HTMLElement {
+  const b = el("button", { class: "menu-item", role: "menuitem" }, "Keyboard shortcuts…");
+  b.addEventListener("click", () => {
+    closeMenu();
+    showShortcuts();
+  });
+  return b;
+}
+
+/** The list of rebindable shortcuts: click one, then press the new keys. */
+export function showShortcuts(): void {
+  document.querySelector(".shortcuts-dialog")?.remove();
+  const close = () => {
+    dialog.remove();
+    window.removeEventListener("keydown", onKey, true);
+  };
+  let capturing: { id: string; button: HTMLElement } | null = null;
+  const note = el("p", { class: "side-note shortcuts-note" }, "");
+  const list = el("div", { class: "shortcuts-list" });
+  const fill = () => {
+    list.replaceChildren();
+    let group = "";
+    for (const a of ACTIONS) {
+      if (a.group !== group) {
+        group = a.group;
+        list.append(el("div", { class: "menu-label" }, group));
+      }
+      const keys = keysFor(a.id);
+      const b = el("button", { class: `shortcut-keys${keys !== a.keys ? " changed" : ""}`, title: keys !== a.keys ? `Default: ${showKeys(a.keys)}` : "Click, then press new keys" }, showKeys(keys));
+      b.addEventListener("click", () => {
+        capturing?.button.classList.remove("capturing");
+        capturing = { id: a.id, button: b };
+        b.classList.add("capturing");
+        b.textContent = "Press keys…";
+      });
+      list.append(el("div", { class: "shortcut-row" }, el("span", {}, a.label), b));
+    }
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (!capturing) {
+      if (e.key === "Escape") close();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      capturing = null;
+      fill();
+      return;
+    }
+    const combo = comboOf(e);
+    if (!combo) return;
+    const lost = setBinding(capturing.id, combo);
+    capturing = null;
+    note.textContent = lost ? `${showKeys(combo)} was ${lost}'s shortcut; ${lost} has none now.` : "Saved.";
+    fill();
+  };
+  window.addEventListener("keydown", onKey, true);
+  const reset = el("button", { class: "pill small ghost" }, "Reset all");
+  reset.addEventListener("click", () => {
+    resetBindings();
+    note.textContent = "Back to the defaults.";
+    fill();
+  });
+  const done = el("button", { class: "pill small" }, "Done");
+  done.addEventListener("click", close);
+  const dialog = el(
+    "div",
+    { class: "shortcuts-dialog", role: "dialog", "aria-label": "Keyboard shortcuts" },
+    el("div", { class: "shortcuts-panel" }, el("h2", { class: "shortcuts-title" }, "Keyboard shortcuts"), note, list, el("div", { class: "shortcuts-foot" }, reset, done)),
+  );
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) close();
+  });
+  fill();
+  document.body.append(dialog);
+}
+
 export function bindViewMenu(root: HTMLElement) {
   const btn = root.querySelector<HTMLButtonElement>(".view-btn");
   if (!btn) return;
@@ -412,6 +588,7 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Snap to points", "snapPoints"),
     check("Snap to metrics", "snapMetrics"),
     check("Snap to Pa-height zones", "snapZones"),
+    check("Snap to guides", "snapGuides"),
     check("Snap to grid", "snapGrid"),
     el("div", { class: "menu-sep", role: "separator" }),
     el("div", { class: "menu-label" }, "Grid"),
@@ -436,7 +613,22 @@ function renderViewMenu(anchor: { x: number; y: number }) {
     check("Path direction", "showArrows"),
     check("Part labels", "showPartLabels"),
     check("Pa-height zones", "showZones"),
+    check("Guides", "showGuides"),
+    check("Background layer", "showBackground"),
+    check("Rulers", "showRulers"),
     check("Outline warnings", "showWarnings"),
+    check("Tunni lines", "showTunni"),
+    check("Curvature comb", "showComb"),
+    check("Metric lines", "showMetrics"),
+    check("Anchors", "showAnchors"),
+    el("div", { class: "menu-sep", role: "separator" }),
+    el("div", { class: "menu-label" }, "Points"),
+    check("Colour by point type", "pointColors"),
+    check("Coordinates of selected points", "showCoords"),
+    check("Solid points", "solidPoints"),
+    sizePicker(),
+    el("div", { class: "menu-sep", role: "separator" }),
+    shortcutsItem(),
   );
   document.body.append(menu);
   const r = menu.getBoundingClientRect();
@@ -454,4 +646,171 @@ export function onRefresh(fn: (ed: GlyphEditor) => void) {
 
 function refresh(ed: GlyphEditor) {
   refreshSide(ed);
+}
+
+/** Values the path operation fields remember between uses. */
+const opValues = { offset: 10, stroke: 40, radius: 20, join: "miter" as StrokeJoin };
+
+/**
+ * Remove overlap, booleans, offset, expand stroke and corners for the
+ * selection (or the whole drawing when nothing is selected).
+ */
+export function pathOpsSection(ed: GlyphEditor): Node[] {
+  if (!ed.contours.length) return [];
+  const closed = ed.selectedContours().filter((ci) => !ed.contours[ci].open).length;
+  const btn = (label: string, title: string, run: () => void, disabled = false) => {
+    const b = el("button", { class: "pill small ghost", title }, label);
+    b.disabled = disabled;
+    b.addEventListener("click", run);
+    return b;
+  };
+  const bools = el(
+    "div",
+    { class: "button-row" },
+    btn("Remove overlap", "Merge overlapping paths into one outline (Ctrl Shift O)", () => void ed.removeOverlap()),
+    btn("Tidy up", "Merge doubled points, straighten flat curves and drop points in the middle of straight lines", () => ed.tidyUp()),
+    btn("Union", "Merge the selected paths", () => void ed.booleanOp("union"), closed < 2),
+    btn("Subtract", "Cut the frontmost selected path out of the others", () => void ed.booleanOp("subtract"), closed < 2),
+    btn("Intersect", "Keep only where the selected paths overlap", () => void ed.booleanOp("intersect"), closed < 2),
+    btn("Exclude", "Keep where the selected paths do not overlap", () => void ed.booleanOp("exclude"), closed < 2),
+  );
+  const join = el("select", { class: "built-on-select", "aria-label": "Corners" }) as HTMLSelectElement;
+  for (const j of ["miter", "round", "bevel"] as StrokeJoin[]) {
+    const o = el("option", { value: j }, { miter: "Sharp corners", round: "Round corners", bevel: "Cut corners" }[j]);
+    if (opValues.join === j) o.selected = true;
+    join.append(o);
+  }
+  join.addEventListener("change", () => (opValues.join = join.value as StrokeJoin));
+  const offset = el(
+    "div",
+    { class: "field-row" },
+    numberField("Offset", opValues.offset, (v) => (opValues.offset = v), "Positive grows the paths, negative shrinks them"),
+    btn("Offset", "Grow or shrink the selected paths", () => void ed.offsetPaths(opValues.offset, opValues.join)),
+  );
+  const stroke = el(
+    "div",
+    { class: "field-row" },
+    numberField("Width", opValues.stroke, (v) => (opValues.stroke = Math.abs(v)), "Width of the outline drawn around each path"),
+    btn("Expand stroke", "Turn the selected paths into outlines of this width", () => void ed.expandStroke(opValues.stroke, opValues.join)),
+  );
+  const corners = ed.selectedNodes().some((n) => n.type === "corner");
+  const round = el(
+    "div",
+    { class: "field-row" },
+    numberField("Radius", opValues.radius, (v) => (opValues.radius = Math.abs(v)), "How far back along each side the corner starts"),
+    btn("Round", "Round the selected corner points", () => ed.roundCorners(opValues.radius, "round"), !corners),
+    btn("Chamfer", "Cut the selected corner points straight across", () => ed.roundCorners(opValues.radius, "chamfer"), !corners),
+  );
+  return [
+    el("h3", { class: "section-label", title: "Works on the selected paths, or the whole drawing when nothing is selected" }, "Path operations"),
+    el("div", { class: "side-box" }, bools, offset, stroke, join, ...(ed.tool === "direct" ? [round] : [])),
+  ];
+}
+
+const GUIDE_COLORS = ["#0f8a7e", "#8a4fb8", "#c2442a", "#2b6cb0", "#b7791f"];
+
+/** The guide picked on the canvas: where it is, its angle, name, colour, and whether it is global or locked. */
+export function guideSection(ed: GlyphEditor): Node[] {
+  const sel = ed.selectedGuide();
+  if (!sel) return [];
+  const { g, scope } = sel;
+  const toggle = (label: string, on: boolean, title: string, run: (v: boolean) => void) => {
+    const b = el("button", { class: `pill small${on ? "" : " ghost"}`, title, "aria-pressed": String(on) }, label);
+    b.addEventListener("click", () => run(!on));
+    return b;
+  };
+  const name = el("input", { type: "text", value: g.name ?? "", placeholder: "Name", "aria-label": "Guide name", spellcheck: "false" }) as HTMLInputElement;
+  name.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") name.blur();
+  });
+  name.addEventListener("change", () => ed.updateGuide({ name: name.value.trim() || undefined }));
+  const colors = el("div", { class: "guide-colors" });
+  for (const c of GUIDE_COLORS) {
+    const on = (g.color ?? null) === c;
+    const b = el("button", { class: `guide-color${on ? " on" : ""}`, style: `--c:${c}`, title: on ? "Default colour" : "Colour", "aria-label": "Guide colour" });
+    b.addEventListener("click", () => ed.updateGuide({ color: on ? null : c }));
+    colors.append(b);
+  }
+  const del = el("button", { class: "pill small ghost", title: "Remove this guide (Delete)" }, "Remove");
+  del.addEventListener("click", () => ed.deleteGuide());
+  return [
+    el("h3", { class: "section-label", title: "Drag it on the canvas, or back onto its ruler to remove it" }, "Guide"),
+    el(
+      "div",
+      { class: "side-box" },
+      el("label", { class: "field guide-name" }, name),
+      el(
+        "div",
+        { class: "field-row" },
+        numberField("X", g.x, (v) => ed.updateGuide({ x: v })),
+        numberField("Y", g.y, (v) => ed.updateGuide({ y: v })),
+        numberField("Angle", g.angle, (v) => ed.updateGuide({ angle: ((v % 180) + 180) % 180 }), "0 is horizontal, 90 vertical"),
+      ),
+      el(
+        "div",
+        { class: "button-row" },
+        toggle("Global", scope === "global", "Show this guide in every drawing", (v) => ed.updateGuide({ scope: v ? "global" : "local" })),
+        toggle("Locked", !!g.locked, "Stop it moving when you drag on the canvas", (v) => ed.updateGuide({ locked: v || undefined })),
+        del,
+      ),
+      colors,
+    ),
+  ];
+}
+
+/** The background (mask) layer and a glyph to compare with. */
+export function backgroundSection(ed: GlyphEditor): Node[] {
+  const has = ed.background.length > 0;
+  const btn = (label: string, title: string, run: () => void, disabled = false) => {
+    const b = el("button", { class: "pill small ghost", title }, label);
+    b.disabled = disabled;
+    b.addEventListener("click", run);
+    return b;
+  };
+  const cmp = el("input", { type: "text", value: ed.compare, placeholder: "Glyph", "aria-label": "Compare with", spellcheck: "false", maxlength: "2" }) as HTMLInputElement;
+  cmp.addEventListener("keydown", (e) => e.stopPropagation());
+  cmp.addEventListener("input", () => ed.setCompare(cmp.value));
+  return [
+    el("h3", { class: "section-label", title: "Outlines kept behind the drawing, saved with the project and not exported" }, "Background"),
+    el(
+      "div",
+      { class: "side-box" },
+      el(
+        "div",
+        { class: "button-row" },
+        btn("Copy to background", "Keep a copy of the selection (or the whole drawing) behind it, before a risky edit", () => ed.copyToBackground()),
+        btn("Swap", "Swap the drawing with its background", () => ed.swapBackground(), !has),
+        btn("Clear", "Empty the background layer", () => ed.clearBackground(), !has),
+      ),
+      el("label", { class: "field compare-field", title: "Show another glyph's outline behind this one" }, el("span", {}, "Compare with"), cmp),
+      masterCompare(ed),
+    ),
+  ];
+}
+
+/** Pick another master of this drawing to show behind it; hidden with one master. */
+function masterCompare(ed: GlyphEditor): HTMLElement {
+  const pick = el("select", { class: "zone-select", "aria-label": "Compare with a master", title: "Show this drawing in another master behind it" }) as HTMLSelectElement;
+  pick.hidden = true;
+  const target = ed.target;
+  // Generated fidel have no drawing of their own in each master.
+  if (target && !ed.drawing?.generated) {
+    void api
+      .masterDrawings(target)
+      .then((all) => {
+        if (all.length < 2) return;
+        pick.append(el("option", { value: "" }, "Compare with a master…"));
+        const now = ed.compareMaster?.key === ed.targetKey ? ed.compareMaster.master : "";
+        for (const m of all) {
+          const o = el("option", { value: m.master }, m.master) as HTMLOptionElement;
+          o.selected = m.master === now;
+          pick.append(o);
+        }
+        pick.hidden = false;
+      })
+      .catch(() => {});
+  }
+  pick.addEventListener("change", () => void ed.setCompareMaster(pick.value || null));
+  return pick;
 }

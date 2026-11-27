@@ -109,7 +109,8 @@ export function segments(c: Contour): Segment[] {
   const nodes = toNodes(c);
   const n = nodes.length;
   const out: Segment[] = [];
-  for (let k = 0; k < n; k++) {
+  // An open path has no closing segment.
+  for (let k = 0; k < (c.open ? n - 1 : n); k++) {
     const a = nodes[k];
     const b = nodes[(k + 1) % n];
     out.push(a.out || b.in ? { from: k, to: (k + 1) % n, pts: [a.pos, a.out?.pos ?? a.pos, b.in?.pos ?? b.pos, b.pos] } : { from: k, to: (k + 1) % n, pts: [a.pos, b.pos] });
@@ -201,11 +202,16 @@ export function removePointsKeepingShape(c: Contour, ids: Set<number>): Contour 
     if (k < 0) continue;
     const segs = segments(cur);
     const n = nodes.length;
+    const rest = nodes.filter((_, i) => i !== k);
+    // The end of an open path just goes; the path ends at its neighbour.
+    if (cur.open && (k === 0 || k === n - 1)) {
+      cur = rebuilt(cur, rest, maxPointId(cur) + 1);
+      continue;
+    }
     const before = segs[(k - 1 + n) % n];
     const after = segs[k];
     const prev = nodes[(k - 1 + n) % n];
     const nxt = nodes[(k + 1) % n];
-    const rest = nodes.filter((_, i) => i !== k);
     if (before.pts.length === 2 && after.pts.length === 2) {
       delete prev.out;
       delete nxt.in;
@@ -281,7 +287,7 @@ export function setSegmentKind(c: Contour, ids: Set<number>, to: "curve" | "line
   const nodes = toNodes(c);
   const n = nodes.length;
   let next = maxPointId(c) + 1;
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < (c.open ? n - 1 : n); k++) {
     const a = nodes[k];
     const b = nodes[(k + 1) % n];
     if (!ids.has(a.id) || !ids.has(b.id) || n < 2) continue;
@@ -302,6 +308,8 @@ export function setStartPoint(c: Contour, id: number): Contour {
   const nodes = toNodes(c);
   const k = nodes.findIndex((nd) => nd.id === id);
   if (k <= 0) return clone(c);
+  // An open path can only start at one of its two ends.
+  if (c.open) return k === nodes.length - 1 ? reversed(c) : clone(c);
   return rebuilt(c, [...nodes.slice(k), ...nodes.slice(0, k)], maxPointId(c) + 1);
 }
 
@@ -316,6 +324,7 @@ export function makeTangent(c: Contour, ids: Set<number>): Contour {
     if (!ids.has(nd.id)) return;
     const prev = nodes[(k - 1 + n) % n];
     const nxt = nodes[(k + 1) % n];
+    if (c.open && (k === 0 || k === n - 1)) return;
     const lineIn = !nd.in && !prev.out;
     const lineOut = !nd.out && !nxt.in;
     if (lineIn === lineOut) return;
@@ -374,7 +383,7 @@ export function depths(contours: Contour[]): number[] {
     if (!probe) return 0;
     let d = 0;
     polys.forEach((poly, j) => {
-      if (j !== i && poly.length > 2 && Math.abs(signedArea(contours[j])) > Math.abs(signedArea(c)) && insidePolygon(poly, probe)) d++;
+      if (j !== i && !contours[j].open && poly.length > 2 && Math.abs(signedArea(contours[j])) > Math.abs(signedArea(c)) && insidePolygon(poly, probe)) d++;
     });
     return d;
   });
@@ -383,7 +392,8 @@ export function depths(contours: Contour[]): number[] {
 /** Whether each contour runs the way its depth wants: outer shapes counter-clockwise, counters clockwise. */
 export function directionOk(contours: Contour[]): boolean[] {
   const d = depths(contours);
-  return contours.map((c, i) => isClockwise(c) === (d[i] % 2 === 1));
+  // An open path has no direction to get wrong.
+  return contours.map((c, i) => !!c.open || isClockwise(c) === (d[i] % 2 === 1));
 }
 
 /** Reverse every contour that runs the wrong way for its depth. */
@@ -449,7 +459,7 @@ export function polygonContour(id: number, a: Vec2, b: Vec2, sides: number, inne
 
 // ---------- Outline checks ----------
 
-export type IssueKind = "direction" | "duplicate" | "tiny" | "almost-straight" | "kink" | "extremes";
+export type IssueKind = "open" | "direction" | "duplicate" | "tiny" | "almost-straight" | "kink" | "extremes";
 
 export interface OutlineIssue {
   kind: IssueKind;
@@ -461,6 +471,7 @@ export interface OutlineIssue {
 }
 
 export const ISSUE_LABEL: Record<IssueKind, string> = {
+  open: "Open path: not exported until it is closed",
   direction: "Wrong path direction",
   duplicate: "Two points on top of each other",
   tiny: "Very short segment",
@@ -505,6 +516,7 @@ export function outlineIssues(contours: Contour[]): OutlineIssue[] {
   contours.forEach((c, ci) => {
     const first = c.points.find(isOn);
     if (!first) return;
+    if (c.open) out.push({ kind: "open", contour: ci, at: first.pos, fixable: false });
     if (!ok[ci]) out.push({ kind: "direction", contour: ci, at: first.pos, fixable: true });
     const nodes = toNodes(c);
     const segs = segments(c);

@@ -7,6 +7,7 @@ export interface CanvasPrefs {
   snapGrid: boolean;
   /** Snap to the Pa-height zones (M2). */
   snapZones: boolean;
+  snapGuides: boolean;
   showGrid: boolean;
   /** Grid spacing in font units, and how many parts each step is cut into for snapping. */
   gridSize: number;
@@ -17,8 +18,26 @@ export interface CanvasPrefs {
   showPartLabels: boolean;
   showWarnings: boolean;
   showZones: boolean;
+  showGuides: boolean;
+  showBackground: boolean;
+  showRulers: boolean;
+  /** Tunni lines on selected curves. */
+  showTunni: boolean;
+  /** Curvature combs on selected paths. */
+  showComb: boolean;
   /** Filled outline, or outline only. */
   fill: boolean;
+  showMetrics: boolean;
+  /** Point size on the canvas. */
+  nodeSize: "small" | "medium" | "large";
+  /** Corner, smooth and tangent points in their own colours. */
+  pointColors: boolean;
+  /** Coordinates next to selected points. */
+  showCoords: boolean;
+  /** Points filled in, instead of hollow. */
+  solidPoints: boolean;
+  /** Anchors and their names. */
+  showAnchors: boolean;
   /** Shape tool options. */
   cornerRadius: number;
   polygonSides: number;
@@ -31,6 +50,7 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   snapMetrics: true,
   snapGrid: false,
   snapZones: true,
+  snapGuides: true,
   showGrid: false,
   gridSize: 50,
   gridSub: 5,
@@ -39,7 +59,18 @@ export const DEFAULT_PREFS: CanvasPrefs = {
   showPartLabels: true,
   showWarnings: true,
   showZones: true,
+  showGuides: true,
+  showBackground: true,
+  showRulers: true,
+  showTunni: true,
+  showComb: false,
   fill: true,
+  showMetrics: true,
+  nodeSize: "medium",
+  pointColors: false,
+  showCoords: false,
+  solidPoints: false,
+  showAnchors: true,
   cornerRadius: 40,
   polygonSides: 6,
   starPoints: 5,

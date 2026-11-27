@@ -24,14 +24,25 @@
             <button class="menu-item" role="menuitem" data-file="open">Open…<kbd>Ctrl O</kbd></button>
             <button class="menu-item" role="menuitem" data-file="save">Save<kbd>Ctrl S</kbd></button>
             <button class="menu-item" role="menuitem" data-file="saveas">Save as…<kbd>Ctrl Shift S</kbd></button>
+            <button class="menu-item" role="menuitem" data-file="import">Import font…</button>
+            <button class="menu-item" role="menuitem" data-file="import-ufo">Import UFO…</button>
+            <button class="menu-item" role="menuitem" data-file="export-ufo">Export UFO…</button>
             <button class="menu-item" role="menuitem" data-menu="export">Export font…<kbd>Ctrl E</kbd></button>
+            <button class="menu-item" role="menuitem" data-menu="export-variable">Export variable font…</button>
+            <button class="menu-item" role="menuitem" data-menu="export-instances">Export instances…</button>
+            <button class="menu-item" role="menuitem" data-menu="test-install">Test install</button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">Project</div>
             <button class="menu-item" role="menuitem" data-menu="charsets">Character sets…</button>
+            <button class="menu-item" role="menuitem" data-menu="masters">Masters and axes…</button>
+            <button class="menu-item" role="menuitem" data-menu="build-accents" title="Build every undrawn accented letter from its letter and accents">Build accented letters</button>
+            <button class="menu-item" role="menuitem" data-menu="shortcuts">Keyboard shortcuts…</button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">View</div>
             <button class="menu-item" role="menuitem" data-menu="view-grid">Fidel grid<kbd>1</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="view-editor">Glyph editor<kbd>2</kbd></button>
+            <button class="menu-item" role="menuitem" data-menu="view-kerning">Kerning<kbd>3</kbd></button>
+            <button class="menu-item" role="menuitem" data-menu="view-features">Features<kbd>4</kbd></button>
             <button class="menu-item" role="menuitem" data-menu="toggle-left">Show or hide sidebars<kbd>Ctrl \</kbd></button>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-label">Appearance</div>
@@ -46,6 +57,8 @@
         <nav class="tabs" aria-label="Views">
           <button class="tab active" data-view="grid">Grid</button>
           <button class="tab" data-view="editor">Editor</button>
+          <button class="tab" data-view="kerning">Kerning</button>
+          <button class="tab" data-view="features">Features</button>
         </nav>
       </div>
 
@@ -53,6 +66,7 @@
         <span id="project-name" class="project-name" data-tauri-drag-region>Untitled Ge'ez</span>
         <span class="title-sep" data-tauri-drag-region>/</span>
         <span id="project-meta" class="project-meta" data-tauri-drag-region>Regular · 1000 UPM</span>
+        <button id="master-btn" class="master-btn" aria-haspopup="menu" hidden></button>
       </div>
 
       <div class="titlebar-end" data-tauri-drag-region>
@@ -94,7 +108,6 @@
               <span id="grid-summary" class="subtle">Loading the system…</span>
             </div>
             <div class="stage-tools">
-              <div id="filters" class="filters" role="group" aria-label="Filter by state"></div>
               <div class="menu-wrap charset-wrap">
                 <button id="charset-btn" class="stage-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Character sets">
                   <span id="charset-label">Ge'ez</span>
@@ -106,18 +119,7 @@
           </div>
           <div id="grid" class="grid-scroll"></div>
 
-          <div class="proof">
-            <span class="proof-label">Proof</span>
-            <input
-              id="proof-input"
-              class="proof-input"
-              lang="am"
-              spellcheck="false"
-              aria-label="Proof text"
-              value="በበግ ቤት በግ ገባ።"
-            />
-            <span id="proof-note" class="proof-note" title="System font until you draw"></span>
-          </div>
+          <div class="proof" role="region" aria-label="Proof"></div>
         </div>
 
         <div id="editor-view" class="view editor-view" hidden>
@@ -126,6 +128,17 @@
               <h1 class="stage-heading editor-title">Editor</h1>
               <span class="subtle editor-subtitle"></span>
             </div>
+            <div id="editor-tabs" class="editor-tabs" role="tablist" aria-label="Open drawings"></div>
+            <input
+              id="text-line"
+              class="text-line"
+              type="text"
+              placeholder="Type a line of text"
+              aria-label="Line of text"
+              title="Type fidel to see the glyph among them; click one to edit it. Page Up and Page Down step along the line."
+              spellcheck="false"
+              autocomplete="off"
+            />
             <label class="select-field">
               <span class="select-label">Drawing</span>
               <select id="drawing-select" aria-label="Drawing to edit"></select>
@@ -145,6 +158,18 @@
               <button class="tool" data-tool="pen" title="Pen (P)" aria-label="Pen">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 2l5 8-3 6H8l-3-6zM10 2v7" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/></svg>
               </button>
+              <button class="tool" data-tool="pencil" title="Pencil (B): draw freehand, smoothed into curves" aria-label="Pencil">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 16l1-4 8.5-8.5a1.4 1.4 0 012 0l1 1a1.4 1.4 0 010 2L8 15z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/><path d="M12 5l3 3" stroke="currentColor" stroke-width="1.5"/></svg>
+              </button>
+              <button class="tool" data-tool="knife" title="Knife (K): drag across paths to cut them" aria-label="Knife">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M3 17L14 6l2.5 1.5L6 17z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/><path d="M14 6l1.5-3" stroke="currentColor" stroke-width="1.5"/></svg>
+              </button>
+              <button class="tool" data-tool="eraser" title="Eraser (Shift E): drag over paths to remove those pieces" aria-label="Eraser">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M8 16l-4-4 8-8 5 5-7 7zM6.5 9.5l5 5M8 16h8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="tool" data-tool="measure" title="Measure (M): drag across the outline to read stem and counter widths" aria-label="Measure">
+                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M2.5 13.5l11-11 4 4-11 11z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/><path d="M6 10l1.5 1.5M8.5 7.5l2 2M11 5l1.5 1.5" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
               <div class="tool-split">
                 <button class="tool" data-tool="shape" title="Shapes (R rectangle, E ellipse)" aria-label="Shape">
                   <svg data-shape-icon="rect" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="3.5" y="4.5" width="13" height="11" rx="1" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
@@ -162,13 +187,13 @@
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M7 10V4.5a1.2 1.2 0 012.4 0V9m0-5.5a1.2 1.2 0 012.4 0V9m0-4a1.2 1.2 0 012.4 0V10m0-3a1.2 1.2 0 012.4 0v5c0 3-2 5-5 5h-1c-2 0-3-1-4-2.5L3.5 11a1.2 1.2 0 012-1.3L7 11.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
               <span class="dock-sep"></span>
-              <button class="tool" data-action="import-svg" title="Import SVG (or paste with Ctrl+V)" aria-label="Import SVG">
+              <button class="tool" data-action="import-svg" title="Import vectors: SVG, PDF, AI or EPS (or paste with Ctrl+V)" aria-label="Import vectors">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 13v2.5h12V13" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 3.5v8.5M6.8 8.8L10 12l3.2-3.2" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
               <button class="tool" data-action="import-image" title="Place a sketch image" aria-label="Place a sketch image">
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="7.5" cy="8.3" r="1.4" fill="currentColor"/><path d="M4 14.5l4-4 3 3 2-2 3.5 3.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
               </button>
-              <input class="svg-file" type="file" accept=".svg,image/svg+xml" hidden />
+              <input class="svg-file" type="file" accept=".svg,.pdf,.ai,.eps,image/svg+xml,application/pdf,application/postscript" hidden />
               <input class="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden />
             </div>
 
@@ -187,6 +212,31 @@
             <span class="coords" aria-live="off"></span>
           </div>
         </div>
+        <div id="kern-view" class="view kern-view" hidden>
+          <div class="stage-bar">
+            <div class="stage-title">
+              <h1 class="stage-heading">Kerning</h1>
+              <span class="subtle kern-subtitle" lang="gez"></span>
+            </div>
+            <input
+              id="kern-text"
+              class="text-line"
+              type="text"
+              placeholder="Type glyphs to kern"
+              aria-label="Kerning text"
+              title="Click a glyph to select the pair before it, drag it to kern"
+              spellcheck="false"
+              autocomplete="off"
+              lang="gez"
+            />
+            <button id="kern-strings" class="stage-btn" aria-haspopup="menu" title="Fill the line with kerning strings">Strings</button>
+            <input id="kern-size" class="kern-size" type="range" min="32" max="320" step="4" aria-label="Text size" title="Text size" />
+          </div>
+          <div class="kern-wrap">
+            <svg class="kern-canvas" role="img" aria-label="Kerning text"></svg>
+          </div>
+        </div>
+        <div id="fea-view" class="view fea-view" hidden></div>
       </section>
 
       <aside id="inspector" class="sidebar sidebar-right inspector" aria-live="polite"></aside>

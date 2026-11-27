@@ -1,11 +1,23 @@
 // Side panel sections for the order system: which variant of each order rule
 // a family uses, where its deforms land, and the components placed on a base.
 
-import { api, type AlterationSummary, type ComponentKind, type ComponentRef, type ComponentSummary, type Zone } from "./api";
+import {
+  api,
+  PARTS,
+  type AlterationSummary,
+  type ComponentKind,
+  type ComponentRef,
+  type ComponentSummary,
+  type CornerSide,
+  type DrawingView,
+  type Part,
+  type Zone,
+} from "./api";
 import { el } from "./dom";
-import type { GlyphEditor } from "./editor";
+import { PART_COLORS, type GlyphEditor } from "./editor";
 import { contoursBounds } from "./geometry";
 import { iconButton, numberField } from "./editorSide";
+import { partValueFields, stateRef } from "./partAxes";
 
 const ORDERS = ["giiz", "kaib", "salis", "rabi", "hamis", "sadis", "sabi"];
 
@@ -184,6 +196,38 @@ export function componentsSection(
       on.addEventListener("change", () => update(r.id, (x) => (x.on = on.value === "" ? null : Number(on.value))));
       const remove = el("button", { class: "pill small ghost" }, "Remove");
       remove.addEventListener("click", () => void ed.setPlacements(refs().filter((x) => x.id !== r.id)));
+      const decompose = el("button", { class: "pill small ghost", title: "Turn it into plain paths on this base" }, "Decompose");
+      decompose.addEventListener("click", () => void ed.decompose(r.id));
+      const edit = el("button", { class: "pill small ghost", title: "Open it with this base behind it (or double-click it)" }, "Edit in place");
+      edit.addEventListener("click", () => void ed.editComponentInPlace(r.id));
+      // Swap for another component, keeping where and how it sits.
+      const swap = el("select", { class: "zone-select", "aria-label": "Component" }) as HTMLSelectElement;
+      for (const c of components) {
+        const o = el("option", { value: c.id }, c.name) as HTMLOptionElement;
+        o.selected = c.id === r.component;
+        swap.append(o);
+      }
+      swap.addEventListener("change", () => update(r.id, (x) => (x.component = swap.value)));
+      // Line it up: its origin on an anchor, or level with another placement.
+      const lineUp = el("select", { class: "zone-select", "aria-label": "Line it up", title: "Put its origin on an anchor, or line it up with another component" }) as HTMLSelectElement;
+      lineUp.append(el("option", { value: "" }, "Line up with…"));
+      for (const [name, a] of Object.entries(ed.drawing?.anchors ?? {})) {
+        if (!name.startsWith("_")) lineUp.append(el("option", { value: `a:${a.x}:${a.y}` }, `Anchor ${name}`));
+      }
+      for (const other of placed) {
+        if (other.placement.id === r.id) continue;
+        const o = other.placement;
+        lineUp.append(
+          el("option", { value: `x:${o.at.x}` }, `${other.name}: same X`),
+          el("option", { value: `y:${o.at.y}` }, `${other.name}: same Y`),
+        );
+      }
+      lineUp.addEventListener("change", () => {
+        const [k, a, b] = lineUp.value.split(":");
+        if (k === "a") update(r.id, (x) => (x.at = { x: Number(a), y: Number(b) }));
+        else if (k === "x") update(r.id, (x) => (x.at.x = Number(a)));
+        else if (k === "y") update(r.id, (x) => (x.at.y = Number(a)));
+      });
       row.append(
         el(
           "div",
@@ -205,9 +249,112 @@ export function componentsSection(
           el("label", { class: "field grow", title: "The path it sits on: a shortened leg or crick carries it along" }, el("span", {}, "Sits on"), on),
           remove,
         ),
+        el("label", { class: "field", title: "Swap it for another component" }, el("span", {}, "Component"), swap),
+        ...(lineUp.options.length > 1 ? [lineUp] : []),
+        ...partValueFields(components.find((c) => c.id === r.component)?.axes ?? [], r.values, (values) => update(r.id, (x) => (x.values = values))),
+        el("div", { class: "button-row" }, edit, decompose),
       );
     }
     box.append(row);
   }
+  if (ed.ruleEnds.length) {
+    box.append(el("div", { class: "menu-label rule-label", title: "Placed on every stroke a component's rule names; adjust or switch off each one here" }, "By rule"));
+    for (const r of ed.ruleEnds) {
+      const k = `${r.component}@${r.key}`;
+      const selected = ed.ruleSel === k;
+      const head = el("button", { class: `placement-head${selected ? " on" : ""}${r.on ? "" : " off"}` }, `${r.name} · ${r.label}`);
+      head.addEventListener("click", () => {
+        ed.ruleSel = selected ? null : k;
+        ed.render();
+        ed.refreshSide();
+      });
+      const row = el("div", { class: `placement${selected ? " selected" : ""}` }, head);
+      if (selected) {
+        const t = r.tweak;
+        const set = (change: Partial<typeof t>, on = r.on) => void ed.setRuleEnd(r, on, { ...t, ...change });
+        const toggle = el("button", { class: `pill small ghost${r.on ? "" : " on"}`, title: r.on ? "Leave this one out" : "Put it back" }, r.on ? "Switch off" : "Switch on");
+        toggle.addEventListener("click", () => set({}, !r.on));
+        const reset = el("button", { class: "pill small ghost", title: "Back to where the rule puts it" }, "Reset");
+        reset.disabled = t.dx === 0 && t.dy === 0 && t.scale === 1 && !t.flip && !Object.keys(t.values ?? {}).length;
+        reset.addEventListener("click", () => set({ dx: 0, dy: 0, scale: 1, flip: false, values: {} }));
+        row.append(
+          el("div", { class: "field-row" }, numberField("Nudge X", t.dx, (v) => set({ dx: v })), numberField("Nudge Y", t.dy, (v) => set({ dy: v }))),
+          el(
+            "div",
+            { class: "field-row" },
+            numberField("Scale %", Math.round(t.scale * 1000) / 10, (v) => set({ scale: v / 100 })),
+            el("div", { class: "button-row" }, iconButton("flipH", "Flip", () => set({ flip: !t.flip }), `icon-btn${t.flip ? " on" : ""}`)),
+          ),
+          ...partValueFields(components.find((c) => c.id === r.component)?.axes ?? [], t.values, (values) => set({ values })),
+          el("div", { class: "button-row" }, toggle, reset),
+        );
+      }
+      box.append(row);
+    }
+  }
+  const tools = el("div", { class: "button-row" });
+  const make = el("button", { class: "pill small ghost", title: "Turn the selected paths into a component placed where they were" }, "Make from selection");
+  make.disabled = !ed.selectedContours().length;
+  make.addEventListener("click", () => void ed.makeComponent());
+  tools.append(make);
+  if (placed.length > 1) {
+    const all = el("button", { class: "pill small ghost", title: "Turn every placed component into plain paths" }, "Decompose all");
+    all.addEventListener("click", () => void ed.decompose());
+    tools.append(all);
+  }
+  box.append(tools);
   return [el("h3", { class: "section-label", title: "Leaves, caps and corners drawn once and placed here" }, "Components"), box];
+}
+
+/** For a component: the strokes it lands on by rule, and which corners. */
+export function componentRuleSection(ed: GlyphEditor, d: DrawingView, kind: ComponentKind): Node[] {
+  const rule = d.rule;
+  if (!rule || d.target.kind !== "component") return [];
+  const id = stateRef(d.target.id).part;
+  const box = el("div", { class: "side-box" });
+  const save = async (landsOn: Part[], corners: CornerSide) => {
+    try {
+      await api.setComponentRule(id, landsOn, corners);
+      const fresh = await api.getDrawing(d.target);
+      d.rule = fresh.rule;
+      ed.changedInCore();
+      ed.refreshSide();
+    } catch (err) {
+      ed.notify(`Could not change where it lands: ${err}`, "error");
+    }
+  };
+  const where = kind === "leaf" ? "Both ends of" : kind === "cap" ? "The bottom of" : "The corners of";
+  const tags = el("div", { class: "part-tags", role: "group", "aria-label": "Lands on" });
+  for (const part of PARTS) {
+    const on = rule.landsOn.includes(part);
+    const b = el(
+      "button",
+      { class: `part-tag${on ? " on" : ""}`, style: `--part:${PART_COLORS[part]}`, "aria-pressed": String(on) },
+      el("span", { class: "part-dot", "aria-hidden": "true" }),
+      part,
+    );
+    b.addEventListener("click", () => void save(on ? rule.landsOn.filter((p) => p !== part) : [...rule.landsOn, part], rule.corners));
+    tags.append(b);
+  }
+  box.append(el("div", { class: "menu-label rule-label" }, `${where} every`), tags);
+  if (kind === "corner") {
+    const seg = el("div", { class: "menu-segment rule-corners", role: "group", "aria-label": "Corners" });
+    for (const side of ["outer", "inner", "both"] as const) {
+      const b = el(
+        "button",
+        {
+          class: `segment${rule.corners === side ? " on" : ""}`,
+          "aria-pressed": String(rule.corners === side),
+          title: side === "outer" ? "Corners that point out of the ink" : side === "inner" ? "Corners where two strokes meet" : "Every sharp corner",
+        },
+        side[0].toUpperCase() + side.slice(1),
+      );
+      b.addEventListener("click", () => void save(rule.landsOn, side));
+      seg.append(b);
+    }
+    box.append(seg);
+  }
+  box.append(el("p", { class: "side-note rule-uses" }, rule.landsOn.length ? `Placed ${rule.uses} ${rule.uses === 1 ? "time" : "times"} across the bases.` : "Placed by hand only."));
+  const origin = kind === "leaf" ? "Drawn for the right end of a bar, its top corner at the origin." : kind === "cap" ? "Drawn for the bottom of a stroke, its middle at the origin." : "Drawn for a corner whose edges run right and up from the origin.";
+  return [el("h3", { class: "section-label", title: origin }, "Lands on"), box];
 }

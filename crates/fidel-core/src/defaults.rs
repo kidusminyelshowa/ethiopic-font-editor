@@ -30,6 +30,21 @@ pub const SHORTEN_RIGHT_LEG: &str = "shorten.right-leg";
 pub const SHORTEN_RIGHT_LEGS: &str = "shorten.right-legs";
 pub const LABIAL_MARK: &str = "mark.labial";
 pub const OA_MARK: &str = "mark.oa";
+pub const CAP_TOP: &str = "cap.top";
+pub const SHOE_BOTTOM: &str = "shoe.bottom";
+pub const TICK_TOP_RIGHT: &str = "stroke.tick-top-right";
+
+/// What each derived row adds to its source row's base (see
+/// [`crate::charset::ROW_SOURCE`]): ሸ ቸ ኘ ዠ ጨ take a cap, ቨ ጀ ዸ a foot,
+/// ቐ ኸ ጘ a tick.
+pub fn derived_adds(row: &str) -> Option<&'static str> {
+    Some(match row {
+        "sha" | "ca" | "nya" | "zha" | "cha" => CAP_TOP,
+        "va" | "ja" | "dda" => SHOE_BOTTOM,
+        "qha" | "kxa" | "gga" => TICK_TOP_RIGHT,
+        _ => return None,
+    })
+}
 
 fn alteration(id: &str, name: &str, verb: Verb, region: Region, parts: &[Part]) -> Alteration {
     Alteration {
@@ -95,6 +110,9 @@ pub fn extra_alterations() -> Vec<Alteration> {
     vec![
         alteration(LABIAL_MARK, "Labial mark (-wa)", Verb::Stroke, Region::TopRight, &[Leg, Stem, Diagonal]),
         alteration(OA_MARK, "-oa mark", Verb::Loop, Region::TopRight, &[Leg, Stem, Diagonal]),
+        alteration(CAP_TOP, "Cap (ሸ ቸ ኘ ዠ ጨ)", Verb::Cap, Region::TopLeft, &[]),
+        alteration(SHOE_BOTTOM, "Foot (ቨ ጀ)", Verb::Shoe, Region::BottomLeft, &[Leg, Stem]),
+        alteration(TICK_TOP_RIGHT, "Tick (ቐ ኸ ጘ)", Verb::Stroke, Region::TopRight, &[]),
     ]
 }
 
@@ -200,6 +218,8 @@ pub fn geez_project(metrics: Metrics) -> Project {
                     built_on: default_built_on(c).map(|parent| {
                         Order::ALL.into_iter().find(|o| f.codepoint(*o) == parent).expect("same family")
                     }),
+                    components: Vec::new(),
+                    anchors: None,
                 },
             );
         }

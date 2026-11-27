@@ -71,6 +71,13 @@ impl Project {
                         name: sentence_case(name),
                         advance_width: advance,
                         contours: Vec::new(),
+                        components: Vec::new(),
+                        metric_keys: Default::default(),
+                        anchors: Default::default(),
+                        // Accented letters start built from their parts.
+                        built_from: charset::recipe(e.cp)
+                            .map(|(base, marks)| std::iter::once(base).chain(marks.iter().copied()).collect())
+                            .unwrap_or_default(),
                     });
                 }
             }
@@ -85,6 +92,7 @@ impl Project {
         }
         self.charsets = sets;
         self.languages = languages;
+        self.after_edit();
     }
 
     fn ensure_extra_rules(&mut self) {
@@ -102,10 +110,13 @@ impl Project {
             if !self.bases.contains_key(&base) {
                 let mut b = Base::new(base.clone(), name, 600.0);
                 let source = charset::ROW_SOURCE.iter().find(|(row, _)| *row == base);
-                if let Some(src) = source.and_then(|(_, src)| self.bases.get(*src)) {
-                    b.advance_width = src.advance_width;
-                    b.contours = src.contours.clone();
-                    b.anchors = src.anchors.clone();
+                if let Some((_, src)) = source.filter(|(_, src)| self.bases.contains_key(*src)) {
+                    let adds: Vec<String> =
+                        defaults::derived_adds(&base).map(|a| vec![a.to_string()]).unwrap_or_default();
+                    for alt in defaults::extra_alterations().into_iter().filter(|a| adds.contains(&a.id)) {
+                        self.alterations.entry(alt.id.clone()).or_insert(alt);
+                    }
+                    b.derived = Some(crate::base::Derived { from: src.to_string(), adds, own: false });
                 }
                 self.bases.insert(base.clone(), b);
             }
@@ -132,6 +143,8 @@ impl Project {
                     state: FidelState::Linked,
                     alteration_overrides: BTreeMap::new(),
                     built_on: None,
+                    components: Vec::new(),
+                    anchors: None,
                 },
             );
             // Only the new fidel takes its default form: choices made on the

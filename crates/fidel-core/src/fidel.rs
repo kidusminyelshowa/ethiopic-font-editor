@@ -47,6 +47,14 @@ pub struct Fidel {
     /// follow. The order rule's alterations are added on top as usual.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub built_on: Option<Order>,
+    /// Components placed on this fidel alone, on top of its outline: a
+    /// leaf on a hand-drawn fidel, a dot on one order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<crate::component::ComponentRef>,
+    /// Anchors of this order alone, in place of its base's: the 5th order's
+    /// ring moves `bottom`. None takes the base's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchors: Option<std::collections::BTreeMap<String, crate::geometry::Vec2>>,
 }
 
 /// Where a contour in a resolved fidel came from. Nudges use it to find their
@@ -65,6 +73,9 @@ pub enum Source {
     /// A component placed by rule on a stroke end (a leaf on a bar), as
     /// `component@owner/contour:side`.
     Leaf(String),
+    /// A component placed on this fidel alone, by its placement id. Shown
+    /// as a placement in the editor, not as editable contours.
+    Placed(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

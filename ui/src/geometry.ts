@@ -29,6 +29,8 @@ export interface Contour {
   locked?: boolean;
   /** Hidden in the editor; still part of the glyph. */
   hidden?: boolean;
+  /** An open path: no closing segment. Kept while drawing; not exported. */
+  open?: boolean;
 }
 
 /** An on-curve point with its handles: easier to edit than the flat list. */
@@ -54,27 +56,33 @@ export function toNodes(c: Contour): Node[] {
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     if (!isOn(p)) continue;
-    const prev = pts[(i - 1 + n) % n];
-    const next = pts[(i + 1) % n];
+    const prev = c.open && i === 0 ? null : pts[(i - 1 + n) % n];
+    const next = c.open && i === n - 1 ? null : pts[(i + 1) % n];
     const node: Node = { id: p.id, pos: { ...p.pos }, smooth: !!p.smooth };
-    if (!isOn(prev) && p.kind === "curve") node.in = { id: prev.id, pos: { ...prev.pos } };
-    if (!isOn(next)) node.out = { id: next.id, pos: { ...next.pos } };
+    if (prev && !isOn(prev) && p.kind === "curve") node.in = { id: prev.id, pos: { ...prev.pos } };
+    if (next && !isOn(next)) node.out = { id: next.id, pos: { ...next.pos } };
     nodes.push(node);
   }
   return nodes;
 }
 
 /**
- * Join nodes back into a closed contour. A segment is a curve when either end
- * has a handle on that side; a missing handle sits on its node. Existing ids
- * are reused and new ones are taken from `nextId`.
+ * Join nodes back into a contour, closed unless `open`. A segment is a curve
+ * when either end has a handle on that side; a missing handle sits on its
+ * node. Existing ids are reused and new ones are taken from `nextId`.
  */
-export function fromNodes(nodes: Node[], id: number, part?: Part | null, firstFreeId?: number): Contour {
+export function fromNodes(nodes: Node[], id: number, part?: Part | null, firstFreeId?: number, open = false): Contour {
   let next = firstFreeId ?? maxId(nodes) + 1;
   const n = nodes.length;
+  if (open && n) {
+    // The ends of an open path have no outer handles.
+    delete nodes[0].in;
+    delete nodes[n - 1].out;
+  }
   // Fill in missing handles first: a segment is a curve if either end has one.
   const curve: boolean[] = [];
-  for (let k = 1; k <= n; k++) {
+  if (open) curve[0] = false;
+  for (let k = 1; k <= (open ? n - 1 : n); k++) {
     const a = nodes[k - 1];
     const b = nodes[k % n];
     curve[k % n] = !!(a.out || b.in);
@@ -101,12 +109,14 @@ export function fromNodes(nodes: Node[], id: number, part?: Part | null, firstFr
     points.push(on(nodes[k], curve[k]));
   }
   if (curve[0]) points.push(...handles(nodes[n - 1], nodes[0]));
-  return { id, points, part: part ?? null };
+  const out: Contour = { id, points, part: part ?? null };
+  if (open) out.open = true;
+  return out;
 }
 
 /** `fromNodes`, keeping the layer name of the contour it came from. */
 export function rebuilt(c: Contour, nodes: Node[], firstFreeId?: number): Contour {
-  const out = fromNodes(nodes, c.id, c.part, firstFreeId);
+  const out = fromNodes(nodes, c.id, c.part, firstFreeId, !!c.open);
   if (c.name) out.name = c.name;
   return out;
 }
@@ -134,8 +144,9 @@ export function validate(c: Contour): string | null {
   }
   const start = c.points.findIndex(isOn);
   if (start < 0) return "no on-curve point";
+  if (c.open && (start !== 0 || !isOn(c.points[n - 1]))) return "open path ends on a handle";
   let handles = 0;
-  for (let i = 1; i <= n; i++) {
+  for (let i = 1; i <= (c.open ? n - 1 : n); i++) {
     const p = c.points[(start + i) % n];
     if (p.kind === "offcurve") {
       if (++handles > 2) return "too many handles in a row";
@@ -160,7 +171,7 @@ export function contourPath(c: Contour): string {
   if (start < 0) return "";
   let d = `M${num(pts[start].pos.x)} ${num(pts[start].pos.y)}`;
   let pending: Vec2[] = [];
-  for (let i = 1; i <= n; i++) {
+  for (let i = 1; i <= (c.open ? n - 1 : n); i++) {
     const p = pts[(start + i) % n];
     if (p.kind === "offcurve") {
       pending.push(p.pos);
@@ -168,11 +179,11 @@ export function contourPath(c: Contour): string {
       d += `C${num(pending[0].x)} ${num(pending[0].y)} ${num(pending[1].x)} ${num(pending[1].y)} ${num(p.pos.x)} ${num(p.pos.y)}`;
       pending = [];
     } else {
-      if (i < n) d += `L${num(p.pos.x)} ${num(p.pos.y)}`;
+      if (i < n || c.open) d += `L${num(p.pos.x)} ${num(p.pos.y)}`;
       pending = [];
     }
   }
-  return d + "Z";
+  return c.open ? d : d + "Z";
 }
 
 export function drawingPath(contours: Contour[]): string {
@@ -315,7 +326,9 @@ export const isClockwise = (c: Contour): boolean => signedArea(c) < 0;
 export function reversed(c: Contour): Contour {
   const nodes = toNodes(c);
   if (nodes.length < 2) return clone(c);
-  const back = [nodes[0], ...nodes.slice(1).reverse()].map((nd) => ({ ...nd, in: nd.out, out: nd.in }));
+  // A closed path keeps its start point; an open one starts from its other end.
+  const order = c.open ? [...nodes].reverse() : [nodes[0], ...nodes.slice(1).reverse()];
+  const back = order.map((nd) => ({ ...nd, in: nd.out, out: nd.in }));
   return rebuilt(c, back);
 }
 
@@ -356,15 +369,19 @@ export function convertNodes(c: Contour, ids: Set<number>, to: NodeType): Contou
       delete nd.in;
       delete nd.out;
       // A neighbour's handle that sits on its own point would keep the segment curved.
-      const prev = nodes[(k - 1 + n) % n];
-      const nxt = nodes[(k + 1) % n];
-      if (prev.out && same(prev.out.pos, prev.pos)) delete prev.out;
-      if (nxt.in && same(nxt.in.pos, nxt.pos)) delete nxt.in;
+      const prev = neighbour(nodes, k, -1, c.open);
+      const nxt = neighbour(nodes, k, 1, c.open);
+      if (prev?.out && same(prev.out.pos, prev.pos)) delete prev.out;
+      if (nxt?.in && same(nxt.in.pos, nxt.pos)) delete nxt.in;
     } else {
       nd.smooth = true;
       if (n < 2) return;
-      const prev = nodes[(k - 1 + n) % n].pos;
-      const nxt = nodes[(k + 1) % n].pos;
+      // At the end of an open path, the missing neighbour mirrors the other.
+      const pn = neighbour(nodes, k, -1, c.open);
+      const nn = neighbour(nodes, k, 1, c.open);
+      if (!pn && !nn) return;
+      const prev = pn ? pn.pos : { x: 2 * nd.pos.x - nn!.pos.x, y: 2 * nd.pos.y - nn!.pos.y };
+      const nxt = nn ? nn.pos : { x: 2 * nd.pos.x - pn!.pos.x, y: 2 * nd.pos.y - pn!.pos.y };
       // The tangent: through the handles when there are both, else from neighbour to neighbour.
       let tx = nxt.x - prev.x;
       let ty = nxt.y - prev.y;
@@ -394,4 +411,12 @@ export function convertNodes(c: Contour, ids: Set<number>, to: NodeType): Contou
     }
   });
   return rebuilt(c, nodes, next);
+}
+
+/** The node before (-1) or after (1) node k, or null past the end of an open path. */
+export function neighbour(nodes: Node[], k: number, step: -1 | 1, open?: boolean): Node | null {
+  const n = nodes.length;
+  const j = k + step;
+  if (open && (j < 0 || j >= n)) return null;
+  return nodes[(j + n) % n] ?? null;
 }

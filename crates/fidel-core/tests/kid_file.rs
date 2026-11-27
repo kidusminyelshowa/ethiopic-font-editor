@@ -33,6 +33,46 @@ fn sample() -> Project {
     p.draw_by_hand("ha", Order::Salis).unwrap();
     p.families.get_mut("ta").unwrap().rule_variants.insert(Order::Rabi, 1);
     p.metrics.pa_top = 720.0;
+    let guide = |id, angle| fidel_core::guides::Guide {
+        id,
+        x: 100.0,
+        y: 350.0,
+        angle,
+        name: "stem".into(),
+        locked: id == 2,
+        color: Some("#c2442a".into()),
+    };
+    p.guides.set("base:ha", vec![guide(1, 90.0)], vec![guide(2, 0.0)]);
+    p.backgrounds
+        .insert("base:ha".into(), vec![Contour::rect(0, None, Vec2::new(0.0, 0.0), Vec2::new(60.0, 700.0))]);
+    p.organize.set_mark(
+        "fidel:ha/kaib",
+        fidel_core::organize::GlyphMark {
+            color: Some(fidel_core::organize::MarkColor::Orange),
+            tags: vec!["review".into()],
+            note: "Loop too tight".into(),
+        },
+    );
+    p.organize.set_filters(vec![fidel_core::organize::SmartFilter {
+        name: "To review".into(),
+        query: String::new(),
+        rules: vec!["tag:review".into()],
+    }]);
+    p.kerning.set_class(fidel_core::kerning::KernSide::Left, "ha", &['ሀ', 'ሁ'], None).unwrap();
+    p.kerning.set_pair("@ha", "ለ", Some(-30)).unwrap();
+    p.set_axis(
+        None,
+        fidel_core::designspace::Axis {
+            tag: "wght".into(),
+            name: "Weight".into(),
+            min: 400.0,
+            default: 400.0,
+            max: 700.0,
+            map: vec![],
+        },
+    )
+    .unwrap();
+    p.add_master("Bold", std::collections::BTreeMap::from([("wght".to_string(), 700.0)]));
     p
 }
 

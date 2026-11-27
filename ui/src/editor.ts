@@ -3,7 +3,23 @@
 // to the core (set_drawing) when each gesture ends, so every fidel that uses
 // the drawing updates.
 
-import { api, PARTS, type ComponentRef, type DeformHandle, type DrawingTarget, type DrawingView, type Part } from "./api";
+import {
+  api,
+  PARTS,
+  type BooleanKind,
+  type ComponentKind,
+  type ComponentRef,
+  type DeformHandle,
+  type DrawingTarget,
+  type DrawingView,
+  type ImpactView,
+  type Part,
+  type PathOp,
+  type MetricKeys,
+  type RuleEnd,
+  type StrokeJoin,
+  type Tweak,
+} from "./api";
 import {
   clone,
   constrain45,
@@ -34,6 +50,7 @@ import {
   addExtremes,
   closestOnSegment,
   correctDirections,
+  directionOk,
   fixIssues,
   insertPoint,
   ISSUE_LABEL,
@@ -45,6 +62,7 @@ import {
   rotateAbout,
   roundedRectContour,
   scaleAbout,
+  pointAt,
   segments,
   selectionBox,
   setSegmentKind,
@@ -56,11 +74,33 @@ import {
   type Matrix,
   type OutlineIssue,
 } from "./pathops";
+import {
+  autoHandles,
+  balanceContour,
+  breakAt,
+  closePath,
+  combTeeth,
+  endOf,
+  eraseSegments,
+  fitStroke,
+  harmonize,
+  joinPaths,
+  moveTunni,
+  powerNudge,
+  roundCorners,
+  tidyUp,
+  tunniPoint,
+} from "./curves";
 import { gridStep, onPrefs, prefs } from "./prefs";
+import { clipLine, crossings, distanceToGuide, fmt, guideDir, isHorizontal, isVertical, projectOnGuide, rulerTicks, type Guide } from "./guides";
 import { importSvg, SvgImportError } from "./svgImport";
+import { inkFromPixels, traceToContours } from "./trace";
+import { placeContours, unplaceContours } from "./components";
+import { isFigmaClipboard, svgFromHtml, vectorFileToSvg } from "./vectorImport";
+import { actionFor, comboOf, isFreedDefault } from "./shortcuts";
 
 /** Move selects and moves whole shapes; Direct selects points and handles. */
-export type Tool = "select" | "direct" | "pen" | ShapeKind | "hand";
+export type Tool = "select" | "direct" | "pen" | "pencil" | "knife" | "eraser" | "measure" | ShapeKind | "hand";
 export type ShapeKind = "rect" | "rounded" | "ellipse" | "polygon" | "star";
 export const SHAPES: ShapeKind[] = ["rect", "rounded", "ellipse", "polygon", "star"];
 export const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -74,7 +114,19 @@ const isShape = (t: Tool): t is ShapeKind => (SHAPES as string[]).includes(t);
 
 /** Snap distance, in screen pixels. */
 const SNAP_PX = 6;
+/** Point sizes for the "Point size" display option. */
+const NODE_SCALE: Record<string, number> = { small: 0.8, medium: 1, large: 1.35 };
 const HIT_PX = 8;
+/** Half the width of the eraser stroke, in screen pixels. */
+const ERASER_RADIUS = 6;
+
+function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
 /** Transform handle size and the ring outside a corner that rotates. */
 const HANDLE_PX = 7;
 const ROTATE_PX = 18;
@@ -117,9 +169,21 @@ type Gesture =
   | { kind: "zone"; id: string; start: number; now: number }
   | { kind: "placement"; id: number; start: Vec2; d: Vec2; moved: boolean }
   | { kind: "deform"; i: number; start: Vec2; d: number }
+  | { kind: "pencil"; pts: Vec2[]; startScreen: Vec2 }
+  | { kind: "knife"; start: Vec2; now: Vec2 }
+  | { kind: "eraser"; pts: Vec2[] }
+  | { kind: "measure"; start: Vec2; now: Vec2 }
+  | { kind: "guide"; scope: GuideScope; id: number; start: Vec2; origin: Vec2; isNew: boolean; moved: boolean; offRuler: boolean }
+  | { kind: "tunni"; ci: number; seg: number; base: Contour[]; moved: boolean }
+  | { kind: "anchor"; name: string; start: Vec2; origin: Vec2; moved: boolean }
   | { kind: "bend"; ci: number; seg: number; t: number; start: Vec2; base: Contour[]; moved: boolean };
 
 type SelectMode = "replace" | "add" | "remove";
+
+export type GuideScope = "local" | "global";
+
+/** Width of the rulers along the top and left of the canvas, in pixels. */
+const RULER_PX = 18;
 
 /** One step of a drawing's history. `before` is the state the step started from. */
 interface Step {
@@ -144,7 +208,18 @@ export interface EditorHost {
   renderSide(editor: GlyphEditor): void;
   /** Open the canvas context menu at a screen point. */
   contextMenu(editor: GlyphEditor, at: { x: number; y: number }): void;
+  /** A character's drawing and current outline, for the line of text. */
+  glyphFor(ch: string): { target: DrawingTarget; d: string | null; advance: number } | null;
+  /** The character a drawing makes, if any. */
+  charOf(target: DrawingTarget): string | null;
+  /** Kerning between two characters of the line of text. */
+  kern?(left: string, right: string): number;
+  /** Open another drawing in the editor. */
+  openTarget(target: DrawingTarget): void;
 }
+
+/** Width of a space in the line of text, as a share of the em. */
+const SPACE_EM = 0.25;
 
 const key = (ci: number, pi: number) => `${ci}:${pi}`;
 
@@ -206,10 +281,29 @@ export class GlyphEditor {
   private contextKey = "";
   /** Where rotations and Alt-scaling turn around; the box centre when unset. */
   private pivot: Vec2 | null = null;
+  /** The drawing's own guides and the global ones. */
+  guides: { local: Guide[]; global: Guide[] } = { local: [], global: [] };
+  /** The line of text the edited glyph sits in, and where it sits. */
+  textLine = "";
+  textIndex = -1;
+  /** The drawing's background (mask) layer: outlines kept behind it to compare against. */
+  background: Contour[] = [];
+  /** A component opened from a base: that base, drawn behind it in the component's own space. */
+  private hostBehind = new Map<string, Contour[]>();
+  /** Another glyph shown behind this one, by character, per drawing. */
+  compareWith = new Map<string, string>();
+  /** For a base or an alteration: the fidel its edits reach. */
+  reach: ImpactView[] | null = null;
+  /** The guide picked on the canvas, shown in the side panel. */
+  guideSel: { scope: GuideScope; id: number } | null = null;
+  /** The measuring line, kept until Escape or another tool. */
+  private measureLine: { a: Vec2; b: Vec2 } | null = null;
   /** Guides shown while a drag snaps. */
   private snapLines: { x?: number; y?: number } = {};
   private gesture: Gesture | null = null;
   private pen: Node[] | null = null;
+  /** When the pen carries on an open path: the path and where it sat in the list. */
+  private penFrom: { at: number; contour: Contour } | null = null;
   private cursor: Vec2 | null = null;
   private spaceHeld = false;
   /** Z held down: click zooms in, Alt-click out, drag zooms to an area. */
@@ -255,6 +349,36 @@ export class GlyphEditor {
     return this.sketches.get(this.targetKey);
   }
 
+  /** The anchor picked on the canvas or in the panel. */
+  anchorSel: string | null = null;
+  /** Another glyph shown against this one by their anchors. */
+  markPreview: { partner: string; d: string | null } | null = null;
+  /** A parametric part at other settings, from the preview sliders. */
+  partPreview: string | null = null;
+  /** Where in the design space to show this drawing, from the proof's axis sliders. */
+  private previewAt: Record<string, number> | null = null;
+  private previewD: string | null = null;
+
+  /** Show this drawing interpolated at a location, over the master being edited; null hides it. */
+  async showLocation(at: Record<string, number> | null): Promise<void> {
+    this.previewAt = at;
+    if (!at || !this.target) {
+      this.previewD = null;
+      this.render();
+      return;
+    }
+    const target = this.target;
+    try {
+      const d = await api.drawingAt(target, at);
+      if (this.previewAt === at && this.target === target) {
+        this.previewD = d;
+        this.render();
+      }
+    } catch {
+      this.previewD = null;
+    }
+  }
+
   async open(target: DrawingTarget, contextFamily?: string): Promise<void> {
     const sameDrawing = this.target && this.target.kind === target.kind && this.target.id === target.id;
     this.drawing = await api.getDrawing(target, contextFamily);
@@ -274,10 +398,444 @@ export class GlyphEditor {
       this.selection.clear();
       this.pivot = null;
       this.pen = null;
+      this.guideSel = null;
+      this.measureLine = null;
       this.fit();
     }
+    if (!sameDrawing) {
+      this.ruleSel = null;
+      this.anchorSel = null;
+      this.markPreview = null;
+      this.partPreview = null;
+      this.previewD = null;
+    } else if (this.markPreview) void this.refreshMarkPreview();
+    void this.loadRuleEnds();
+    if (this.previewAt) void this.showLocation(this.previewAt);
+    if (!sameDrawing) {
+      void this.loadGuides();
+      void this.loadReach();
+      void this.loadBackground();
+    }
+    this.placeInText();
     this.title.textContent = this.drawing.title;
     this.subtitle.textContent = this.drawing.subtitle;
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  // ---------- Line of text ----------
+
+  /** Set the line of text; the edited glyph is shown at its place in it. */
+  setText(text: string): void {
+    this.textLine = [...text].slice(0, 80).join("");
+    this.placeInText();
+    this.render();
+  }
+
+  /** Find the edited glyph in the line: the occurrence nearest where it was. */
+  private placeInText(): void {
+    const ch = this.target ? this.host.charOf(this.target) : null;
+    const chars = [...this.textLine];
+    if (!ch) {
+      this.textIndex = -1;
+      return;
+    }
+    if (chars[this.textIndex] === ch) return;
+    let best = -1;
+    chars.forEach((c, i) => {
+      if (c === ch && (best < 0 || Math.abs(i - this.textIndex) < Math.abs(best - this.textIndex))) best = i;
+    });
+    this.textIndex = best;
+  }
+
+  /** Edit the glyph `step` places along the line (skipping spaces and characters with no drawing). */
+  stepInText(step: number): void {
+    const chars = [...this.textLine];
+    for (let i = this.textIndex + step; i >= 0 && i < chars.length; i += step) {
+      const g = this.host.glyphFor(chars[i]);
+      if (!g) continue;
+      this.textIndex = i;
+      this.host.openTarget(g.target);
+      return;
+    }
+  }
+
+  /** The other glyphs of the line, laid out around the edited one at their advances. */
+  private neighbours(): { i: number; x: number; d: string; advance: number }[] {
+    if (this.textIndex < 0 || !this.drawing) return [];
+    const chars = [...this.textLine];
+    const upm = this.drawing.metrics.units_per_em || 1000;
+    const glyph = (ch: string) => {
+      if (/\s/.test(ch)) return { d: "", advance: upm * SPACE_EM };
+      const g = this.host.glyphFor(ch);
+      return g ? { d: g.d ?? "", advance: g.advance } : null;
+    };
+    const out: { i: number; x: number; d: string; advance: number }[] = [];
+    const kern = (l: string, r: string) => this.host.kern?.(l, r) ?? 0;
+    let x = 0;
+    let next = chars[this.textIndex];
+    for (let i = this.textIndex - 1; i >= 0; i--) {
+      const g = glyph(chars[i]);
+      if (!g) continue;
+      x -= g.advance + kern(chars[i], next);
+      next = chars[i];
+      out.push({ i, x, ...g });
+    }
+    x = this.frameWidth ?? 0;
+    let prev = chars[this.textIndex];
+    for (let i = this.textIndex + 1; i < chars.length; i++) {
+      const g = glyph(chars[i]);
+      if (!g) continue;
+      x += kern(prev, chars[i]);
+      prev = chars[i];
+      out.push({ i, x, ...g });
+      x += g.advance;
+    }
+    return out;
+  }
+
+  // ---------- Background layer ----------
+
+  private async loadBackground(): Promise<void> {
+    const k = this.targetKey;
+    this.background = [];
+    try {
+      const bg = await api.getBackground(k);
+      if (this.targetKey !== k) return;
+      this.background = translated(bg, this.origin);
+    } catch {
+      this.background = [];
+    }
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  private saveBackground(): void {
+    const stored = translated(this.background, { x: -this.origin.x, y: -this.origin.y });
+    api.setBackground(this.targetKey, stored).catch((err) => this.host.toast(`Could not save the background: ${err}`, "error"));
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Copy the selected paths (or the whole drawing) to the background, replacing what was there. */
+  copyToBackground(): void {
+    const sel = this.selectedContours();
+    const from = sel.length ? sel.map((ci) => this.contours[ci]) : this.contours;
+    this.background = clone(from).map((c, i) => ({ ...c, id: i, locked: undefined, hidden: undefined }));
+    this.saveBackground();
+    this.host.toast(sel.length ? "Selection copied to the background." : "Drawing copied to the background.");
+  }
+
+  /** Swap the drawing and its background: go back to the copy, keeping the edit behind it. */
+  swapBackground(): void {
+    if (!this.background.length) return;
+    const front = this.contours;
+    this.contours = clone(this.background);
+    this.background = clone(front);
+    this.selection.clear();
+    this.commit("Swap with background");
+    this.saveBackground();
+  }
+
+  clearBackground(): void {
+    this.background = [];
+    this.saveBackground();
+  }
+
+  /** Show another glyph behind this one; an empty string stops. */
+  setCompare(ch: string): void {
+    const first = [...ch.trim()][0] ?? "";
+    if (first) this.compareWith.set(this.targetKey, first);
+    else this.compareWith.delete(this.targetKey);
+    this.render();
+  }
+
+  get compare(): string {
+    return this.compareWith.get(this.targetKey) ?? "";
+  }
+
+  /** Another master of this drawing shown behind it, by master name, with its outline. */
+  compareMaster: { key: string; master: string; d: string } | null = null;
+
+  /** Show this drawing in another master behind it; null stops. */
+  async setCompareMaster(master: string | null): Promise<void> {
+    const target = this.target;
+    if (!master || !target) {
+      this.compareMaster = null;
+      this.render();
+      return;
+    }
+    try {
+      const all = await api.masterDrawings(target);
+      const m = all.find((x) => x.master === master);
+      this.compareMaster = m ? { key: this.targetKey, master, d: m.d } : null;
+    } catch (err) {
+      this.host.toast(`Could not show that master: ${err}`, "error");
+    }
+    this.render();
+  }
+
+  /** Trace the sketch image into outlines, added to the drawing. */
+  async traceSketch(threshold = 128): Promise<void> {
+    const sk = this.sketch;
+    if (!sk || !this.drawing) return;
+    const img = new Image();
+    img.src = sk.href;
+    try {
+      await img.decode();
+    } catch {
+      this.host.toast("Could not read the sketch image.", "error");
+      return;
+    }
+    // Work at a size that keeps detail without taking long.
+    const k = Math.min(1, 700 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * k));
+    const h = Math.max(1, Math.round(img.naturalHeight * k));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, w, h);
+    const ink = inkFromPixels(ctx.getImageData(0, 0, w, h).data, w, h, threshold);
+    const toFont = (p: Vec2): Vec2 => ({ x: sk.x + (p.x / w) * sk.w, y: sk.y + sk.h - (p.y / h) * sk.h });
+    // Tidied the way a designer would: extremes added, kinks smoothed, flat lines made straight.
+    const traced = fixIssues(traceToContours(ink, w, h, toFont, nextContourId(this.contours)).map((c) => addExtremes(c)));
+    if (!traced.length) {
+      this.host.toast("Nothing dark enough to trace. Try a higher threshold.");
+      return;
+    }
+    roundContours(traced);
+    const start = this.contours.length;
+    this.contours = [...this.contours, ...traced];
+    this.selection = new Set(traced.flatMap((c, i) => c.points.map((_, pi) => key(start + i, pi))));
+    this.commit("Trace sketch");
+    this.changedSelection();
+    this.host.toast(`Traced ${traced.length} path${traced.length === 1 ? "" : "s"}.`);
+  }
+
+  // ---------- Components on the canvas ----------
+
+  /** Turn the selected paths into a new component, placed where they were. */
+  async makeComponent(kind: ComponentKind = "corner"): Promise<void> {
+    const t = this.target;
+    if (t?.kind !== "base" && t?.kind !== "symbol" && t?.kind !== "fidel") {
+      this.host.toast("Components are placed on bases, fidel and symbols. Open one to make a component.");
+      return;
+    }
+    const sel = this.selectedContours();
+    if (!sel.length) {
+      this.host.toast("Select the paths to turn into a component first.");
+      return;
+    }
+    const picked = sel.map((ci) => this.contours[ci]);
+    const b = contoursBounds(picked)!;
+    // The component's origin: the bottom middle of the selection.
+    const at = { x: Math.round((b.minX + b.maxX) / 2), y: Math.round(b.minY) };
+    const local = translated(picked, { x: -at.x, y: -at.y }).map((c, i) => ({ ...c, id: i, locked: undefined, hidden: undefined }));
+    try {
+      const id = await api.addComponent(`${this.drawing?.title ?? "Component"} part`, kind);
+      await api.setDrawing({ kind: "component", id }, local);
+      const set = new Set(sel);
+      this.contours = this.contours.filter((_, ci) => !set.has(ci));
+      this.selection.clear();
+      this.commit("Make component");
+      await this.saving;
+      const pid = Math.max(-1, ...this.placements.map((r) => r.id)) + 1;
+      this.placementSel = pid;
+      await this.setPlacements([...this.placements, { id: pid, component: id, at, on: null }]);
+      this.host.toast("Made a component from the selection. Double-click it to edit it in place.");
+    } catch (err) {
+      this.host.toast(`Could not make the component: ${err}`, "error");
+    }
+  }
+
+  /** Turn one placed component (or all of them) back into plain paths on the base. */
+  async decompose(id?: number): Promise<void> {
+    const t = this.target;
+    if (t?.kind !== "base" && t?.kind !== "symbol" && t?.kind !== "fidel") return;
+    const refs = this.placements;
+    const which = id === undefined ? refs : refs.filter((r) => r.id === id);
+    if (!which.length) return;
+    try {
+      let next = nextContourId(this.contours);
+      const added: Contour[] = [];
+      for (const r of which) {
+        const d = await api.getDrawing({ kind: "component", id: r.component });
+        for (const c of placeContours(r, d.contours)) added.push({ ...c, id: next++ });
+      }
+      roundContours(added);
+      const start = this.contours.length;
+      this.contours = [...this.contours, ...added];
+      this.selection = new Set(added.flatMap((c, i) => c.points.map((_, pi) => key(start + i, pi))));
+      this.commit(which.length > 1 ? "Decompose all" : "Decompose");
+      await this.saving;
+      this.placementSel = null;
+      await this.setPlacements(refs.filter((r) => !which.includes(r)));
+      this.changedSelection();
+    } catch (err) {
+      this.host.toast(`Could not decompose: ${err}`, "error");
+    }
+  }
+
+  /** Open a placed component, with this base drawn behind it where the component sits. */
+  async editComponentInPlace(id: number): Promise<void> {
+    const r = this.placements.find((x) => x.id === id);
+    if (!r) return;
+    this.hostBehind.set(`component:${r.component}`, unplaceContours(r, this.contours));
+    this.host.openTarget({ kind: "component", id: r.component });
+  }
+
+  // ---------- Shortcuts ----------
+
+  private previewHeld = false;
+
+  /** Run a rebindable shortcut's action. */
+  runAction(id: string): void {
+    const tools: Record<string, Tool> = {
+      "tool.select": "select",
+      "tool.direct": "direct",
+      "tool.pen": "pen",
+      "tool.pencil": "pencil",
+      "tool.knife": "knife",
+      "tool.eraser": "eraser",
+      "tool.measure": "measure",
+      "tool.rect": "rect",
+      "tool.ellipse": "ellipse",
+      "tool.hand": "hand",
+    };
+    if (tools[id]) return this.setTool(tools[id]);
+    switch (id) {
+      case "edit.selectAll":
+        return this.selectAll();
+      case "edit.invert":
+        return this.invertSelection();
+      case "edit.duplicate":
+        return this.duplicate();
+      case "edit.lock":
+        return this.setLayerFlag("locked", this.selectedContours());
+      case "edit.hide":
+        return this.setLayerFlag("hidden", this.selectedContours());
+      case "path.reverse":
+        return this.reverseDirection();
+      case "path.removeOverlap":
+        return void this.removeOverlap();
+      case "path.join":
+        this.joinSelection();
+        return;
+      case "path.cycleNode":
+        return this.cycleNodeType();
+      case "view.fit":
+        return this.fit();
+      case "view.selection":
+        return this.zoomToSelection();
+      case "view.actual":
+        return this.actualSize();
+      case "view.zoomIn":
+        return this.zoom(1.25);
+      case "view.zoomOut":
+        return this.zoom(0.8);
+      case "view.preview":
+        // Held down: the glyph alone, filled, as it will print.
+        this.previewHeld = true;
+        this.svg.dataset.preview = "true";
+        return;
+      case "text.next":
+        return this.stepInText(1);
+      case "text.prev":
+        return this.stepInText(-1);
+    }
+  }
+
+  // ---------- Guides ----------
+
+  private async loadGuides(): Promise<void> {
+    const k = this.targetKey;
+    try {
+      const g = await api.getGuides(k);
+      if (this.targetKey !== k) return;
+      this.guides = g;
+    } catch {
+      this.guides = { local: [], global: [] };
+    }
+    this.render();
+  }
+
+  /** Which fidel edits to this base or alteration reach, for the history panel. */
+  private async loadReach(): Promise<void> {
+    const t = this.target;
+    this.reach = null;
+    if (t?.kind !== "base" && t?.kind !== "alteration") return;
+    try {
+      const r = t.kind === "base" ? await api.baseImpacts(t.id) : await api.alterationImpacts(t.id);
+      if (this.target === t) {
+        this.reach = r;
+        this.host.renderSide(this);
+      }
+    } catch {
+      // Not shown; editing still works.
+    }
+  }
+
+  private saveGuides(): void {
+    const { local, global } = this.guides;
+    api.setGuides(this.targetKey, local, global).catch((err) => this.host.toast(`Could not save the guides: ${err}`, "error"));
+  }
+
+  /** Every guide with its scope, for drawing, hit testing and snapping. */
+  allGuides(): { g: Guide; scope: GuideScope }[] {
+    if (!prefs.showGuides) return [];
+    return [
+      ...this.guides.global.map((g) => ({ g, scope: "global" as const })),
+      ...this.guides.local.map((g) => ({ g, scope: "local" as const })),
+    ];
+  }
+
+  selectedGuide(): { g: Guide; scope: GuideScope } | null {
+    const s = this.guideSel;
+    if (!s) return null;
+    const g = this.guides[s.scope].find((x) => x.id === s.id);
+    return g ? { g, scope: s.scope } : null;
+  }
+
+  private nextGuideId(): number {
+    return Math.max(0, ...this.guides.local.map((g) => g.id), ...this.guides.global.map((g) => g.id)) + 1;
+  }
+
+  /** Change the selected guide: its position, angle, name, colour, lock, or whether it is global. */
+  updateGuide(change: Partial<Guide> & { scope?: GuideScope }): void {
+    const sel = this.selectedGuide();
+    if (!sel) return;
+    const { scope, ...rest } = change;
+    Object.assign(sel.g, rest);
+    if (scope && scope !== sel.scope) {
+      this.guides[sel.scope] = this.guides[sel.scope].filter((x) => x !== sel.g);
+      this.guides[scope].push(sel.g);
+      this.guideSel = { scope, id: sel.g.id };
+    }
+    this.saveGuides();
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  deleteGuide(): void {
+    const sel = this.selectedGuide();
+    if (!sel) return;
+    this.guides[sel.scope] = this.guides[sel.scope].filter((x) => x !== sel.g);
+    this.guideSel = null;
+    this.saveGuides();
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Add a guide through the selection's centre (or the origin), horizontal or vertical. */
+  addGuide(angle: number): void {
+    const b = contoursBounds(this.selectedContours().map((ci) => this.contours[ci]));
+    const at = b ? { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 } : { x: 0, y: 0 };
+    const g: Guide = { id: this.nextGuideId(), x: Math.round(at.x), y: Math.round(at.y), angle };
+    this.guides.local.push(g);
+    this.guideSel = { scope: "local", id: g.id };
+    this.saveGuides();
     this.render();
     this.host.renderSide(this);
   }
@@ -361,7 +919,11 @@ export class GlyphEditor {
 
   /** The advance the canvas is framed on: the drawing's own, or its context base's. */
   get frameWidth(): number | null {
-    return this.drawing?.advanceWidth ?? this.drawing?.context?.advanceWidth ?? null;
+    const own = this.drawing?.advanceWidth ?? this.drawing?.context?.advanceWidth;
+    if (own != null) return own;
+    // A fidel takes its width from its base: read it from the glyph it makes.
+    const ch = this.target?.kind === "fidel" ? this.host.charOf(this.target) : null;
+    return (ch && this.host.glyphFor(ch)?.advance) || null;
   }
 
   zoom(factor: number, around?: Vec2): void {
@@ -576,6 +1138,10 @@ export class GlyphEditor {
 
   /** The placement selected on the canvas or in the inspector. */
   placementSel: number | null = null;
+  /** Components placed by rule on this base (leaves, caps, corners). */
+  ruleEnds: RuleEnd[] = [];
+  /** The selected rule placement, as `component@key`. */
+  ruleSel: string | null = null;
   private pendingPlacement: { id: number; d: Vec2 } | null = null;
 
   get placements(): ComponentRef[] {
@@ -588,11 +1154,90 @@ export class GlyphEditor {
   }
 
   /** Write the base's component placements and reload their outlines. */
+  /** Tell the app the open drawing changed in the core (outside the canvas). */
+  changedInCore(): void {
+    if (this.target) this.host.changed(this.target);
+  }
+
+  notify(message: string, tone?: "error" | "info"): void {
+    this.host.toast(message, tone);
+  }
+
+  /** Fetch where components land by rule on this base. */
+  async loadRuleEnds(): Promise<void> {
+    const target = this.target;
+    if (target?.kind !== "base") {
+      this.ruleEnds = [];
+      return;
+    }
+    try {
+      const ends = await api.ruleEnds(target.id);
+      if (this.target?.kind !== "base" || this.target.id !== target.id) return;
+      const before = JSON.stringify(this.ruleEnds);
+      this.ruleEnds = ends;
+      if (this.ruleSel && !ends.some((e) => `${e.component}@${e.key}` === this.ruleSel)) this.ruleSel = null;
+      if (JSON.stringify(ends) !== before) {
+        this.render();
+        this.host.renderSide(this);
+      }
+    } catch {
+      this.ruleEnds = [];
+    }
+  }
+
+  /** Switch one rule placement on or off, or adjust it. */
+  /** Write the anchors (or these), and redraw what depends on them. */
+  async saveAnchors(next?: Record<string, { x: number; y: number }>): Promise<void> {
+    const target = this.target;
+    if (!this.drawing || !target) return;
+    if (next) this.drawing.anchors = next;
+    try {
+      await api.setAnchors(target, this.drawing.anchors ?? {});
+      this.host.changed(target);
+      if (this.markPreview) await this.refreshMarkPreview();
+      this.render();
+      this.host.renderSide(this);
+    } catch (err) {
+      this.host.toast(`Could not save the anchors: ${err}`, "error");
+    }
+  }
+
+  /** Show another glyph against this one, or stop (null). */
+  async setMarkPreview(partner: string | null): Promise<void> {
+    this.markPreview = partner ? { partner, d: null } : null;
+    await this.refreshMarkPreview();
+  }
+
+  async refreshMarkPreview(): Promise<void> {
+    const mp = this.markPreview;
+    const target = this.target;
+    if (!mp || !target) return this.render();
+    try {
+      mp.d = await api.markPreview(target, this.contours, mp.partner);
+    } catch {
+      mp.d = null;
+    }
+    this.render();
+  }
+
+  async setRuleEnd(end: RuleEnd, on: boolean, tweak: Tweak): Promise<void> {
+    const target = this.target;
+    try {
+      await api.setComponentEnd(end.component, end.key, on, tweak);
+      await this.loadRuleEnds();
+      if (target) this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not change the component: ${err}`, "error");
+    }
+  }
+
   async setPlacements(refs: ComponentRef[]): Promise<void> {
     const target = this.target;
-    if (target?.kind !== "base" || !this.drawing) return;
+    if ((target?.kind !== "base" && target?.kind !== "symbol" && target?.kind !== "fidel") || !this.drawing) return;
     try {
-      await api.setBaseComponents(target.id, refs);
+      if (target.kind === "symbol") await api.setSymbolComponents(target.id, refs);
+      else if (target.kind === "fidel") await api.setFidelComponents(target.id, refs);
+      else await api.setBaseComponents(target.id, refs);
       const fresh = await api.getDrawing(target);
       if (this.target?.kind === target.kind && this.target.id === target.id && this.drawing) {
         this.drawing.components = fresh.components;
@@ -700,6 +1345,34 @@ export class GlyphEditor {
     this.changedSelection();
   }
 
+  /** Move the selected points onto a guide, along its perpendicular; their handles come along. */
+  alignToGuide(scope: GuideScope, id: number): void {
+    const g = this.guides[scope].find((x) => x.id === id);
+    if (!g) return;
+    const moves: { ci: number; pi: number; d: Vec2 }[] = [];
+    this.contours.forEach((c, ci) =>
+      c.points.forEach((p, pi) => {
+        if (!this.selection.has(key(ci, pi)) || !isOn(p)) return;
+        const to = projectOnGuide(g, p.pos);
+        moves.push({ ci, pi, d: { x: to.x - p.pos.x, y: to.y - p.pos.y } });
+      }),
+    );
+    if (!moves.length) {
+      this.host.toast("Select points to put on the guide.");
+      return;
+    }
+    for (const { ci, pi, d } of moves) {
+      const pts = this.contours[ci].points;
+      const n = pts.length;
+      const near = new Set([pi]);
+      for (const j of [(pi + n - 1) % n, (pi + 1) % n]) if (!isOn(pts[j]) && !this.selection.has(key(ci, j))) near.add(j);
+      this.contours = transformContours(this.contours, translate(d.x, d.y), (c, p) => c === ci && near.has(p));
+    }
+    roundContours(this.contours);
+    this.commit("Align to guide");
+    this.changedSelection();
+  }
+
   /** Space the selected contours (or points) evenly between the outermost two. */
   distribute(axis: "x" | "y"): void {
     type Item = { at: number; move: (d: number) => void };
@@ -787,7 +1460,101 @@ export class GlyphEditor {
       return;
     }
 
+    // Drag out of a ruler to make a guide; Alt makes it global.
+    const ruler = prefs.showRulers ? (e.target as Element | null)?.closest?.("[data-ruler]")?.getAttribute("data-ruler") : null;
+    if (ruler) {
+      const scope: GuideScope = e.altKey ? "global" : "local";
+      const g: Guide = { id: this.nextGuideId(), x: Math.round(font.x), y: Math.round(font.y), angle: ruler === "top" ? 0 : 90 };
+      this.guides[scope].push(g);
+      this.guideSel = { scope, id: g.id };
+      this.gesture = { kind: "guide", scope, id: g.id, start: font, origin: { x: g.x, y: g.y }, isNew: true, moved: false, offRuler: false };
+      this.render();
+      return;
+    }
+
+    if (this.tool === "measure") {
+      const at = this.snapped(font, e).pos;
+      this.gesture = { kind: "measure", start: at, now: at };
+      this.measureLine = null;
+      return;
+    }
+
+    if (this.tool === "pencil") {
+      this.gesture = { kind: "pencil", pts: [font], startScreen: screen };
+      return;
+    }
+    if (this.tool === "knife") {
+      this.gesture = { kind: "knife", start: font, now: font };
+      return;
+    }
+    if (this.tool === "eraser") {
+      this.gesture = { kind: "eraser", pts: [font] };
+      this.render();
+      return;
+    }
+
+    // A glyph of the line of text: edit it.
+    const ti = (e.target as Element | null)?.closest?.("[data-ti]")?.getAttribute("data-ti");
+    if (ti != null && (this.tool === "select" || this.tool === "direct")) {
+      const g = this.host.glyphFor([...this.textLine][Number(ti)] ?? "");
+      if (g) {
+        this.textIndex = Number(ti);
+        this.host.openTarget(g.target);
+        return;
+      }
+    }
+
+    // An anchor: pick it and drag it.
+    const an = (e.target as Element | null)?.closest?.("[data-anchor]")?.getAttribute("data-anchor");
+    if (an != null && (this.tool === "select" || this.tool === "direct") && this.drawing.anchors?.[an]) {
+      const a = this.drawing.anchors[an];
+      this.anchorSel = an;
+      this.selection.clear();
+      this.gesture = { kind: "anchor", name: an, start: font, origin: { x: a.x, y: a.y }, moved: false };
+      this.render();
+      this.host.renderSide(this);
+      return;
+    }
+
+    // A guide under the pointer (and no point): pick it, and drag it unless locked.
+    const gid = (e.target as Element | null)?.closest?.("[data-guide]")?.getAttribute("data-guide");
+    if (gid && (this.tool === "select" || this.tool === "direct") && !this.hitPoint(screen)) {
+      const [scope, id] = gid.split(":") as [GuideScope, string];
+      const g = this.guides[scope].find((x) => x.id === Number(id));
+      if (g) {
+        this.guideSel = { scope, id: g.id };
+        this.selection.clear();
+        if (!g.locked) {
+          this.gesture = { kind: "guide", scope, id: g.id, start: font, origin: { x: g.x, y: g.y }, isNew: false, moved: false, offRuler: false };
+        }
+        this.changedSelection();
+        return;
+      }
+    }
+    if (this.guideSel) {
+      this.guideSel = null;
+      this.host.renderSide(this);
+    }
+
+    // A Tunni point: drag to change both handles of its curve.
+    const tun = (e.target as Element | null)?.closest?.("[data-tunni]")?.getAttribute("data-tunni");
+    if (tun) {
+      const [ci, seg] = tun.split(":").map(Number);
+      this.gesture = { kind: "tunni", ci, seg, base: clone(this.contours), moved: false };
+      return;
+    }
+
     if (this.tool === "pen") {
+      // Clicking the end of an open path carries on drawing it.
+      if (!this.pen) {
+        const hit = this.hitPoint(screen);
+        const c = hit ? this.contours[hit[0]] : null;
+        const end = c && hit ? endOf(c, c.points[hit[1]].id) : null;
+        if (c && hit && end) {
+          this.resumePen(hit[0], end);
+          return;
+        }
+      }
       // Clicking a segment with the pen, outside a path in progress, adds a point on it.
       if (!this.pen) {
         const seg = this.hitPoint(screen) ? null : this.hitSegment(font);
@@ -882,6 +1649,19 @@ export class GlyphEditor {
         this.changedSelection();
         return;
       }
+    }
+
+    const rk = (e.target as Element | null)?.closest?.("[data-rk]")?.getAttribute("data-rk");
+    if (rk != null && !direct) {
+      this.ruleSel = rk;
+      this.placementSel = null;
+      this.selection.clear();
+      this.changedSelection();
+      return;
+    }
+    if (this.ruleSel !== null) {
+      this.ruleSel = null;
+      this.host.renderSide(this);
     }
 
     const pid = (e.target as Element | null)?.closest?.("[data-pid]")?.getAttribute("data-pid");
@@ -1032,6 +1812,69 @@ export class GlyphEditor {
       case "lasso":
         g.pts.push(font);
         break;
+      case "knife": {
+        g.now = e.shiftKey ? constrain45(g.start, font) : font;
+        break;
+      }
+      case "eraser":
+        g.pts.push(font);
+        break;
+      case "measure": {
+        const to = e.shiftKey ? constrain45(g.start, font) : this.snapped(font, e).pos;
+        g.now = to;
+        break;
+      }
+      case "anchor": {
+        const a = this.drawing?.anchors?.[g.name];
+        if (!a) break;
+        const s = this.snapped({ x: g.origin.x + font.x - g.start.x, y: g.origin.y + font.y - g.start.y }, e);
+        a.x = Math.round(s.pos.x);
+        a.y = Math.round(s.pos.y);
+        this.snapLines = s.lines;
+        g.moved ||= Math.hypot(font.x - g.start.x, font.y - g.start.y) * this.view.scale > 1;
+        break;
+      }
+      case "guide": {
+        const gd = this.guides[g.scope].find((x) => x.id === g.id);
+        if (!gd) break;
+        const want = { x: g.origin.x + font.x - g.start.x, y: g.origin.y + font.y - g.start.y };
+        const s = this.snapped(want, e, false, gd);
+        if (isHorizontal(gd)) gd.y = Math.round(s.pos.y);
+        else if (isVertical(gd)) gd.x = Math.round(s.pos.x);
+        else {
+          gd.x = Math.round(s.pos.x);
+          gd.y = Math.round(s.pos.y);
+        }
+        this.snapLines = isHorizontal(gd) ? { y: s.lines.y } : isVertical(gd) ? { x: s.lines.x } : s.lines;
+        g.moved ||= Math.hypot(font.x - g.start.x, font.y - g.start.y) * this.view.scale > 1;
+        const sc = this.screenOf(e);
+        // Dragged back onto its ruler: it will be removed.
+        g.offRuler = isHorizontal(gd) ? sc.y < RULER_PX : isVertical(gd) ? sc.x < RULER_PX : false;
+        break;
+      }
+      case "pencil": {
+        const last = g.pts[g.pts.length - 1];
+        if (Math.hypot(font.x - last.x, font.y - last.y) * this.view.scale > 1.5) g.pts.push(font);
+        break;
+      }
+      case "tunni": {
+        const c = g.base[g.ci];
+        const seg = segments(c)[g.seg];
+        const res = seg ? moveTunni(seg.pts, font) : null;
+        if (!res) break;
+        const nodes = toNodes(c);
+        const a = nodes[seg.from].out;
+        const b = nodes[seg.to].in;
+        if (!a || !b) break;
+        const cur = clone(c);
+        for (const p of cur.points) {
+          if (p.id === a.id) p.pos = { x: Math.round(res[0].x), y: Math.round(res[0].y) };
+          if (p.id === b.id) p.pos = { x: Math.round(res[1].x), y: Math.round(res[1].y) };
+        }
+        this.contours[g.ci] = cur;
+        g.moved = true;
+        break;
+      }
       case "pen-drag": {
         let h = font;
         if (e.shiftKey) h = constrain45(g.node.pos, h);
@@ -1185,6 +2028,32 @@ export class GlyphEditor {
       this.host.renderSide(this);
     } else if (g.kind === "zone") {
       if (g.now !== g.start) void this.moveZone(g.id, g.now);
+    } else if (g.kind === "knife") {
+      if (Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 4) void this.knife(g.start, g.now);
+      else this.render();
+    } else if (g.kind === "eraser") {
+      this.erase(g.pts);
+    } else if (g.kind === "measure") {
+      const far = Math.hypot(g.now.x - g.start.x, g.now.y - g.start.y) * this.view.scale > 3;
+      this.measureLine = far ? { a: g.start, b: g.now } : null;
+      this.render();
+    } else if (g.kind === "anchor") {
+      if (g.moved) void this.saveAnchors();
+      this.render();
+      this.host.renderSide(this);
+    } else if (g.kind === "guide") {
+      if (g.offRuler || (g.isNew && !g.moved)) {
+        this.guides[g.scope] = this.guides[g.scope].filter((x) => x.id !== g.id);
+        this.guideSel = null;
+      }
+      if (g.moved || g.isNew) this.saveGuides();
+      this.render();
+      this.host.renderSide(this);
+    } else if (g.kind === "pencil") {
+      this.finishPencil(g.pts, g.startScreen, this.screenOf(e));
+    } else if (g.kind === "tunni") {
+      if (g.moved) this.commit("Tunni line");
+      this.render();
     } else if (g.kind === "deform") {
       const h = this.drawing?.handles[g.i];
       if (h && g.d) void this.moveDeform(h, g.d);
@@ -1272,6 +2141,12 @@ export class GlyphEditor {
       return;
     }
     const screen = this.screenOf(e);
+    // Double-clicking a placed component edits it in place.
+    const pid = (e.target as Element | null)?.closest?.("[data-pid]")?.getAttribute("data-pid");
+    if (pid != null) {
+      void this.editComponentInPlace(Number(pid));
+      return;
+    }
     if (this.tool === "select") {
       // Double-clicking a shape goes into its points, like Figma.
       const ci = this.hitShape(e);
@@ -1434,10 +2309,17 @@ export class GlyphEditor {
   // ---------- Snapping ----------
 
   /** Lines a point can snap to: other on-curve points, the Pa lines, the sidebearings. */
-  private snapTargets(skipSelected: boolean): { xs: number[]; ys: number[] } {
+  private snapTargets(skipSelected: boolean, skipGuide?: Guide): { xs: number[]; ys: number[] } {
     const m = this.drawing!.metrics;
     const xs: number[] = [];
     const ys: number[] = [];
+    if (prefs.snapGuides) {
+      for (const { g } of this.allGuides()) {
+        if (g === skipGuide) continue;
+        if (isHorizontal(g)) ys.push(g.y);
+        else if (isVertical(g)) xs.push(g.x);
+      }
+    }
     if (prefs.snapMetrics) {
       xs.push(0);
       ys.push(m.pa_top, m.pa_bottom, 0);
@@ -1464,9 +2346,16 @@ export class GlyphEditor {
     return { xs, ys };
   }
 
-  private snapped(p: Vec2, e: { altKey: boolean }, skipSelected = false): { pos: Vec2; lines: { x?: number; y?: number } } {
+  private snapped(p: Vec2, e: { altKey: boolean }, skipSelected = false, skipGuide?: Guide): { pos: Vec2; lines: { x?: number; y?: number } } {
     if (e.altKey || !this.drawing) return { pos: p, lines: {} };
-    const { xs, ys } = this.snapTargets(skipSelected);
+    const { xs, ys } = this.snapTargets(skipSelected, skipGuide);
+    // Slanted guides pull the point onto themselves.
+    if (prefs.snapGuides) {
+      for (const { g } of this.allGuides()) {
+        if (g === skipGuide || isHorizontal(g) || isVertical(g)) continue;
+        if (distanceToGuide(g, p) * this.view.scale <= SNAP_PX) return { pos: projectOnGuide(g, p), lines: {} };
+      }
+    }
     const tol = SNAP_PX / this.view.scale;
     const near = (v: number, list: number[]) => {
       let best: number | undefined;
@@ -1601,7 +2490,7 @@ export class GlyphEditor {
     if (first && this.pen.length >= 2) {
       const s = this.toScreen(first.pos);
       if (Math.hypot(s.x - screen.x, s.y - screen.y) < HIT_PX + 2) {
-        this.finishPen();
+        this.finishPen(true);
         return;
       }
     }
@@ -1611,10 +2500,17 @@ export class GlyphEditor {
     this.render();
   }
 
-  finishPen(): void {
+  /**
+   * End the path being drawn. Clicking its first point closes it; Enter,
+   * Escape or another tool leave it open, to carry on later from either end.
+   */
+  finishPen(close = false): void {
     const nodes = this.pen;
+    const resumed = this.penFrom;
     this.pen = null;
+    this.penFrom = null;
     if (!nodes || nodes.length < 2) {
+      if (resumed) this.contours.splice(resumed.at, 0, resumed.contour);
       this.render();
       return;
     }
@@ -1624,24 +2520,52 @@ export class GlyphEditor {
       if (nd.in) nd.in = { id: id++, pos: { x: Math.round(nd.in.pos.x), y: Math.round(nd.in.pos.y) } };
       if (nd.out) nd.out = { id: id++, pos: { x: Math.round(nd.out.pos.x), y: Math.round(nd.out.pos.y) } };
     }
-    const ci = this.contours.length;
-    const contour = fromNodes(nodes, nextContourId(this.contours), null, id);
-    this.contours.push(contour);
-    this.selection = new Set(contour.points.map((_, pi) => key(ci, pi)));
-    this.commit("Pen path");
+    const at = resumed ? resumed.at : this.contours.length;
+    const contour = fromNodes(nodes, resumed?.contour.id ?? nextContourId(this.contours), resumed?.contour.part ?? null, id, !close);
+    if (resumed?.contour.name) contour.name = resumed.contour.name;
+    this.contours.splice(at, 0, contour);
+    this.selection = new Set(contour.points.map((_, pi) => key(at, pi)));
+    this.commit(close ? "Pen path" : "Open path");
+    this.render();
+  }
+
+  /** Pick up an open path at one end and keep drawing from it. */
+  private resumePen(ci: number, end: "start" | "end"): void {
+    const c = this.contours[ci];
+    let nodes = toNodes(c);
+    if (end === "start") nodes = [...nodes].reverse().map((nd) => ({ ...nd, in: nd.out, out: nd.in }));
+    this.contours.splice(ci, 1);
+    this.penFrom = { at: ci, contour: c };
+    this.selection.clear();
+    this.pen = nodes;
     this.render();
   }
 
   cancelPen(): void {
-    this.pen = null;
-    this.render();
+    this.finishPen(false);
+  }
+
+  /** Turn a freehand stroke into curves: closed when it ends where it began. */
+  private finishPencil(pts: Vec2[], startScreen: Vec2, endScreen: Vec2): void {
+    if (pts.length < 3) return this.render();
+    const closed = pts.length > 8 && Math.hypot(startScreen.x - endScreen.x, startScreen.y - endScreen.y) < HIT_PX * 2;
+    // About one screen pixel and a half of tolerance, in font units.
+    const nodes = fitStroke(pts, Math.max(1, 1.5 / this.view.scale), closed);
+    if (nodes.length < 2) return this.render();
+    const at = this.contours.length;
+    const contour = fromNodes(nodes, nextContourId(this.contours), null, undefined, !closed);
+    this.contours.push(contour);
+    this.selection = new Set(contour.points.map((_, pi) => key(at, pi)));
+    this.commit("Pencil");
+    this.changedSelection();
   }
 
   // ---------- Edits ----------
 
   setTool(tool: Tool): void {
-    if (this.pen && tool !== "pen") this.finishPen();
+    if (this.pen && tool !== "pen") this.finishPen(false);
     if (isShape(tool)) this.shape = tool;
+    if (tool !== "measure") this.measureLine = null;
     this.tool = tool;
     this.root.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) => {
       const t = b.dataset.tool;
@@ -1681,10 +2605,15 @@ export class GlyphEditor {
     clipboard = picked;
     const b = contoursBounds(picked)!;
     const d = picked.map(contourPath).join("");
+    const w = b.maxX - b.minX;
+    const h = b.maxY - b.minY;
+    // Plain SVG that Figma and Illustrator paste as shapes, carrying our own
+    // paths too so pasting back here is exact.
+    const data = esc(JSON.stringify({ [CLIP_TAG]: picked }));
     const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.minX} ${-b.maxY} ${b.maxX - b.minX} ${b.maxY - b.minY}">` +
-      `<path transform="scale(1 -1)" d="${d}"/></svg>`;
-    return { json: JSON.stringify({ [CLIP_TAG]: picked }), svg };
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${b.minX} ${-b.maxY} ${w} ${h}">` +
+      `<metadata>${data}</metadata><path transform="scale(1 -1)" d="${d}"/></svg>`;
+    return { json: svg, svg };
   }
 
   cut(): { json: string; svg: string } | null {
@@ -1704,7 +2633,10 @@ export class GlyphEditor {
     let picked = clipboard;
     if (text) {
       try {
-        const parsed = JSON.parse(text);
+        // Our paths come inside an SVG's metadata, or (from older copies) as bare JSON.
+        const meta = /<metadata>([\s\S]*?)<\/metadata>/.exec(text)?.[1];
+        const json = meta ? unesc(meta) : text;
+        const parsed = JSON.parse(json);
         if (parsed && Array.isArray(parsed[CLIP_TAG])) picked = parsed[CLIP_TAG];
         else return false;
       } catch {
@@ -1872,6 +2804,243 @@ export class GlyphEditor {
     this.editSelectedContours((c) => addExtremes(c), "Add extremes", true);
   }
 
+  // ---------- Curve tools ----------
+
+  /** Close the selected open paths with a straight segment. */
+  closePaths(): void {
+    this.editSelectedContours((c) => closePath(c), "Close path");
+  }
+
+  /** Whether any selected path is open. */
+  get hasOpenSelection(): boolean {
+    return this.selectedContours().some((ci) => this.contours[ci]?.open);
+  }
+
+  /** Selected on-curve points, as [contour index, point id]. */
+  private selectedOnCurve(): [number, number][] {
+    return [...this.selection].map(parseKey).flatMap(([ci, pi]) => {
+      const p = this.contours[ci]?.points[pi];
+      return p && isOn(p) ? [[ci, p.id] as [number, number]] : [];
+    });
+  }
+
+  /** Cut paths at the selected on-curve points. */
+  breakAtSelection(): void {
+    const picked = this.selectedOnCurve();
+    if (!picked.length) return;
+    // Work contour by contour, from the last point back, so earlier cuts keep their ids.
+    const byContour = new Map<number, number[]>();
+    for (const [ci, id] of picked) byContour.set(ci, [...(byContour.get(ci) ?? []), id]);
+    let free = nextContourId(this.contours);
+    const out: Contour[] = [];
+    const cut: number[] = [];
+    this.contours.forEach((c, ci) => {
+      const ids = byContour.get(ci);
+      if (!ids) return out.push(c);
+      let pieces = [c];
+      for (const id of ids) {
+        pieces = pieces.flatMap((pc) => (pc.points.some((p) => p.id === id && isOn(p)) ? breakAt(pc, id, free++) : [pc]));
+      }
+      for (const pc of pieces) {
+        cut.push(out.length);
+        out.push(pc);
+      }
+    });
+    this.contours = out;
+    this.selection = new Set(cut.flatMap((ci) => this.contours[ci].points.map((_, pi) => key(ci, pi))));
+    this.commit("Break path");
+    this.changedSelection();
+  }
+
+  /** Join two selected open ends (or close a path whose two ends are selected). */
+  joinSelection(): boolean {
+    const ends = this.selectedOnCurve().flatMap(([ci, id]) => {
+      const e = endOf(this.contours[ci], id);
+      return e ? [{ ci, e }] : [];
+    });
+    if (ends.length !== 2) return false;
+    const [a, b] = ends;
+    const joined = joinPaths(this.contours[a.ci], a.e, this.contours[b.ci], b.e);
+    this.contours[a.ci] = joined;
+    if (b.ci !== a.ci) this.contours.splice(b.ci, 1);
+    const ci = b.ci !== a.ci && b.ci < a.ci ? a.ci - 1 : a.ci;
+    this.selection = new Set(this.contours[ci].points.map((_, pi) => key(ci, pi)));
+    this.commit(b.ci === a.ci ? "Close path" : "Join paths");
+    this.changedSelection();
+    return true;
+  }
+
+  /** Whether the selection is two open ends that can be joined. */
+  get canJoin(): boolean {
+    return this.selectedOnCurve().filter(([ci, id]) => endOf(this.contours[ci], id)).length === 2;
+  }
+
+  /** Move the selected smooth points so curvature matches on both sides. */
+  harmonize(): void {
+    this.editSelectedContours((c, ids) => harmonize(c, ids), "Harmonize");
+  }
+
+  /** Even out handle tension on the curves between selected points. */
+  balanceHandles(): void {
+    this.editSelectedContours((c, ids) => balanceContour(c, ids.size ? ids : new Set(c.points.map((p) => p.id))), "Balance handles");
+  }
+
+  /** Let the selected points set their own handles (Hobby curves). */
+  autoHandles(): void {
+    this.editSelectedContours((c, ids) => autoHandles(c, ids), "Automatic handles");
+  }
+
+  // ---------- Path operations (done by the core) ----------
+
+  /** Contours a path operation works on: the selected ones, or every editable one. */
+  private opTargets(): number[] {
+    const sel = this.selectedContours();
+    if (sel.length) return sel;
+    return this.contours.flatMap((c, ci) => (c.locked || c.hidden ? [] : [ci]));
+  }
+
+  /**
+   * Replace contours `which` with `result`, keeping part tags and names when
+   * one contour turns into others, then fix path directions.
+   */
+  private replaceContours(which: number[], result: Contour[], label: string): void {
+    const set = new Set(which);
+    // Results keep a part tag or name only when every replaced contour shared it.
+    const shared = <K extends "part" | "name">(k: K) => {
+      const v = this.contours[which[0]]?.[k];
+      return which.every((ci) => this.contours[ci][k] === v) ? v : undefined;
+    };
+    const part = shared("part");
+    const name = shared("name");
+    for (const c of result) {
+      if (part && !c.part) c.part = part;
+      if (name && !c.name) c.name = name;
+    }
+    const kept = this.contours.filter((_, ci) => !set.has(ci));
+    // The results go where the first of the replaced contours was.
+    const at = Math.min(Math.min(...which), kept.length);
+    const merged = [...kept.slice(0, at), ...result, ...kept.slice(at)];
+    // New outlines come back in any direction: outer paths counter-clockwise, counters clockwise.
+    const ok = directionOk(merged);
+    const fixed = merged.map((c, i) => (i >= at && i < at + result.length && !ok[i] ? reversed(c) : c));
+    this.contours = fixed;
+    this.selection = new Set(result.flatMap((_, i) => fixed[at + i].points.map((__, pi) => key(at + i, pi))));
+    this.commit(label);
+    this.changedSelection();
+  }
+
+  private async runOp(which: number[], op: PathOp, label: string): Promise<void> {
+    if (!which.length) return;
+    try {
+      const out = await api.pathOp(op);
+      this.replaceContours(which, out, label);
+    } catch (err) {
+      this.host.toast(`${label} failed: ${err}`, "error");
+    }
+  }
+
+  /** Merge overlapping paths into one outline. */
+  removeOverlap(): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    return this.runOp(which, { op: "remove-overlap", contours: which.map((ci) => this.contours[ci]) }, "Remove overlap");
+  }
+
+  /**
+   * Booleans between selected paths. The frontmost (last) selected path is
+   * the one that cuts, as in Figma; union merges them all.
+   */
+  booleanOp(kind: BooleanKind): Promise<void> {
+    const which = this.selectedContours().filter((ci) => !this.contours[ci].open);
+    if (which.length < 2) {
+      this.host.toast("Select two or more closed paths first.");
+      return Promise.resolve();
+    }
+    const front = which[which.length - 1];
+    const rest = which.slice(0, -1);
+    const label = { union: "Union", subtract: "Subtract", intersect: "Intersect", exclude: "Exclude" }[kind];
+    return this.runOp(
+      which,
+      { op: "boolean", a: rest.map((ci) => this.contours[ci]), b: [this.contours[front]], kind, firstId: nextContourId(this.contours) },
+      label,
+    );
+  }
+
+  /** Grow (positive) or shrink (negative) the selected paths. */
+  offsetPaths(distance: number, join: StrokeJoin): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    return this.runOp(which, { op: "offset", contours: which.map((ci) => this.contours[ci]), distance, join, firstId: nextContourId(this.contours) }, "Offset path");
+  }
+
+  /** Turn the selected paths into outlines of the given width. */
+  expandStroke(width: number, join: StrokeJoin): Promise<void> {
+    const which = this.opTargets();
+    return this.runOp(which, { op: "expand-stroke", contours: which.map((ci) => this.contours[ci]), width, join, firstId: nextContourId(this.contours) }, "Expand stroke");
+  }
+
+  /** Cut along a line: the selected paths, or everything under it. */
+  async knife(from: Vec2, to: Vec2): Promise<void> {
+    const which = this.opTargets().filter((ci) => !this.contours[ci].open);
+    await this.runOp(which, { op: "knife", contours: which.map((ci) => this.contours[ci]), from, to, firstId: nextContourId(this.contours) }, "Knife");
+  }
+
+  /**
+   * Eraser: remove every path segment the stroke passed over. Closed paths
+   * open where they were erased; open paths split.
+   */
+  erase(trail: Vec2[]): void {
+    const r = ERASER_RADIUS / this.view.scale;
+    const near = (p: Vec2) => {
+      if (trail.length === 1) return Math.hypot(p.x - trail[0].x, p.y - trail[0].y) <= r;
+      for (let i = 1; i < trail.length; i++) {
+        if (distToSegment(p, trail[i - 1], trail[i]) <= r) return true;
+      }
+      return false;
+    };
+    let freeId = nextContourId(this.contours);
+    let changed = false;
+    const next: Contour[] = [];
+    for (const c of this.contours) {
+      if (c.locked || c.hidden) {
+        next.push(c);
+        continue;
+      }
+      const touched = new Set<number>();
+      segments(c).forEach((seg, k) => {
+        for (let t = 0; t <= 1.0001; t += 1 / 16) if (near(pointAt(seg.pts, t))) return void touched.add(k);
+      });
+      if (!touched.size) {
+        next.push(c);
+        continue;
+      }
+      changed = true;
+      const pieces = eraseSegments(c, touched, freeId);
+      freeId = Math.max(freeId, ...pieces.map((p) => p.id + 1));
+      next.push(...pieces);
+    }
+    if (!changed) return this.render();
+    this.contours = next;
+    this.selection.clear();
+    this.commit("Erase");
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Merge doubled points, straighten flat curves and drop in-line points. */
+  tidyUp(): void {
+    this.editSelectedContours((c) => tidyUp(c), "Tidy up", true);
+  }
+
+  /** Round or chamfer the selected corner points. */
+  roundCorners(radius: number, style: "round" | "chamfer"): void {
+    this.editSelectedContours((c, ids) => roundCorners(c, ids, radius, style), style === "round" ? "Round corners" : "Chamfer corners");
+  }
+
+  /** Move the selected on-curve points, reshaping the curves next to them proportionally. */
+  powerNudge(dx: number, dy: number): void {
+    if (!this.selectedOnCurve().length) return this.nudge(dx, dy);
+    this.editSelectedContours((c, ids) => powerNudge(c, ids, { x: dx, y: dy }), "Power nudge");
+  }
+
   /** Round the selected points (or the whole drawing) to whole units. */
   roundCoordinates(): void {
     roundContours(this.contours);
@@ -1965,7 +3134,12 @@ export class GlyphEditor {
   sidebearings(): { lsb: number; rsb: number; width: number } | null {
     const w = this.drawing?.advanceWidth;
     if (w == null) return null;
-    const b = contoursBounds(this.visibleContours().length ? this.visibleContours() : this.contours);
+    // In an italic, measured along the slant through the baseline, like the metric lines.
+    const lean = Math.tan(((this.drawing?.metrics.italic_angle ?? 0) * Math.PI) / 180);
+    const shown = this.visibleContours().length ? this.visibleContours() : this.contours;
+    const b = contoursBounds(lean ? shown.map((c) => ({ ...c, points: c.points.map((p) => ({ ...p, pos: { x: p.pos.x - p.pos.y * lean, y: p.pos.y } })) })) : shown);
+    const ink = this.drawing?.built?.ink;
+    if (!b && ink) return { lsb: Math.round(ink[0]), rsb: Math.round(w - ink[1]), width: w };
     if (!b) return { lsb: 0, rsb: w, width: w };
     return { lsb: Math.round(b.minX), rsb: Math.round(w - b.maxX), width: w };
   }
@@ -1991,6 +3165,52 @@ export class GlyphEditor {
       this.drawing.advanceWidth = (this.drawing.advanceWidth ?? 0) + (v - sb.rsb);
     }
     this.commit(side === "left" ? "Left sidebearing" : "Right sidebearing");
+    this.render();
+    this.host.renderSide(this);
+  }
+
+  /** Set the metric keys of this base or symbol, then take the outline the core keyed. */
+  async setMetricKeys(keys: MetricKeys): Promise<void> {
+    const target = this.target;
+    if (!target || (target.kind !== "base" && target.kind !== "symbol")) return;
+    try {
+      await this.saving;
+      await api.setMetricKeys(target, keys);
+      await this.syncFromCore();
+      this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not set the key: ${err}`, "error");
+    }
+  }
+
+  /** Give every other master this drawing's sidebearings. */
+  async copyMetricsToMasters(): Promise<void> {
+    const target = this.target;
+    if (!target) return;
+    try {
+      await this.saving;
+      const n = await api.copyMetricsToMasters(target);
+      this.host.toast(n ? `Sidebearings copied to ${n} other master${n > 1 ? "s" : ""}.` : "The other masters already match.");
+      this.host.changed(target);
+    } catch (err) {
+      this.host.toast(`Could not copy the metrics: ${err}`, "error");
+    }
+  }
+
+  /** After a save, metric keys may have moved the outline or changed the width in the core: take that in. */
+  private async syncFromCore(): Promise<void> {
+    const target = this.target;
+    if (!target || !this.drawing) return;
+    const fresh = await api.getDrawing(target);
+    if (this.target?.kind !== target.kind || this.target.id !== target.id || !this.drawing) return;
+    this.drawing.metricKeys = fresh.metricKeys;
+    const now = JSON.stringify({ c: fresh.contours, w: fresh.advanceWidth });
+    if (now !== this.history.now) {
+      this.contours = translated(fresh.contours, this.origin);
+      this.drawing.advanceWidth = fresh.advanceWidth;
+      this.savedAdvance = fresh.advanceWidth;
+      this.history.now = this.snapshot();
+    }
     this.render();
     this.host.renderSide(this);
   }
@@ -2191,6 +3411,24 @@ export class GlyphEditor {
           this.render();
           this.host.toast("Now drawn by hand. Pick a form in the panel to go back to the generated one.");
         }
+        if (target.kind === "base") void this.loadRuleEnds();
+        // Drawing on a built letter draws it by hand.
+        if (this.drawing?.built && s.c.length && this.target?.kind === target.kind && this.target.id === target.id) {
+          this.drawing.built = undefined;
+          this.host.renderSide(this);
+          this.host.toast("Now drawn by hand. Type its parts in the panel to build it again.");
+        }
+        // Keys on this glyph (or on ones it follows) may have moved it.
+        const mk = this.drawing?.metricKeys?.keys;
+        if (mk && (mk.left || mk.right || mk.width)) void this.syncFromCore();
+        // Drawing on a base made from another one makes it its own.
+        const dv = this.drawing?.derived;
+        if (dv?.follows && this.target?.kind === "base" && this.target.id === target.id) {
+          dv.follows = false;
+          this.drawing!.subtitle = "Base · drawn by hand";
+          this.subtitle.textContent = this.drawing!.subtitle;
+          this.host.renderSide(this);
+        }
         this.host.changed(target);
       })
       .catch((err) => this.host.toast(`Could not save the drawing: ${err}`, "error"));
@@ -2223,8 +3461,13 @@ export class GlyphEditor {
     this.root.querySelector<HTMLInputElement>(".svg-file")!.addEventListener("change", async (e) => {
       const input = e.target as HTMLInputElement;
       const file = input.files?.[0];
-      if (file) this.pasteSvg(await file.text());
       input.value = "";
+      if (!file) return;
+      try {
+        this.pasteSvg(await vectorFileToSvg(file));
+      } catch (err) {
+        this.host.toast(err instanceof Error ? err.message : String(err), "error");
+      }
     });
     const toClipboard = (e: ClipboardEvent, out: { json: string; svg: string } | null) => {
       if (!out) return;
@@ -2246,10 +3489,18 @@ export class GlyphEditor {
         e.preventDefault();
         return;
       }
-      const text = e.clipboardData?.getData("image/svg+xml") || plain;
+      // Vectors from other apps: SVG on the clipboard, as text or inside HTML.
+      const html = e.clipboardData?.getData("text/html") ?? "";
+      const text = e.clipboardData?.getData("image/svg+xml") || (plain.includes("<svg") ? plain : "") || svgFromHtml(html) || "";
       if (text.trim()) {
         e.preventDefault();
         this.pasteSvg(text);
+      } else if (isFigmaClipboard(html)) {
+        e.preventDefault();
+        this.host.toast("Figma keeps its own copies to itself. In Figma, use Copy as SVG (Ctrl Shift C), then paste here.");
+      } else if (plain.trim() && !clipboard) {
+        e.preventDefault();
+        this.host.toast("Nothing to paste as outlines. Copy shapes as SVG, or import a PDF, AI or EPS file.");
       } else if (clipboard) {
         e.preventDefault();
         this.pastePaths();
@@ -2258,6 +3509,16 @@ export class GlyphEditor {
 
     window.addEventListener("keydown", (e) => {
       if (!this.isActive() || isTyping(e.target)) return;
+      // Rebindable shortcuts first.
+      const combo = comboOf(e);
+      // Kerning keys belong to the kerning view; here Alt+arrows power-nudge.
+      const action = actionFor(combo)?.startsWith("kern.") ? null : actionFor(combo);
+      if (action) {
+        e.preventDefault();
+        if (!e.repeat || action.startsWith("view.zoom") || action === "view.preview") this.runAction(action);
+        return;
+      }
+      if (isFreedDefault(combo)) return;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       if (k.startsWith("arrow")) {
@@ -2265,7 +3526,14 @@ export class GlyphEditor {
         const [small, medium, large] = prefs.nudge;
         const step = mod ? large : e.shiftKey ? medium : small;
         const d = { arrowleft: [-step, 0], arrowright: [step, 0], arrowup: [0, step], arrowdown: [0, -step] }[k];
-        if (d) this.nudge(d[0], d[1]);
+        // Alt: power nudge, which brings the curves along proportionally.
+        if (d && e.altKey) this.powerNudge(d[0], d[1]);
+        else if (d) this.nudge(d[0], d[1]);
+        return;
+      }
+      if (k === "pagedown" || k === "pageup") {
+        e.preventDefault();
+        this.stepInText(k === "pagedown" ? 1 : -1);
         return;
       }
       if (k === "tab") {
@@ -2292,6 +3560,9 @@ export class GlyphEditor {
       } else if (mod && e.shiftKey && k === "r") {
         e.preventDefault();
         this.reverseDirection();
+      } else if (mod && e.shiftKey && k === "o") {
+        e.preventDefault();
+        void this.removeOverlap();
       } else if (mod && e.shiftKey && k === "l") {
         e.preventDefault();
         this.setLayerFlag("locked", this.selectedContours());
@@ -2316,6 +3587,11 @@ export class GlyphEditor {
       else if (k === "v") this.setTool("select");
       else if (k === "a") this.setTool("direct");
       else if (k === "p") this.setTool("pen");
+      else if (k === "b") this.setTool("pencil");
+      else if (k === "k") this.setTool("knife");
+      else if (e.shiftKey && k === "e") this.setTool("eraser");
+      else if (k === "m") this.setTool("measure");
+      else if (e.shiftKey && k === "j") this.joinSelection();
       else if (k === "r") this.setTool("rect");
       else if (k === "e") this.setTool("ellipse");
       else if (k === "h") this.setTool("hand");
@@ -2338,24 +3614,36 @@ export class GlyphEditor {
           this.svg.dataset.zoom = "out";
         }
       } else if (k === "escape") {
-        if (this.pen) this.cancelPen();
-        else {
+        if (this.pen) this.finishPen(false);
+        else if (this.measureLine || this.guideSel) {
+          this.measureLine = null;
+          this.guideSel = null;
+          this.render();
+          this.host.renderSide(this);
+        } else {
           this.selection.clear();
           this.pivot = null;
           this.render();
           this.host.renderSide(this);
         }
-      } else if (k === "enter" && this.pen) this.finishPen();
+      } else if (k === "enter" && this.pen) this.finishPen(false);
       else if (k === "delete" || k === "backspace") {
         e.preventDefault();
-        this.deleteSelection(!e.altKey);
+        if (this.guideSel && !this.selection.size) this.deleteGuide();
+        else this.deleteSelection(!e.altKey);
       }
     });
     window.addEventListener("blur", () => {
+      this.previewHeld = false;
+      delete this.svg.dataset.preview;
       this.zoomHeld = false;
       delete this.svg.dataset.zoom;
     });
     window.addEventListener("keyup", (e) => {
+      if (this.previewHeld && actionFor(comboOf(e)) === "view.preview") {
+        this.previewHeld = false;
+        delete this.svg.dataset.preview;
+      }
       if (e.key === "Alt" && this.zoomHeld) this.svg.dataset.zoom = "in";
       if (e.key.toLowerCase() === "z") {
         this.zoomHeld = false;
@@ -2462,6 +3750,10 @@ export class GlyphEditor {
 
   render(): void {
     if (!this.drawing) return;
+    if (prefs.solidPoints) this.svg.dataset.solidPoints = "true";
+    else delete this.svg.dataset.solidPoints;
+    if (prefs.pointColors) this.svg.dataset.pointColors = "true";
+    else delete this.svg.dataset.pointColors;
     const r = this.svg.getBoundingClientRect();
     const W = r.width;
     const H = r.height;
@@ -2503,18 +3795,26 @@ export class GlyphEditor {
       }
     }
     const guide = (y: number, label: string, cls = "guide") =>
-      `<line class="${cls}" x1="0" x2="${W}" y1="${sy(y)}" y2="${sy(y)}"/><text class="guide-label" x="12" y="${sy(y) - 6}">${label}</text>`;
-    parts.push(guide(m.pa_top, `Pa-top ${m.pa_top}`));
-    parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
-    if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
+      `<line class="${cls}" x1="0" x2="${W}" y1="${sy(y)}" y2="${sy(y)}"/><text class="guide-label" x="${prefs.showRulers ? RULER_PX + 8 : 12}" y="${sy(y) - 6}">${label}</text>`;
+    if (prefs.showMetrics) {
+      parts.push(guide(m.pa_top, `Pa-top ${m.pa_top}`));
+      parts.push(guide(m.pa_bottom, m.pa_bottom === 0 ? "Baseline · Pa-bottom 0" : `Pa-bottom ${m.pa_bottom}`));
+      if (m.pa_bottom !== 0) parts.push(guide(0, "Baseline", "guide guide-baseline"));
+    }
 
     const frame = this.frameWidth;
     const g = this.gesture;
-    if (frame !== null) {
+    if (frame !== null && (prefs.showMetrics || g?.kind === "metric")) {
       const own = this.drawing.advanceWidth !== null;
       const dragging = g?.kind === "metric" ? g.side : null;
+      // Leaning with the italic angle, through the baseline.
+      const lean = Math.tan(((m.italic_angle ?? 0) * Math.PI) / 180);
+      const fyTop = ty / scale;
+      const fyBottom = (ty - H) / scale;
       for (const [x, side] of [[0, "left"], [frame, "right"]] as const) {
-        parts.push(`<line class="guide guide-v${own ? " metric" : ""}${dragging === side ? " active" : ""}" x1="${sx(x)}" x2="${sx(x)}" y1="0" y2="${H}"/>`);
+        parts.push(
+          `<line class="guide guide-v${own ? " metric" : ""}${dragging === side ? " active" : ""}" x1="${sx(x + fyTop * lean)}" x2="${sx(x + fyBottom * lean)}" y1="0" y2="${H}"/>`,
+        );
       }
       parts.push(`<text class="guide-label" x="${sx(frame) + 6}" y="${H - 64}">${Math.round(frame)}</text>`);
       // Sidebearings while dragging a metric line.
@@ -2538,6 +3838,19 @@ export class GlyphEditor {
     if (this.drawing.context) {
       parts.push(`<path class="ghost" transform="${xf}" d="${this.drawing.context.d}"/>`);
     }
+    // A letter built from parts: the built outline, filled behind.
+    if (this.drawing.built && !this.contours.length) {
+      parts.push(`<path class="built-layer" transform="${xf}" d="${this.drawing.built.d}"/>`);
+    }
+    if (this.markPreview?.d) {
+      parts.push(`<path class="mark-preview" transform="${xf}" d="${this.markPreview.d}"/>`);
+    }
+    if (this.previewD) {
+      parts.push(`<path class="location-preview" transform="${xf} translate(${this.origin.x} ${this.origin.y})" d="${this.previewD}"/>`);
+    }
+    if (this.partPreview) {
+      parts.push(`<path class="part-preview" transform="${xf}" d="${this.partPreview}"/>`);
+    }
 
     // Snap guides.
     if (this.snapLines.x !== undefined) {
@@ -2547,15 +3860,47 @@ export class GlyphEditor {
       parts.push(`<line class="snap-line" x1="0" x2="${W}" y1="${sy(this.snapLines.y)}" y2="${sy(this.snapLines.y)}"/>`);
     }
 
+    // Background layer and a glyph to compare with: outlines only, behind the drawing.
+    if (prefs.showBackground && this.background.length) {
+      parts.push(`<path class="background-layer" transform="${xf}" d="${this.background.map(contourPath).join("")}"/>`);
+    }
+    const host = this.hostBehind.get(this.targetKey);
+    if (host?.length) parts.push(`<path class="host-layer" transform="${xf}" d="${host.map(contourPath).join("")}"/>`);
+    const cmp = this.compare ? this.host.glyphFor(this.compare) : null;
+    if (cmp?.d) parts.push(`<path class="compare-layer" transform="${xf}" d="${cmp.d}"/>`);
+    const cm = this.compareMaster;
+    if (cm?.key === this.targetKey && cm.d) parts.push(`<path class="compare-layer master" transform="${xf}" d="${cm.d}"/>`);
+
+    // The rest of the line of text, filled, to judge the glyph in context.
+    for (const n of this.neighbours()) {
+      if (!n.d) continue;
+      // The whole advance box is clickable, not just the ink.
+      parts.push(
+        `<rect class="neighbour-box" data-ti="${n.i}" x="${sx(n.x)}" y="${sy(m.pa_top)}" width="${n.advance * scale}" height="${(m.pa_top - m.pa_bottom) * scale}"/>`,
+        `<path class="neighbour" data-ti="${n.i}" transform="matrix(${scale} 0 0 ${-scale} ${tx + n.x * scale} ${ty})" d="${n.d}"/>`,
+      );
+      // Their sidebearings too, so spacing is judged in the line.
+      const ink = prefs.showMetrics ? pathXRange(n.d) : null;
+      if (ink) {
+        const y = sy(m.pa_bottom) + 18;
+        parts.push(
+          `<line class="neighbour-edge" x1="${sx(n.x)}" x2="${sx(n.x)}" y1="${sy(m.pa_top)}" y2="${y + 4}"/>`,
+          `<line class="neighbour-edge" x1="${sx(n.x + n.advance)}" x2="${sx(n.x + n.advance)}" y1="${sy(m.pa_top)}" y2="${y + 4}"/>`,
+          `<text class="neighbour-sb" x="${sx(n.x) + 4}" y="${y}">${Math.round(ink[0])}</text>`,
+          `<text class="neighbour-sb" x="${sx(n.x + n.advance) - 4}" y="${y}" text-anchor="end">${Math.round(n.advance - ink[1])}</text>`,
+        );
+      }
+    }
+
     // Filled outline (all visible contours together, so counters cut out),
     // then each contour for hit testing and part colour.
     const visible = this.visibleContours();
-    const all = visible.map(contourPath).join("");
+    const all = visible.filter((c) => !c.open).map(contourPath).join("");
     parts.push(`<path class="outline-fill${prefs.fill ? "" : " no-fill"}" transform="${xf}" d="${all}"/>`);
     this.contours.forEach((c, ci) => {
       if (c.hidden) return;
       const color = c.part ? PART_COLORS[c.part] : null;
-      const cls = `contour${color ? " tagged" : ""}${c.locked ? " locked" : ""}`;
+      const cls = `contour${color ? " tagged" : ""}${c.locked ? " locked" : ""}${c.open ? " open" : ""}`;
       parts.push(
         `<path class="${cls}"${c.locked ? "" : ` data-ci="${ci}"`} transform="${xf}" d="${contourPath(c)}"${color ? ` style="--part:${color}"` : ""}/>`,
       );
@@ -2566,6 +3911,27 @@ export class GlyphEditor {
         );
       }
     });
+
+    // Guides: over the outline, under the points. A wide clear line on top
+    // of each makes it easy to grab.
+    for (const { g, scope } of this.allGuides()) {
+      const d = guideDir(g);
+      const seg = clipLine({ x: sx(g.x), y: sy(g.y) }, { x: d.x, y: -d.y }, W, H);
+      if (!seg) continue;
+      const [a, b] = seg;
+      const picked = this.guideSel?.scope === scope && this.guideSel.id === g.id;
+      const cls = `user-guide ${scope}${picked ? " picked" : ""}${g.locked ? " locked" : ""}`;
+      const style = g.color ? ` style="--guide:${esc(g.color)}"` : "";
+      parts.push(
+        `<line class="${cls}"${style} x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`,
+        `<line class="guide-hit" data-guide="${scope}:${g.id}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`,
+      );
+      if (g.name || picked) {
+        const label = `${g.name ? esc(g.name) + " " : ""}${isVertical(g) ? fmt(g.x) : isHorizontal(g) ? fmt(g.y) : `${fmt(g.angle)}°`}`;
+        const pos = isVertical(g) ? { x: a.x + 4, y: H - 30 } : isHorizontal(g) ? { x: RULER_PX + 6, y: a.y - 5 } : { x: sx(g.x) + 6, y: sy(g.y) - 6 };
+        parts.push(`<text class="user-guide-label ${scope}"${style} x="${pos.x}" y="${pos.y}">${label}</text>`);
+      }
+    }
 
     // Ends of deformed strokes on a generated fidel.
     (this.drawing.handles ?? []).forEach((h, i) => {
@@ -2581,6 +3947,13 @@ export class GlyphEditor {
       );
     });
 
+    // Components placed by rule: they follow the strokes they sit on.
+    for (const r of this.ruleEnds) {
+      const k = `${r.component}@${r.key}`;
+      const cls = `rule-end${r.on ? "" : " off"}${this.ruleSel === k ? " selected" : ""}`;
+      parts.push(`<path class="${cls}" data-rk="${esc(k)}" transform="${xf}" d="${r.d}"><title>${esc(`${r.name}: ${r.label}`)}</title></path>`);
+    }
+
     // Components placed on a base: drawn once elsewhere, moved here as a whole.
     for (const pc of this.drawing.components ?? []) {
       const id = pc.placement.id;
@@ -2590,6 +3963,18 @@ export class GlyphEditor {
       const sel = this.placementSel === id ? " selected" : "";
       parts.push(
         `<path class="component${sel}" data-pid="${id}" transform="${xf}${move}" d="${pc.d}"><title>${esc(pc.name)}</title></path>`,
+      );
+    }
+
+    // Anchors: where accents attach, or where this accent joins.
+    for (const [name, a] of Object.entries(prefs.showAnchors ? (this.drawing.anchors ?? {}) : {})) {
+      const x = sx(a.x);
+      const y = sy(a.y);
+      const r = 5;
+      const sel = this.anchorSel === name ? " selected" : "";
+      const join = name.startsWith("_") ? " join" : "";
+      parts.push(
+        `<g class="anchor${sel}${join}" data-anchor="${esc(name)}"><circle class="anchor-hit" cx="${x}" cy="${y}" r="10"/><path d="M${x} ${y - r}L${x + r} ${y}L${x} ${y + r}L${x - r} ${y}Z"/><text x="${x + 9}" y="${y - 7}">${esc(name)}</text></g>`,
       );
     }
 
@@ -2616,6 +4001,100 @@ export class GlyphEditor {
       parts.push(`<circle class="pen-start" cx="${sx(first.pos.x)}" cy="${sy(first.pos.y)}" r="8"/>`);
     }
 
+    // Eraser trail in progress.
+    if (g?.kind === "eraser") {
+      const trail = g.pts.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ");
+      parts.push(`<polyline class="eraser-trail" points="${trail}"/>`);
+    }
+
+    // Knife line in progress.
+    if (g?.kind === "knife") {
+      parts.push(`<line class="knife-line" x1="${sx(g.start.x)}" y1="${sy(g.start.y)}" x2="${sx(g.now.x)}" y2="${sy(g.now.y)}"/>`);
+    }
+
+    // Measuring line: every crossing with the outline, and the distances between them.
+    const ml = g?.kind === "measure" ? { a: g.start, b: g.now } : this.measureLine;
+    if (ml && (ml.a.x !== ml.b.x || ml.a.y !== ml.b.y)) {
+      const A = this.toScreen(ml.a);
+      const B = this.toScreen(ml.b);
+      parts.push(`<line class="measure-line" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}"/>`);
+      const hits = crossings(this.visibleContours(), ml.a, ml.b);
+      const len = Math.hypot(B.x - A.x, B.y - A.y);
+      const nx = -(B.y - A.y) / len;
+      const ny = (B.x - A.x) / len;
+      const stops = [ml.a, ...hits.map((h) => h.at), ml.b];
+      for (let i = 1; i < stops.length; i++) {
+        const p = stops[i - 1];
+        const q = stops[i];
+        const dist = Math.hypot(q.x - p.x, q.y - p.y);
+        if (dist * this.view.scale < 14) continue;
+        const m = this.toScreen({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+        // Inside the outline (between crossings 1-2, 3-4 …) reads as ink.
+        const ink = i >= 2 && i < stops.length - 1 && i % 2 === 0;
+        parts.push(`<text class="measure-label${ink ? " ink" : ""}" x="${m.x + nx * 12}" y="${m.y + ny * 12 + 4}" text-anchor="middle">${fmt(dist)}</text>`);
+      }
+      for (const h of hits) {
+        const c = this.toScreen(h.at);
+        parts.push(`<circle class="measure-hit" cx="${c.x}" cy="${c.y}" r="3"/>`);
+      }
+      const total = Math.hypot(ml.b.x - ml.a.x, ml.b.y - ml.a.y);
+      const ang = (Math.atan2(ml.b.y - ml.a.y, ml.b.x - ml.a.x) * 180) / Math.PI;
+      parts.push(`<text class="measure-total" x="${B.x + 10}" y="${B.y - 10}">${fmt(total)} · ${fmt(ang)}°</text>`);
+    }
+
+    // Freehand stroke in progress.
+    if (g?.kind === "pencil" && g.pts.length > 1) {
+      parts.push(`<polyline class="pen-path" points="${g.pts.map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ")}"/>`);
+    }
+
+    // Curvature combs on the selected paths.
+    if (prefs.showComb && !this.pen) {
+      const curves = this.selectedContours().flatMap((ci) => (this.contours[ci].hidden ? [] : segments(this.contours[ci]).filter((sg) => sg.pts.length === 4)));
+      // Scale so the longest tooth is about 60 px, whatever the zoom.
+      let maxK = 0;
+      const raw = curves.map((sg) => combTeeth(sg.pts, 1));
+      for (const teeth of raw) for (const t of teeth) maxK = Math.max(maxK, Math.hypot(t.tip.x - t.at.x, t.tip.y - t.at.y));
+      if (maxK > 1e-9) {
+        const k = 60 / this.view.scale / maxK;
+        for (const sg of curves) {
+          const teeth = combTeeth(sg.pts, k);
+          const tips = teeth.map((t) => `${sx(t.tip.x)},${sy(t.tip.y)}`).join(" ");
+          parts.push(`<g class="comb">${teeth.map((t) => `<line x1="${sx(t.at.x)}" y1="${sy(t.at.y)}" x2="${sx(t.tip.x)}" y2="${sy(t.tip.y)}"/>`).join("")}<polyline points="${tips}"/></g>`);
+        }
+      }
+    }
+
+    // Tunni lines on curves with a selected point: drag the dot to change both handles.
+    if (prefs.showTunni && this.tool === "direct" && !this.pen) {
+      const byContour = new Map<number, Set<number>>();
+      for (const k of this.selection) {
+        const [ci, pi] = parseKey(k);
+        const p = this.contours[ci]?.points[pi];
+        if (!p) continue;
+        if (!byContour.has(ci)) byContour.set(ci, new Set());
+        byContour.get(ci)!.add(p.id);
+      }
+      for (const [ci, ids] of byContour) {
+        const c = this.contours[ci];
+        if (c.hidden || c.locked) continue;
+        const nodes = toNodes(c);
+        segments(c).forEach((sg, si) => {
+          if (sg.pts.length !== 4) return;
+          const a = nodes[sg.from];
+          const b = nodes[sg.to];
+          const touched = [a.id, b.id, a.out?.id, b.in?.id].some((id) => id !== undefined && ids.has(id));
+          if (!touched) return;
+          const t = tunniPoint(sg.pts);
+          if (!t) return;
+          const [, h0, h1] = sg.pts;
+          parts.push(
+            `<line class="tunni-line" x1="${sx(h0.x)}" y1="${sy(h0.y)}" x2="${sx(h1.x)}" y2="${sy(h1.y)}"/>`,
+            `<circle class="tunni-pt" data-tunni="${ci}:${si}" cx="${sx(t.x)}" cy="${sy(t.y)}" r="4"><title>Tunni point: drag to change both handles</title></circle>`,
+          );
+        });
+      }
+    }
+
     // Outline problems, as small markers with the problem as a tooltip.
     if (prefs.showWarnings && !this.pen) {
       for (const issue of this.issues()) {
@@ -2640,14 +4119,18 @@ export class GlyphEditor {
           );
         });
         const start = c.points.findIndex(isOn);
+        const k = NODE_SCALE[prefs.nodeSize] ?? 1;
         c.points.forEach((p, pi) => {
           const x = sx(p.pos.x);
           const y = sy(p.pos.y);
-          const sel = this.selection.has(key(ci, pi)) ? " selected" : "";
-          if (pi === start) parts.push(`<circle class="start-ring" cx="${x}" cy="${y}" r="8"/>`);
+          const picked = this.selection.has(key(ci, pi));
+          const sel = picked ? " selected" : "";
+          if (pi === start) parts.push(`<circle class="start-ring" cx="${x}" cy="${y}" r="${8 * k}"/>`);
           const type = pointType(c, pi);
-          if (type === "handle") parts.push(`<circle class="pt-off${sel}" cx="${x}" cy="${y}" r="3.5"/>`);
-          else if (type === "smooth") parts.push(`<circle class="pt-on${sel}" cx="${x}" cy="${y}" r="4.5"/>`);
+          // Coordinates next to selected points, when asked for.
+          if (prefs.showCoords && picked) parts.push(`<text class="pt-coords" x="${x + 8 * k}" y="${y - 8 * k}">${fmt(p.pos.x)}, ${fmt(p.pos.y)}</text>`);
+          if (type === "handle") parts.push(`<circle class="pt-off${sel}" cx="${x}" cy="${y}" r="${3.5 * k}"/>`);
+          else if (type === "smooth") parts.push(`<circle class="pt-on smooth${sel}" cx="${x}" cy="${y}" r="${4.5 * k}"/>`);
           else if (type === "tangent") {
             // A triangle pointing along the straight side.
             const prev = c.points[(pi - 1 + n) % n];
@@ -2655,9 +4138,9 @@ export class GlyphEditor {
             const l = Math.hypot(toward.x, toward.y) || 1;
             const d = { x: toward.x / l, y: -toward.y / l };
             const q = { x: -d.y, y: d.x };
-            const pt = (a: number, b: number) => `${x + d.x * a + q.x * b},${y + d.y * a + q.y * b}`;
-            parts.push(`<polygon class="pt-on${sel}" points="${pt(6, 0)} ${pt(-4, 5)} ${pt(-4, -5)}"/>`);
-          } else parts.push(`<rect class="pt-on${sel}" x="${x - 4}" y="${y - 4}" width="8" height="8" rx="1.5"/>`);
+            const pt = (a: number, b: number) => `${x + (d.x * a + q.x * b) * k},${y + (d.y * a + q.y * b) * k}`;
+            parts.push(`<polygon class="pt-on tangent${sel}" points="${pt(6, 0)} ${pt(-4, 5)} ${pt(-4, -5)}"/>`);
+          } else parts.push(`<rect class="pt-on corner${sel}" x="${x - 4 * k}" y="${y - 4 * k}" width="${8 * k}" height="${8 * k}" rx="1.5"/>`);
         });
       });
     }
@@ -2675,6 +4158,22 @@ export class GlyphEditor {
         const q = { x: -d.y, y: d.x };
         const pt = (a: number, b: number) => `${at.x + d.x * a + q.x * b},${at.y + d.y * a + q.y * b}`;
         parts.push(`<polygon class="dir-arrow" points="${pt(22, 0)} ${pt(10, 5.5)} ${pt(10, -5.5)}"/>`);
+      }
+    }
+
+    // Dragging one handle: its length and angle.
+    if (g?.kind === "move" && g.moved && this.tool === "direct" && this.selection.size === 1) {
+      const [ci, pi] = parseKey([...this.selection][0]);
+      const c = this.contours[ci];
+      const p = c?.points[pi];
+      if (p && !isOn(p)) {
+        const n = c.points.length;
+        const prev = c.points[(pi - 1 + n) % n];
+        const anchor = isOn(prev) ? prev : c.points[(pi + 1) % n];
+        const dx = p.pos.x - anchor.pos.x;
+        const dy = p.pos.y - anchor.pos.y;
+        const at = this.toScreen(p.pos);
+        parts.push(`<text class="size-label" x="${at.x + 12}" y="${at.y - 12}">${fmt(Math.hypot(dx, dy))} · ${fmt((Math.atan2(dy, dx) * 180) / Math.PI)}°</text>`);
       }
     }
 
@@ -2736,6 +4235,37 @@ export class GlyphEditor {
       parts.push(`<path class="marquee lasso" d="${d}"/>`);
     }
 
+    // Rulers along the top and left edges, in font units; drag out of one for a guide.
+    if (prefs.showRulers) {
+      const R = RULER_PX;
+      const tx0 = (R - tx) / scale;
+      const tx1 = (W - tx) / scale;
+      const ty0 = (ty - H) / scale;
+      const ty1 = (ty - R) / scale;
+      const tt = rulerTicks(tx0, tx1, scale);
+      const lt = rulerTicks(ty0, ty1, scale);
+      let d = "";
+      let labels = "";
+      for (const v of tt.major) {
+        d += `M${sx(v)} 0V${R}`;
+        labels += `<text class="ruler-label" x="${sx(v) + 3}" y="9">${fmt(v)}</text>`;
+      }
+      for (const v of tt.minor) d += `M${sx(v)} ${R - 5}V${R}`;
+      for (const v of lt.major) {
+        d += `M0 ${sy(v)}H${R}`;
+        labels += `<text class="ruler-label" transform="translate(9 ${sy(v) - 3}) rotate(-90)">${fmt(v)}</text>`;
+      }
+      for (const v of lt.minor) d += `M${R - 5} ${sy(v)}H${R}`;
+      parts.push(
+        `<g class="rulers">`,
+        `<rect class="ruler" data-ruler="top" x="0" y="0" width="${W}" height="${R}"><title>Drag down for a guide. Alt makes it global.</title></rect>`,
+        `<rect class="ruler" data-ruler="left" x="0" y="0" width="${R}" height="${H}"><title>Drag right for a guide. Alt makes it global.</title></rect>`,
+        `<path class="ruler-ticks" d="${d}"/>${labels}`,
+        `<rect class="ruler-corner" x="0" y="0" width="${R}" height="${R}"/>`,
+        `</g>`,
+      );
+    }
+
     this.svg.innerHTML = parts.join("");
     this.zoomLabel.textContent = `${Math.round(scale * 100)}%`;
   }
@@ -2754,9 +4284,27 @@ function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 }
 
+function unesc(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot);/g, (_, n: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"' })[n]!);
+}
+
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 }
 
 export { PARTS };
+
+/** The left and right ink edges of an SVG path of absolute pairs (M, L, C, Q), from its points. */
+export function pathXRange(d: string): [number, number] | null {
+  const nums = d.match(/-?\d*\.?\d+(?:e-?\d+)?/gi);
+  if (!nums || nums.length < 2) return null;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < nums.length; i += 2) {
+    const x = Number(nums[i]);
+    lo = Math.min(lo, x);
+    hi = Math.max(hi, x);
+  }
+  return [lo, hi];
+}

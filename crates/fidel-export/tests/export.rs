@@ -185,3 +185,80 @@ fn exports_only_the_chosen_character_sets() {
     assert!(!font.exported.contains(&'ሏ') && !font.exported.contains(&'።'));
     assert!(!p.symbols["uni1362"].contours.is_empty());
 }
+
+/// The kern value a shaper would apply between two glyphs: the first
+/// subtable of the lookup that holds the pair.
+fn kern(font: &FontRef, l: char, r: char) -> Option<i16> {
+    use skrifa::raw::tables::gpos::{PairPos, PositionLookup};
+    let cmap = font.charmap();
+    let (g1, g2) = (cmap.map(l)?, cmap.map(r)?);
+    let (h1, h2) = (skrifa::GlyphId16::try_from(g1).ok()?, skrifa::GlyphId16::try_from(g2).ok()?);
+    let gpos = font.gpos().ok()?;
+    let lookups = gpos.lookup_list().ok()?;
+    let lookup = lookups.lookups().get(0).ok()?;
+    let PositionLookup::Pair(lookup) = lookup else { return None };
+    let subs = lookup.subtables();
+    for sub in subs.iter() {
+        match sub.ok()? {
+            PairPos::Format1(t) => {
+                let Some(i) = t.coverage().ok()?.get(g1) else { continue };
+                let set = t.pair_sets().get(i as usize).ok()?;
+                if let Some(rec) =
+                    set.pair_value_records().iter().filter_map(Result::ok).find(|p| p.second_glyph() == h2)
+                {
+                    return rec.value_record1().x_advance();
+                }
+            }
+            PairPos::Format2(t) => {
+                if t.coverage().ok()?.get(g1).is_none() {
+                    continue;
+                }
+                let c1 = t.class_def1().ok()?.get(h1);
+                let c2 = t.class_def2().ok()?.get(h2);
+                let rec = t.class1_records().get(c1 as usize).ok()?;
+                let v = rec.class2_records().get(c2 as usize).ok()?.value_record1().x_advance();
+                if v.is_some() {
+                    return v;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[test]
+fn kerning_is_written_with_exceptions_first() {
+    use fidel_core::kerning::KernSide;
+    let mut p = project();
+    let k = &mut p.kerning;
+    k.set_class(KernSide::Left, "ha", &['ሀ', 'ሁ'], None).unwrap();
+    k.set_class(KernSide::Right, "la", &['ለ', 'ሉ'], None).unwrap();
+    k.set_pair("@ha", "@la", Some(-40)).unwrap();
+    k.set_pair("ሁ", "ሉ", Some(12)).unwrap();
+    k.set_pair("ለ", "ሀ", Some(-7)).unwrap();
+    let font = export(&p, &ExportOptions::new("Test Geez")).unwrap();
+    let font = FontRef::new(&font.bytes).unwrap();
+    assert_eq!(kern(&font, 'ሀ', 'ለ'), Some(-40));
+    assert_eq!(kern(&font, 'ሁ', 'ለ'), Some(-40));
+    assert_eq!(kern(&font, 'ሁ', 'ሉ'), Some(12));
+    assert_eq!(kern(&font, 'ለ', 'ሀ'), Some(-7));
+    assert_eq!(kern(&font, 'ሉ', 'ሀ'), None);
+}
+
+#[test]
+fn no_kerning_no_gpos() {
+    let font = export(&project(), &ExportOptions::new("Test Geez")).unwrap();
+    assert!(FontRef::new(&font.bytes).unwrap().gpos().is_err());
+}
+
+#[test]
+fn italic_angle_marks_the_font_italic() {
+    let mut p = project();
+    p.slant_master(12.0);
+    let font = export(&p, &ExportOptions::new("Test Geez")).unwrap();
+    let font = FontRef::new(&font.bytes).unwrap();
+    assert!((font.post().unwrap().italic_angle().to_f64() + 12.0).abs() < 1e-3);
+    assert!(font.os2().unwrap().fs_selection().contains(skrifa::raw::tables::os2::SelectionFlags::ITALIC));
+    assert!(font.hhea().unwrap().caret_slope_run() > 0);
+}
