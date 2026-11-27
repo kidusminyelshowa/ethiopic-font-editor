@@ -151,14 +151,20 @@ impl Project {
         }
     }
 
+    /// An italic's outline stood upright, so rows run along the slant.
+    fn upright(&self, contours: &[Contour]) -> Vec<Contour> {
+        crate::metric_keys::upright(contours, self.metrics.italic_angle)
+    }
+
     /// The average white each side of `c` should have: the reference's.
     fn target_white(&self, depth: f64) -> Option<f64> {
         let (y0, y1) = self.band();
         let r = self.spacing.reference;
         let shape = self.glyph_shape(r)?;
-        let rows = profile(&shape.contours, y0, y1, STEP);
+        let rows = profile(&self.upright(&shape.contours), y0, y1, STEP);
         let (l, rr) = inner_white(&rows, depth)?;
-        let (lsb, rsb, _) = crate::metric_keys::measure(&shape.contours, shape.advance)?;
+        let (lsb, rsb, _) =
+            crate::metric_keys::measure(&shape.contours, shape.advance, self.metrics.italic_angle)?;
         Some(((lsb + l) + (rsb + rr)) / 2.0)
     }
 
@@ -201,7 +207,7 @@ impl Project {
             if self.char_of_keyed(&who) == Some(reference) {
                 continue;
             }
-            let rows = profile(&contours, y0, y1, STEP);
+            let rows = profile(&self.upright(&contours), y0, y1, STEP);
             let Some((l, r)) = inner_white(&rows, depth) else { continue };
             let mut moved = false;
             if keys.left.as_deref().is_none_or(|k| k.trim().is_empty()) {
@@ -238,8 +244,8 @@ impl Project {
         let (y0, y1) = self.band();
         let a = self.glyph_shape(l)?;
         let b = self.glyph_shape(r)?;
-        let pa = profile(&a.contours, y0, y1, STEP);
-        let pb = profile(&b.contours, y0, y1, STEP);
+        let pa = profile(&self.upright(&a.contours), y0, y1, STEP);
+        let pb = profile(&self.upright(&b.contours), y0, y1, STEP);
         let amax = pa.iter().flatten().map(|x| x.1).fold(f64::NEG_INFINITY, f64::max);
         let bmin = pb.iter().flatten().map(|x| x.0).fold(f64::INFINITY, f64::min);
         if !amax.is_finite() || !bmin.is_finite() {

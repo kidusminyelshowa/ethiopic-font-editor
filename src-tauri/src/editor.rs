@@ -310,7 +310,8 @@ impl DrawingView {
             DrawingTarget::Symbol(id) => {
                 project.symbols.get(id).filter(|s| !s.built_from.is_empty()).map(|s| {
                     let outline = project.symbol_outline(id);
-                    let ink = fidel_core::geometry::bounds_of(&outline).map(|r| [r.min.x, r.max.x]);
+                    let upright = fidel_core::metric_keys::upright(&outline, project.metrics.italic_angle);
+                    let ink = fidel_core::geometry::bounds_of(&upright).map(|r| [r.min.x, r.max.x]);
                     BuiltView { parts: s.built_from.clone(), d: fidel_core::svg_path(&outline), ink }
                 })
             }

@@ -3106,7 +3106,10 @@ export class GlyphEditor {
   sidebearings(): { lsb: number; rsb: number; width: number } | null {
     const w = this.drawing?.advanceWidth;
     if (w == null) return null;
-    const b = contoursBounds(this.visibleContours().length ? this.visibleContours() : this.contours);
+    // In an italic, measured along the slant through the baseline, like the metric lines.
+    const lean = Math.tan(((this.drawing?.metrics.italic_angle ?? 0) * Math.PI) / 180);
+    const shown = this.visibleContours().length ? this.visibleContours() : this.contours;
+    const b = contoursBounds(lean ? shown.map((c) => ({ ...c, points: c.points.map((p) => ({ ...p, pos: { x: p.pos.x - p.pos.y * lean, y: p.pos.y } })) })) : shown);
     const ink = this.drawing?.built?.ink;
     if (!b && ink) return { lsb: Math.round(ink[0]), rsb: Math.round(w - ink[1]), width: w };
     if (!b) return { lsb: 0, rsb: w, width: w };

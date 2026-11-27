@@ -149,3 +149,37 @@ fn write_for_inspection() {
         std::fs::write(path, v.bytes).unwrap();
     }
 }
+
+#[test]
+fn stat_links_roman_and_italic() {
+    let ital = |font: &FontRef| {
+        let stat = font.stat().unwrap();
+        let axes = stat.design_axes().unwrap();
+        let i =
+            axes.iter().position(|a| a.axis_tag() == skrifa::Tag::new(b"ital")).expect("an ital axis") as u16;
+        let values = stat.offset_to_axis_values().unwrap().unwrap();
+        values
+            .axis_values()
+            .iter()
+            .flatten()
+            .find_map(|v| match v {
+                skrifa::raw::tables::stat::AxisValue::Format1(v) if v.axis_index() == i => {
+                    Some((1, v.value().to_f64()))
+                }
+                skrifa::raw::tables::stat::AxisValue::Format3(v) if v.axis_index() == i => {
+                    Some((3, v.linked_value().to_f64()))
+                }
+                _ => None,
+            })
+            .expect("an ital value")
+    };
+    let roman = export_variable(&project(), &ExportOptions::new("Test Geez")).unwrap();
+    assert_eq!(ital(&FontRef::new(&roman.bytes).unwrap()), (3, 1.0));
+    let mut p = project();
+    p.metrics.italic_angle = 10.0;
+    for l in p.design.masters.iter_mut().filter_map(|m| m.layer.as_mut()) {
+        l.italic_angle = 10.0;
+    }
+    let italic = export_variable(&p, &ExportOptions::new("Test Geez")).unwrap();
+    assert_eq!(ital(&FontRef::new(&italic.bytes).unwrap()), (1, 1.0));
+}

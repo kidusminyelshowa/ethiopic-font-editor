@@ -80,3 +80,15 @@ fn kerning_copies_to_every_master() {
     assert_eq!(p.copy_kerning_to_masters(), 1);
     assert_eq!(p.master_project(1).kerning.pair("ሀ", "ለ"), Some(-30));
 }
+
+#[test]
+fn italic_sidebearings_follow_the_slant() {
+    let lean = 10f64.to_radians().tan();
+    // A stem slanted by the italic angle, 50 from the slanted origin line.
+    let mut stem = Contour::rect(900, None, Vec2::new(50.0, 0.0), Vec2::new(150.0, 700.0));
+    for pt in &mut stem.points {
+        pt.pos.x += pt.pos.y * lean;
+    }
+    let (lsb, rsb, _) = fidel_core::metric_keys::measure(&[stem], 300.0, 10.0).unwrap();
+    assert!((lsb - 50.0).abs() < 1e-6 && (rsb - 150.0).abs() < 1e-6, "{lsb} {rsb}");
+}

@@ -273,21 +273,42 @@ pub fn export_variable(project: &Project, options: &ExportOptions) -> Result<Var
             values.push(AxisValue::format_1(ai as u16, flags, NameId::new(n), Fixed::from_f64(v)));
         }
     }
+    let mut design_axes: Vec<AxisRecord> = design
+        .axes
+        .iter()
+        .zip(&axis_names)
+        .enumerate()
+        .map(|(i, (a, &n))| {
+            AxisRecord::new(
+                Tag::new_checked(a.tag.as_bytes()).unwrap_or(Tag::new(b"wght")),
+                NameId::new(n),
+                i as u16,
+            )
+        })
+        .collect();
+    // The ital axis links this font with its roman or italic partner, so
+    // apps pair them in one family even though neither varies along it.
+    if !design.axes.iter().any(|a| a.tag == "ital") {
+        let ai = design_axes.len() as u16;
+        let italic = base.metrics.italic_angle != 0.0;
+        names.push((next, "Italic".into()));
+        design_axes.push(AxisRecord::new(Tag::new(b"ital"), NameId::new(next), ai));
+        next += 1;
+        names.push((next, if italic { "Italic" } else { "Roman" }.into()));
+        values.push(if italic {
+            AxisValue::format_1(ai, AxisValueTableFlags::empty(), NameId::new(next), Fixed::ONE)
+        } else {
+            AxisValue::format_3(
+                ai,
+                AxisValueTableFlags::ELIDABLE_AXIS_VALUE_NAME,
+                NameId::new(next),
+                Fixed::ZERO,
+                Fixed::ONE,
+            )
+        });
+    }
     let stat = Stat {
-        design_axes: design
-            .axes
-            .iter()
-            .zip(&axis_names)
-            .enumerate()
-            .map(|(i, (a, &n))| {
-                AxisRecord::new(
-                    Tag::new_checked(a.tag.as_bytes()).unwrap_or(Tag::new(b"wght")),
-                    NameId::new(n),
-                    i as u16,
-                )
-            })
-            .collect::<Vec<_>>()
-            .into(),
+        design_axes: design_axes.into(),
         offset_to_axis_values: Some(values.into_iter().map(Into::into).collect::<Vec<_>>()).into(),
         elided_fallback_name_id: Some(NameId::new(2)),
     };

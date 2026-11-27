@@ -90,10 +90,27 @@ pub fn parse(key: &str) -> Result<Expr, String> {
     Ok(Expr { reference: Some(name.to_string()), opposite, op, number: None })
 }
 
-/// Left sidebearing, right sidebearing and width of an outline.
-pub fn measure(contours: &[Contour], advance: f64) -> Option<(f64, f64, f64)> {
-    let b = bounds_of(contours)?;
+/// Left sidebearing, right sidebearing and width of an outline. In an
+/// italic the sides are measured along the italic angle, through the baseline.
+pub fn measure(contours: &[Contour], advance: f64, italic_angle: f64) -> Option<(f64, f64, f64)> {
+    let b = bounds_of(&upright(contours, italic_angle))?;
     Some((b.min.x, advance - b.max.x, advance))
+}
+
+/// The outline sheared back by the italic angle about the baseline, so its
+/// slanted sides stand upright. Shearing keeps sideways moves, so a
+/// sidebearing measured here is the one along the slant.
+pub fn upright(contours: &[Contour], italic_angle: f64) -> Vec<Contour> {
+    let mut out = contours.to_vec();
+    if italic_angle != 0.0 {
+        let t = italic_angle.to_radians().tan();
+        for c in &mut out {
+            for p in &mut c.points {
+                p.pos.x -= p.pos.y * t;
+            }
+        }
+    }
+    out
 }
 
 /// What a drawing with keys is, for [`Project::apply_metric_keys`].
@@ -117,18 +134,18 @@ impl Project {
     /// Sidebearings and width of the glyph for `c`, as it is now.
     pub fn glyph_metrics(&self, c: char) -> Option<(f64, f64, f64)> {
         if let Some(s) = self.symbols.values().find(|s| s.codepoint == c) {
-            return measure(&self.symbol_outline(&s.id), s.advance_width);
+            return measure(&self.symbol_outline(&s.id), s.advance_width, self.metrics.italic_angle);
         }
         for f in self.families.values() {
             for (order, fidel) in &f.fidels {
                 if fidel.codepoint == Some(c) {
                     if *order == Order::Giiz {
                         let b = self.bases.get(&f.base)?;
-                        return measure(&b.contours, b.advance_width);
+                        return measure(&b.contours, b.advance_width, self.metrics.italic_angle);
                     }
                     let r = self.resolve(&f.id, *order).ok()?;
                     let contours: Vec<Contour> = r.contours.into_iter().map(|c| c.contour).collect();
-                    return measure(&contours, r.advance_width);
+                    return measure(&contours, r.advance_width, self.metrics.italic_angle);
                 }
             }
         }
@@ -219,7 +236,9 @@ impl Project {
                 (s.contours.clone(), s.advance_width)
             }
         };
-        let Some((lsb, rsb, _)) = measure(&contours, advance) else { return Ok(0) };
+        let Some((lsb, rsb, _)) = measure(&contours, advance, self.metrics.italic_angle) else {
+            return Ok(0);
+        };
         let back = self.design.active;
         let mut changed = 0;
         for m in 0..self.design.masters.len() {
@@ -259,6 +278,7 @@ impl Project {
 
     /// Set one metric of a drawing; returns whether anything moved.
     pub(crate) fn set_metric(&mut self, who: &Keyed, side: Side, v: f64) -> bool {
+        let lean = self.metrics.italic_angle;
         let (contours, advance, components, anchors) = match who {
             Keyed::Base(id) => {
                 let Some(b) = self.bases.get_mut(id) else { return false };
@@ -269,7 +289,7 @@ impl Project {
                 (&mut s.contours, &mut s.advance_width, Some(&mut s.components), Some(&mut s.anchors))
             }
         };
-        let Some(b) = bounds_of(contours.iter()) else { return false };
+        let Some(b) = bounds_of(&upright(contours, lean)) else { return false };
         match side {
             Side::Left => {
                 let dx = v - b.min.x;
