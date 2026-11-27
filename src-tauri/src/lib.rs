@@ -119,6 +119,17 @@ fn get_drawing(
         .map_err(err)
 }
 
+/// A drawing at a location in the design space, for the canvas preview.
+#[tauri::command]
+fn drawing_at(
+    state: State<'_, AppState>,
+    target: DrawingTarget,
+    location: std::collections::BTreeMap<String, f64>,
+) -> CmdResult<String> {
+    let p = state.project().instance_at(&location).map_err(err)?;
+    Ok(DrawingView::open(&p, target, None).map_err(err)?.outline_d())
+}
+
 #[tauri::command]
 fn set_drawing(state: State<'_, AppState>, target: DrawingTarget, contours: Vec<Contour>) -> CmdResult<()> {
     state.project().set_drawing(&target, contours).map_err(err)?;
@@ -1181,6 +1192,7 @@ pub fn run() {
             mark_preview,
             set_features,
             get_part,
+            drawing_at,
             part_preview,
             set_part_axes,
             add_part_state,

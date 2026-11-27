@@ -334,8 +334,16 @@ export function proofAxes(onChange: () => void): HTMLElement {
     });
     box.append(reset);
   };
-  onDesign(render);
+  // A copy in the editor's side panel goes when the panel redraws.
+  const follow = () => {
+    if (!box.isConnected) {
+      listeners.delete(follow);
+      return;
+    }
+    render();
+  };
   render();
+  queueMicrotask(() => listeners.add(follow));
   return box;
 }
 

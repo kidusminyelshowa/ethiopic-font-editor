@@ -272,6 +272,21 @@ pub struct ContextGhost {
 }
 
 impl DrawingView {
+    /// The whole outline as one SVG path: the contours, placed parts, and a
+    /// built letter's outline when nothing is drawn over it.
+    pub fn outline_d(&self) -> String {
+        let mut d = fidel_core::svg_path(&self.contours);
+        for c in self.components.iter().flatten() {
+            d.push_str(&c.d);
+        }
+        if self.contours.is_empty() {
+            if let Some(b) = &self.built {
+                d.push_str(&b.d);
+            }
+        }
+        d
+    }
+
     pub fn open(
         project: &Project,
         target: DrawingTarget,

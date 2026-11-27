@@ -355,6 +355,29 @@ export class GlyphEditor {
   markPreview: { partner: string; d: string | null } | null = null;
   /** A parametric part at other settings, from the preview sliders. */
   partPreview: string | null = null;
+  /** Where in the design space to show this drawing, from the proof's axis sliders. */
+  private previewAt: Record<string, number> | null = null;
+  private previewD: string | null = null;
+
+  /** Show this drawing interpolated at a location, over the master being edited; null hides it. */
+  async showLocation(at: Record<string, number> | null): Promise<void> {
+    this.previewAt = at;
+    if (!at || !this.target) {
+      this.previewD = null;
+      this.render();
+      return;
+    }
+    const target = this.target;
+    try {
+      const d = await api.drawingAt(target, at);
+      if (this.previewAt === at && this.target === target) {
+        this.previewD = d;
+        this.render();
+      }
+    } catch {
+      this.previewD = null;
+    }
+  }
 
   async open(target: DrawingTarget, contextFamily?: string): Promise<void> {
     const sameDrawing = this.target && this.target.kind === target.kind && this.target.id === target.id;
@@ -384,8 +407,10 @@ export class GlyphEditor {
       this.anchorSel = null;
       this.markPreview = null;
       this.partPreview = null;
+      this.previewD = null;
     } else if (this.markPreview) void this.refreshMarkPreview();
     void this.loadRuleEnds();
+    if (this.previewAt) void this.showLocation(this.previewAt);
     if (!sameDrawing) {
       void this.loadGuides();
       void this.loadReach();
@@ -3819,6 +3844,9 @@ export class GlyphEditor {
     }
     if (this.markPreview?.d) {
       parts.push(`<path class="mark-preview" transform="${xf}" d="${this.markPreview.d}"/>`);
+    }
+    if (this.previewD) {
+      parts.push(`<path class="location-preview" transform="${xf} translate(${this.origin.x} ${this.origin.y})" d="${this.previewD}"/>`);
     }
     if (this.partPreview) {
       parts.push(`<path class="part-preview" transform="${xf}" d="${this.partPreview}"/>`);

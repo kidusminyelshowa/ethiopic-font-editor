@@ -3496,6 +3496,7 @@ body.kerning .side-list {
 .canvas .built-layer { fill: var(--ink); opacity: 0.18; pointer-events: none; }
 .canvas .mark-preview { fill: #2b6cb0; opacity: 0.35; pointer-events: none; }
 .canvas .part-preview { fill: none; stroke: #d9480f; stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-dasharray: 5 3; pointer-events: none; }
+.canvas .location-preview { fill: #2f855a; opacity: 0.22; pointer-events: none; }
 .anchor-row { padding: 4px 0 8px; border-bottom: 1px solid var(--hairline); margin-bottom: 6px; }
 .anchor-row.selected .anchor-name { color: #2b6cb0; }
 .anchor-name {

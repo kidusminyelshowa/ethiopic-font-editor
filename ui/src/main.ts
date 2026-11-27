@@ -1490,6 +1490,15 @@ function renderEditorSide(ed: GlyphEditor) {
       }),
     );
   }
+  if (design && design.masters.length > 1 && design.axes.length) {
+    sections.push(
+      el("h3", { class: "section-label", title: "Drag to see this drawing anywhere in the design space, shaded over the canvas. Past the ends extrapolates." }, "Interpolation"),
+      proofAxes(() => {
+        void refreshProof();
+        void editor.showLocation(proofLocation);
+      }),
+    );
+  }
   const token = ++previewToken;
   if (standalone) {
     // A symbol or a hand-drawn fidel stands alone: nothing else follows it.
@@ -2034,7 +2043,13 @@ initProof(document.querySelector<HTMLElement>(".grid-view .proof")!, {
 {
   // Axis sliders in the proof, when there are masters to move between.
   const tools = document.querySelector<HTMLElement>(".grid-view .proof .proof-tools");
-  tools?.insertBefore(proofAxes(() => void refreshProof()), tools.querySelector(".grow"));
+  tools?.insertBefore(
+    proofAxes(() => {
+      void refreshProof();
+      void editor.showLocation(proofLocation);
+    }),
+    tools.querySelector(".grow"),
+  );
 }
 
 // ---------- Character sets ----------
